@@ -1,0 +1,337 @@
+package com.gecesars.atxplan.ui.screens
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Calculate
+import androidx.compose.material.icons.outlined.Functions
+import androidx.compose.material.icons.outlined.WarningAmber
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.dp
+import com.gecesars.atxplan.domain.model.PlannerProject
+import com.gecesars.atxplan.domain.rf.LinkBudgetInput
+import com.gecesars.atxplan.domain.rf.LinkBudgetResult
+import com.gecesars.atxplan.ui.components.ScreenHeader
+import com.gecesars.atxplan.ui.components.StatusPill
+import com.gecesars.atxplan.ui.components.StatusTone
+import com.gecesars.atxplan.ui.theme.AtxAmber
+import com.gecesars.atxplan.ui.theme.AtxSignal
+import java.util.Locale
+
+@Composable
+fun StudiesScreen(
+    project: PlannerProject?,
+    result: LinkBudgetResult?,
+    calculatorError: String?,
+    onCalculate: (LinkBudgetInput) -> Unit,
+) {
+    var frequency by rememberSaveable { mutableStateOf("900") }
+    var distance by rememberSaveable { mutableStateOf("10") }
+    var txPower by rememberSaveable { mutableStateOf("43") }
+    var txGain by rememberSaveable { mutableStateOf("15") }
+    var txLoss by rememberSaveable { mutableStateOf("2") }
+    var rxGain by rememberSaveable { mutableStateOf("0") }
+    var rxLoss by rememberSaveable { mutableStateOf("0") }
+    var additionalLoss by rememberSaveable { mutableStateOf("0") }
+    var sensitivity by rememberSaveable { mutableStateOf("-95") }
+    var bandwidth by rememberSaveable { mutableStateOf("10") }
+    var noiseFigure by rememberSaveable { mutableStateOf("6") }
+    var formError by rememberSaveable { mutableStateOf<String?>(null) }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
+        contentPadding = PaddingValues(top = 4.dp, bottom = 36.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        item {
+            ScreenHeader(
+                title = "Link Budget",
+                subtitle = "Local P.525/FSPL baseline with explicit terms and verifiable units.",
+            )
+        }
+        item {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                StatusPill("Local Calculation", StatusTone.POSITIVE)
+                StatusPill("No Terrain Data", StatusTone.WARNING)
+                StatusPill("Pure Kotlin", StatusTone.INFO)
+            }
+        }
+        project?.let {
+            item {
+                Text(
+                    "Workspace: ${it.name}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        item {
+            ParameterSection(title = "Path") {
+                TwoFields(
+                    first = {
+                        NumericField("Frequency", "MHz", frequency, { frequency = it })
+                    },
+                    second = {
+                        NumericField("Distance", "km", distance, { distance = it })
+                    },
+                )
+                NumericField("Additional loss", "dB", additionalLoss, { additionalLoss = it })
+            }
+        }
+        item {
+            ParameterSection(title = "Transmitter") {
+                TwoFields(
+                    first = { NumericField("TX power", "dBm", txPower, { txPower = it }, signed = true) },
+                    second = { NumericField("TX gain", "dBi", txGain, { txGain = it }, signed = true) },
+                )
+                NumericField("TX loss", "dB", txLoss, { txLoss = it })
+            }
+        }
+        item {
+            ParameterSection(title = "Receiver") {
+                TwoFields(
+                    first = { NumericField("RX gain", "dBi", rxGain, { rxGain = it }, signed = true) },
+                    second = { NumericField("RX loss", "dB", rxLoss, { rxLoss = it }) },
+                )
+                TwoFields(
+                    first = {
+                        NumericField("Sensitivity", "dBm", sensitivity, { sensitivity = it }, signed = true)
+                    },
+                    second = {
+                        NumericField("Noise figure", "dB", noiseFigure, { noiseFigure = it })
+                    },
+                )
+                NumericField("Bandwidth", "MHz", bandwidth, { bandwidth = it })
+            }
+        }
+        val effectiveError = formError ?: calculatorError
+        if (effectiveError != null) {
+            item { ErrorCard(effectiveError) }
+        }
+        item {
+            Button(
+                onClick = {
+                    val values = listOf(
+                        frequency,
+                        distance,
+                        txPower,
+                        txGain,
+                        txLoss,
+                        rxGain,
+                        rxLoss,
+                        additionalLoss,
+                        sensitivity,
+                        bandwidth,
+                        noiseFigure,
+                    ).map(::parseDecimal)
+                    if (values.any { it == null }) {
+                        formError = "Check the fields and enter decimal numbers only."
+                    } else {
+                        formError = null
+                        onCalculate(
+                            LinkBudgetInput(
+                                frequencyMHz = values[0]!!,
+                                distanceKm = values[1]!!,
+                                transmitPowerDbm = values[2]!!,
+                                transmitAntennaGainDbi = values[3]!!,
+                                transmitLossDb = values[4]!!,
+                                receiveAntennaGainDbi = values[5]!!,
+                                receiveLossDb = values[6]!!,
+                                additionalPathLossDb = values[7]!!,
+                                receiverSensitivityDbm = values[8]!!,
+                                bandwidthMHz = values[9]!!,
+                                receiverNoiseFigureDb = values[10]!!,
+                            ),
+                        )
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                contentPadding = PaddingValues(vertical = 15.dp),
+            ) {
+                Icon(Icons.Outlined.Calculate, contentDescription = null)
+                Spacer(Modifier.padding(horizontal = 4.dp))
+                Text("Calculate Link Budget")
+            }
+        }
+        result?.let { linkResult ->
+            item { ResultSection(linkResult) }
+        }
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                shape = RoundedCornerShape(18.dp),
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Outlined.Functions, contentDescription = null)
+                        Spacer(Modifier.padding(horizontal = 5.dp))
+                        Text("Baseline Scope", fontWeight = FontWeight.SemiBold)
+                    }
+                    Text(
+                        "FSPL = 32.447783 + 20·log₁₀(f MHz) + 20·log₁₀(d km). The displayed radius is the first Fresnel zone at the path midpoint.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        "This baseline does not yet include terrain, Earth curvature, clutter, antenna patterns, or variability. These terms are never assumed silently.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ParameterSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Card(shape = RoundedCornerShape(20.dp)) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            content()
+        }
+    }
+}
+
+@Composable
+private fun TwoFields(first: @Composable () -> Unit, second: @Composable () -> Unit) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(modifier = Modifier.weight(1f)) { first() }
+        Column(modifier = Modifier.weight(1f)) { second() }
+    }
+}
+
+@Composable
+private fun NumericField(
+    label: String,
+    suffix: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    signed: Boolean = false,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = { candidate ->
+            val allowed = candidate.filterIndexed { index, char ->
+                char.isDigit() || char == ',' || char == '.' || (signed && char == '-' && index == 0)
+            }
+            onValueChange(allowed.take(14))
+        },
+        label = { Text(label) },
+        suffix = { Text(suffix) },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(
+            keyboardType = if (signed) KeyboardType.Number else KeyboardType.Decimal,
+            imeAction = ImeAction.Next,
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+@Composable
+private fun ResultSection(result: LinkBudgetResult) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("Results", style = MaterialTheme.typography.titleLarge)
+        ResultMetric("Free-space path loss", result.freeSpacePathLossDb, "dB")
+        ResultMetric("EIRP", result.eirpDbm, "dBm")
+        ResultMetric("Received power", result.receivedPowerDbm, "dBm")
+        ResultMetric(
+            "Margin above sensitivity",
+            result.fadeMarginDb,
+            "dB",
+            positive = result.fadeMarginDb >= 0.0,
+        )
+        ResultMetric("Midpoint Fresnel radius", result.firstFresnelMidpointRadiusM, "m")
+        ResultMetric("Noise floor", result.noiseFloorDbm, "dBm")
+        ResultMetric("Thermal SNR", result.signalToNoiseDb, "dB", positive = result.signalToNoiseDb >= 0.0)
+    }
+}
+
+@Composable
+private fun ResultMetric(
+    label: String,
+    value: Double,
+    unit: String,
+    positive: Boolean? = null,
+) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = when (positive) {
+                true -> AtxSignal.copy(alpha = 0.12f)
+                false -> MaterialTheme.colorScheme.errorContainer
+                null -> MaterialTheme.colorScheme.surface
+            },
+        ),
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(15.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(label, modifier = Modifier.weight(1f))
+            Text(
+                text = String.format(Locale.US, "%.2f %s", value, unit),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ErrorCard(message: String) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Icon(Icons.Outlined.WarningAmber, contentDescription = null)
+            Text(message, modifier = Modifier.weight(1f))
+        }
+    }
+}
+
+private fun parseDecimal(value: String): Double? = value.trim().replace(',', '.').toDoubleOrNull()
