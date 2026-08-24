@@ -28,6 +28,11 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      - name: Configure Android SDK tools
+        uses: android-actions/setup-android@v4
+        with:
+          log-accepted-android-sdk-licenses: "false"
+
       - name: Configure Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
