@@ -10,9 +10,9 @@ The foundation release delivers:
 
 - a responsive Jetpack Compose and Material 3 shell for phones and tablets;
 - a compact phone information-density pass with scalable typography, responsive feature layouts, denser cards and forms, and explicit 48 dp minimum targets for the controls changed by that pass;
-- Navigation 3 with five areas plus a typed, saveable nested RF-path editor route;
+- Navigation 3 with five areas plus typed, saveable nested RF-path and project-name editor routes;
 - a local schema-2, strict UTF-8, size-limited project catalog with explicit v1 migration and transactional atomic mutation;
-- project creation/selection and a combined Add RF Path flow that persists one linked network, transmitter site/sector, and receiver;
+- project creation, selection, and rename with stale competing-rename protection, plus a combined Add RF Path flow that persists one linked network, transmitter site/sector, and receiver;
 - a synthetic demonstration project with networks, sites, sectors, and study summaries;
 - an offline engineering canvas showing site positions and active azimuths;
 - a local link budget with FSPL/P.525, EIRP, received power, margin, noise floor, SNR, first Fresnel-zone calculations, and explicit in-memory result provenance;
@@ -56,7 +56,7 @@ The compact information-density implementation has bounded manual portrait and l
 | Additional fallback check | 1.30, restored to 1.15 after inspection |
 | Orientation checks | Portrait and landscape at 1.15; portrait at 1.30 |
 
-For the baseline portrait configuration, Dashboard and Projects use 16 dp content gutters while the field-heavy feature screens use compact 12 dp phone gutters. Shared headers, chips, cards, forms, the technical canvas, and vertical rhythm are denser. Dashboard uses one row for three metrics; Studies uses safe two-column input pairs; Map and Data use width-bounded responsive content. At font scale 1.30 on the same device, Dashboard changed to a two-plus-one metric arrangement and Studies changed to single-column fields without clipping labels, values, or units. In baseline landscape, the 720 dp width gate selected a navigation rail and the short-height mode kept all five destinations visible as accessible icons while wide feature content retained its responsive layout. Body text continues to use scalable `sp` units; the application does not replace, clamp, or override the system font scale. Engineering summaries and numerical facts are allowed to wrap, while ellipsis is limited to noncritical project/customer labels.
+For the baseline portrait configuration, Dashboard and Projects use 16 dp content gutters while the field-heavy feature screens use compact 12 dp phone gutters. Shared headers, chips, cards, forms, the technical canvas, and vertical rhythm are denser. Dashboard uses one row for three metrics; Studies uses safe two-column input pairs; Map and Data use width-bounded responsive content. At font scale 1.30 on the same device, Dashboard changed to a two-plus-one metric arrangement and Studies changed to single-column fields without clipping labels, values, or units. In baseline landscape, the 720 dp width gate selected a navigation rail and the short-height mode kept all five destinations visible as accessible icons while wide feature content retained its responsive layout. The project-name editor was also checked in portrait and landscape with the on-screen keyboard on the physical device: explicit Activity resize handling keeps the top app bar and editable name visible in the short landscape window, while its `LazyColumn` retains access to the remaining content. Body text continues to use scalable `sp` units; the application does not replace, clamp, or override the system font scale. Engineering summaries and numerical facts are allowed to wrap, while ellipsis is limited to noncritical project/customer labels.
 
 This is evidence for one reference device, two orientations, and two bounded font-scale observations, not a support matrix. It does not establish coverage for other OEMs, Android versions, aspect ratios, tablets, foldables, extreme font scales, screen readers, switch access, or every light/dark-theme combination. Those checks remain release work.
 
@@ -86,6 +86,8 @@ Instrumented tests require an emulator or connected device:
 ```powershell
 .\gradlew.bat connectedDebugAndroidTest
 ```
+
+The current 20-test instrumented suite passes on the Android 16/API 36 `Medium_Phone_API_36.1` emulator at 1080 × 2400 pixels and 420 dpi. The preceding 18-test revision also passed on the physical Android 16 reference phone; the current suite still needs a fresh physical rerun after the device was disconnected.
 
 ## Code organization
 

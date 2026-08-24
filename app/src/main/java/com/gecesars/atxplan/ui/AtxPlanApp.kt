@@ -55,6 +55,7 @@ import com.gecesars.atxplan.ui.navigation.AtxRoute
 import com.gecesars.atxplan.ui.navigation.CatalogRoute
 import com.gecesars.atxplan.ui.navigation.DashboardRoute
 import com.gecesars.atxplan.ui.navigation.MapRoute
+import com.gecesars.atxplan.ui.navigation.ProjectRenameRoute
 import com.gecesars.atxplan.ui.navigation.ProjectsRoute
 import com.gecesars.atxplan.ui.navigation.RfPathEditorRoute
 import com.gecesars.atxplan.ui.navigation.StudiesRoute
@@ -65,6 +66,7 @@ import com.gecesars.atxplan.ui.navigation.replaceTopLevel
 import com.gecesars.atxplan.ui.screens.CatalogScreen
 import com.gecesars.atxplan.ui.screens.DashboardScreen
 import com.gecesars.atxplan.ui.screens.EngineeringMapScreen
+import com.gecesars.atxplan.ui.screens.ProjectRenameScreen
 import com.gecesars.atxplan.ui.screens.ProjectsScreen
 import com.gecesars.atxplan.ui.screens.RfPathEditorScreen
 import com.gecesars.atxplan.ui.screens.StudiesScreen
@@ -110,6 +112,7 @@ fun AtxPlanApp() {
         uiState = uiState,
         snackbarHostState = snackbarHostState,
         onCreateProject = viewModel::createProject,
+        onRenameProject = viewModel::renameProject,
         onSelectProject = viewModel::selectProject,
         onCalculateLink = viewModel::calculateLinkBudget,
         onSaveRfPath = viewModel::addRfPath,
@@ -123,6 +126,7 @@ private fun AtxPlanShell(
     uiState: AppUiState,
     snackbarHostState: SnackbarHostState,
     onCreateProject: (String, String) -> Unit,
+    onRenameProject: (com.gecesars.atxplan.domain.application.RenameProjectCommand) -> Unit,
     onSelectProject: (String) -> Unit,
     onCalculateLink: (com.gecesars.atxplan.domain.rf.LinkBudgetInput) -> Unit,
     onSaveRfPath: (com.gecesars.atxplan.domain.application.AddRfPathCommand) -> Unit,
@@ -131,20 +135,23 @@ private fun AtxPlanShell(
     val backStack = rememberAtxNavBackStack()
     val currentUiState = rememberUpdatedState(uiState)
     val activeRoute = backStack.activeRoute
-    var isRfEditorDirty by rememberSaveable { mutableStateOf(false) }
-    var isRfSavePending by rememberSaveable { mutableStateOf(false) }
+    val isNestedEditor = activeRoute is RfPathEditorRoute || activeRoute is ProjectRenameRoute
+    var isEditorDirty by rememberSaveable { mutableStateOf(false) }
+    var isEditorSavePending by remember { mutableStateOf(false) }
     var pendingEditorNavigation by remember { mutableStateOf<PendingEditorNavigation?>(null) }
     var navigationNotice by remember { mutableStateOf<String?>(null) }
     val activeTopLevelRoute = when (activeRoute) {
-        is RfPathEditorRoute -> ProjectsRoute
+        is RfPathEditorRoute,
+        is ProjectRenameRoute,
+        -> ProjectsRoute
         else -> activeRoute
     }
     val navigateImmediately: (AtxRoute) -> Unit = backStack::replaceTopLevel
     val navigateBackImmediately: () -> Unit = {
         if (backStack.size > 1) backStack.removeLastOrNull() else backStack.replaceTopLevel(ProjectsRoute)
     }
-    val canLeaveEditor = activeRoute !is RfPathEditorRoute ||
-        (!isRfSavePending && !uiState.isSavingCatalog)
+    val canLeaveEditor = !isNestedEditor ||
+        (!isEditorSavePending && !uiState.isSavingCatalog)
     val performNavigation: (PendingEditorNavigation) -> Unit = { request ->
         when (request) {
             PendingEditorNavigation.Back -> navigateBackImmediately()
@@ -153,8 +160,8 @@ private fun AtxPlanShell(
     }
     val requestNavigation: (PendingEditorNavigation) -> Unit = { request ->
         when {
-            activeRoute is RfPathEditorRoute && !canLeaveEditor -> Unit
-            activeRoute is RfPathEditorRoute && isRfEditorDirty -> {
+            isNestedEditor && !canLeaveEditor -> Unit
+            isNestedEditor && isEditorDirty -> {
                 pendingEditorNavigation = request
             }
             else -> performNavigation(request)
@@ -168,9 +175,9 @@ private fun AtxPlanShell(
     }
 
     LaunchedEffect(activeRoute) {
-        if (activeRoute !is RfPathEditorRoute) {
-            isRfEditorDirty = false
-            isRfSavePending = false
+        if (!isNestedEditor) {
+            isEditorDirty = false
+            isEditorSavePending = false
             pendingEditorNavigation = null
         }
     }
@@ -200,7 +207,7 @@ private fun AtxPlanShell(
                 topBar = {
                     CenterAlignedTopAppBar(
                         navigationIcon = {
-                            if (activeRoute is RfPathEditorRoute) {
+                            if (isNestedEditor) {
                                 IconButton(
                                     onClick = navigateBack,
                                     enabled = canLeaveEditor,
@@ -214,10 +221,10 @@ private fun AtxPlanShell(
                         },
                         title = {
                             Text(
-                                text = if (activeRoute is RfPathEditorRoute) {
-                                    "Add RF Path"
-                                } else {
-                                    destinations.firstOrNull { it.route == activeRoute }
+                                text = when (activeRoute) {
+                                    is RfPathEditorRoute -> "Add RF Path"
+                                    is ProjectRenameRoute -> "Rename Project"
+                                    else -> destinations.firstOrNull { it.route == activeRoute }
                                         ?.label
                                         ?: destinations.first().label
                                 },
@@ -269,6 +276,19 @@ private fun AtxPlanShell(
                                         uiState = currentUiState.value,
                                         onCreateProject = onCreateProject,
                                         onSelectProject = onSelectProject,
+                                        onRenameProject = { projectId ->
+                                            val route = AtxRoute.projectRename(projectId)
+                                            if (
+                                                route is ProjectRenameRoute &&
+                                                backStack.lastOrNull() != route
+                                            ) {
+                                                backStack.add(route)
+                                            } else if (route !is ProjectRenameRoute) {
+                                                navigationNotice = "The project name editor cannot open this " +
+                                                    "project because its stored ID is not navigation-safe. " +
+                                                    "The project data was not changed."
+                                            }
+                                        },
                                         onAddRfPath = { projectId ->
                                             val route = AtxRoute.rfPathEditor(projectId)
                                             if (route is RfPathEditorRoute && backStack.lastOrNull() != route) {
@@ -301,13 +321,38 @@ private fun AtxPlanShell(
                                         project = state.catalog.projects
                                             .firstOrNull { project -> project.id == route.projectId },
                                         isLoadingCatalog = state.isLoading,
+                                        isCatalogWritable = state.isCatalogWritable,
                                         isSaving = state.isSavingCatalog,
+                                        catalogMutationCompletionCount =
+                                            state.catalogMutationCompletionCount,
                                         onSave = onSaveRfPath,
-                                        onDirtyStateChange = { isRfEditorDirty = it },
-                                        onSavePendingChange = { isRfSavePending = it },
+                                        onDirtyStateChange = { isEditorDirty = it },
+                                        onSavePendingChange = { isEditorSavePending = it },
                                         onSaveSucceeded = {
-                                            isRfEditorDirty = false
-                                            isRfSavePending = false
+                                            isEditorDirty = false
+                                            isEditorSavePending = false
+                                            pendingEditorNavigation = null
+                                            navigateBackImmediately()
+                                        },
+                                        onBack = navigateBack,
+                                    )
+                                }
+                                is ProjectRenameRoute -> NavEntry(route) {
+                                    val state = currentUiState.value
+                                    ProjectRenameScreen(
+                                        project = state.catalog.projects
+                                            .firstOrNull { project -> project.id == route.projectId },
+                                        isLoadingCatalog = state.isLoading,
+                                        isCatalogWritable = state.isCatalogWritable,
+                                        isSaving = state.isSavingCatalog,
+                                        catalogMutationCompletionCount =
+                                            state.catalogMutationCompletionCount,
+                                        onSave = onRenameProject,
+                                        onDirtyStateChange = { isEditorDirty = it },
+                                        onSavePendingChange = { isEditorSavePending = it },
+                                        onSaveSucceeded = {
+                                            isEditorDirty = false
+                                            isEditorSavePending = false
                                             pendingEditorNavigation = null
                                             navigateBackImmediately()
                                         },
@@ -331,21 +376,36 @@ private fun AtxPlanShell(
     }
 
     pendingEditorNavigation?.let { request ->
+        val isProjectRename = activeRoute is ProjectRenameRoute
         AlertDialog(
             onDismissRequest = { pendingEditorNavigation = null },
-            title = { Text("Discard unsaved RF path?") },
+            title = {
+                Text(
+                    if (isProjectRename) {
+                        "Discard project name changes?"
+                    } else {
+                        "Discard unsaved RF path?"
+                    },
+                )
+            },
             text = {
-                Text("Your changes have not been saved. Discard the draft and leave the editor?")
+                Text(
+                    if (isProjectRename) {
+                        "The new project name has not been saved. Discard it and leave this screen?"
+                    } else {
+                        "Your changes have not been saved. Discard the draft and leave the editor?"
+                    },
+                )
             },
             confirmButton = {
                 TextButton(
                     onClick = {
                         pendingEditorNavigation = null
-                        isRfEditorDirty = false
+                        isEditorDirty = false
                         performNavigation(request)
                     },
                 ) {
-                    Text("Discard Draft")
+                    Text(if (isProjectRename) "Discard Changes" else "Discard Draft")
                 }
             },
             dismissButton = {

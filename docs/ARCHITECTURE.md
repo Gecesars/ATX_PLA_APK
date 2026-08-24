@@ -50,7 +50,7 @@ flowchart TD
 | Composition root | Delivered | `MainActivity` applies the theme and hosts `AtxPlanApp`. | Dependency construction still occurs in the ViewModel factory. |
 | UI shell | Delivered | Compose Material 3, edge-to-edge, custom light/dark theme. | Full accessibility/device-matrix validation remains. |
 | Adaptive navigation | Delivered | Bottom navigation on compact width; navigation rail at 720 dp or wider; rail labels/header collapse to accessible icons below 520 dp height. | Feature contents are not all adaptive list/detail layouts. |
-| Navigation 3 | Foundation | Serializable stable-ID `AtxRoute` keys, a saveable typed back stack, safe unknown-route fallback, and nested RF editor have saved-instance-state tests. | Deep links, deleted-ID UX, route ownership, and true process-death/rotation/device-matrix flows remain. |
+| Navigation 3 | Foundation | Serializable stable-ID `AtxRoute` keys, a saveable typed back stack, safe unknown-route fallback, and nested RF-path and project-name editors have saved-instance-state tests. | Deep links, deleted-ID UX, route ownership, and true process-death/rotation/device-matrix flows remain. |
 | State management | Foundation | Immutable state, explicit actions/effects, structured problems/recovery, injected use cases/dispatchers, serialized catalog mutations, cancellation, and ViewModel tests. | One application ViewModel remains; cross-instance catalog observation, DI/scoping, durable jobs, broader observability, accessibility, and system recovery remain. |
 | Repository boundary | Delivered | `ProjectRepository` interface separates ViewModel from file implementation. | Only the project catalog uses a repository. |
 | JSON persistence | Delivered baseline | Strict UTF-8 serialization, schema 2, explicit v1 migration, private `AtomicFile`, `fd.sync`, 5 MiB limit, and mutex-protected read-transform-write transactions have migration/fault/concurrency tests. | Recovery/export, assets/jobs, backup, multi-process policy, storage-exhaustion system evidence, and the long-term store decision remain. |
@@ -59,7 +59,7 @@ flowchart TD
 | RF engine | Delivered | Pure Kotlin FSPL, EIRP, received power, margin, midpoint Fresnel radius, noise floor, and SNR; results carry explicit in-memory model and implementation provenance. | Synchronous bounded calculation only; no terrain, geodesy, patterns, or persisted execution manifest. |
 | Engineering map | Foundation | Compose Canvas plots normalized site coordinates and active azimuth rays. | It is not a cartographic renderer or GIS engine. |
 | Dataset catalog | Foundation | Static capability screen. | No dataset inventory or file operation exists. |
-| Tests | Delivered baseline | Automated domain, RF, persistence migration/fault/concurrency, use-case, form, ViewModel, source-language, route saved-state, draft-protection/accessibility semantics, and persisted Add RF Path Activity-flow tests exist; the 10-test instrumented suite passes on a physical Android 16 device. | Broader accessibility automation, performance, export, true system process-death, and a formal device matrix remain. |
+| Tests | Delivered baseline | Automated domain, RF, persistence migration/fault/concurrency, use-case, form, ViewModel, source-language, route saved-state, explicit mutation-completion recovery, draft-protection/accessibility semantics, persisted rename, and persisted Add RF Path Activity-flow tests exist; the current 20-test instrumented suite passes on an Android 16/API 36 emulator. The preceding 18-test revision passed on the physical Android 16 reference phone. | A fresh physical run of the current suite, broader accessibility automation, performance, export, true system process-death, and a formal device matrix remain. |
 | Build automation | Delivered baseline | CI runs unit tests, lint, and debug/test APK assembly. | Connected test and signed release are outside current CI. |
 | Product language | Delivered baseline | Production UI/errors/demo/tests are English and a unit test scans for common Portuguese source terms. | The blacklist is partial and must cover future resource/file types. |
 
@@ -136,7 +136,7 @@ ATX Plan is an information-dense engineering tool, so compact layout is a functi
 - may constrain noncritical navigation labels and decorative summaries when their full meaning remains available through semantics;
 - validates compact phones and larger windows separately instead of applying one fixed-density layout everywhere.
 
-The current compact pass is measured on a physical Android 16 phone at approximately 394 dp portrait width and `fontScale = 1.15`. Responsive fallbacks were also inspected in portrait at `fontScale = 1.30`, after which the original setting was restored. A baseline landscape check verified the short-height navigation rail and wide feature layouts before rotation was restored. This is evidence for one reference device, not a complete accessibility or device matrix.
+The current compact pass is measured on a physical Android 16 phone at approximately 394 dp portrait width and `fontScale = 1.15`. Responsive fallbacks were also inspected in portrait at `fontScale = 1.30`, after which the original setting was restored. Baseline landscape checks verified the short-height navigation rail, wide feature layouts, and the resized project-name editor with the IME before rotation was restored. This is evidence for one reference device, not a complete accessibility or device matrix.
 
 ### Domain/application layer
 
@@ -265,7 +265,7 @@ Every data screen models empty, loading, content, recoverable error, blocking pr
 - unsupported, oversized, or malformed persisted route IDs resolve through a bounded safe fallback;
 - routes carry only stable project IDs and the repository resolves project content;
 - a compact bottom bar and expanded rail select destinations;
-- top-level selection intentionally replaces the stack while the RF editor nests above Projects;
+- top-level selection intentionally replaces the stack while the RF-path and project-name editors nest above Projects;
 - Dashboard can navigate to Projects, Map, and Studies;
 - instrumentation covers the Dashboard-to-Studies smoke path and serialized restoration of top-level, unknown, malformed, and nested-editor routes.
 
@@ -399,7 +399,7 @@ The current screen calculates the first Fresnel radius at the path midpoint. Tes
 
 ### Application use cases
 
-Delivered use cases load and transactionally update the catalog, create/select projects, add the combined RF path, and calculate the bounded link budget. `AddRfPathUseCase` accepts typed drafts and injected ID/clock providers; its result carries the committed catalog projection and linked entities.
+Delivered use cases load and transactionally update the catalog, create/select/rename projects, add the combined RF path, and calculate the bounded link budget. `RenameProjectUseCase` changes the validated name, may advance the update timestamp, preserves project identity and its nested graph, and rejects a command whose expected durable name is stale. `AddRfPathUseCase` accepts typed drafts and injected ID/clock providers; its result carries the committed catalog projection and linked entities.
 
 Remaining target use cases include:
 
@@ -752,10 +752,10 @@ Canonical serialization is versioned. Irrelevant timestamps and local paths do n
 - project/domain tests cover schema defaults, validation, engineering-value boundaries, primitive JSON, receiver/sector references, legacy compatibility, and exact round trips;
 - application tests cover deterministic Add RF Path success, invalid commands, generated-ID duplication/collision, atomic failure, clock policy, references, and JSON precision;
 - persistence tests cover explicit v1→v2 migration, failed migration promotion, malformed/invalid/future data, strict UTF-8, size limits, atomic write failure, and concurrent repository instances;
-- ViewModel tests cover load/create/select/Add RF Path transitions, structured failures/retry, mutation ordering/concurrency, invalid mutations, calculation cancellation, and stale-result suppression;
+- ViewModel tests cover load/create/select/rename/Add RF Path transitions, structured failures/retry, mutation ordering/concurrency, invalid mutations, calculation cancellation, and stale-result suppression;
 - RF and form tests cover implemented formulas, invalid physical inputs, unit parsing, defaults, and typed command conversion;
 - the English-only source test scans production Kotlin/XML for common Portuguese terms;
-- a 10-test instrumented suite passes on a physical Android 16 device and covers the Dashboard-to-Studies smoke path, saved-instance-state restoration for supported, unknown, malformed, and nested RF-editor routes, draft-discard/accessibility behavior, and create-project -> persist-RF-path -> Activity recreation;
+- the current 20-test instrumented suite passes on an Android 16/API 36 emulator and covers the Dashboard-to-Studies smoke path, saved-instance-state restoration for supported, unknown, malformed, nested RF-path, and nested project-name routes, explicit mutation-completion and transient pending-save recovery, legacy/normalized/competing rename behavior, draft-discard/accessibility behavior, persisted project rename, and create-project -> persist-RF-path -> Activity recreation; the preceding 18-test revision passed on the physical Android 16 reference phone;
 - lint/build evidence remains part of the debug baseline, but accessibility automation, performance, broader device/system flows, and release validation remain open.
 
 ### Target matrix
@@ -835,7 +835,7 @@ Until measured targets exist, absolute requirements are:
 2. preserve `MainActivity` as a thin host and move dependency assembly into an approved composition-root/DI policy;
 3. split the application-wide ViewModel into feature contracts and introduce durable job/effect/problem contracts as flows grow;
 4. complete deep-link/deleted-ID handling and prove navigation plus durable selection through true process death, rotation, accessibility, and the device matrix;
-5. complete project lifecycle and independent network/site/sector/receiver edit/delete while staging remaining primitive-field migration;
+5. continue project lifecycle after rename with duplicate/archive/delete and add independent network/site/sector/receiver edit/delete while staging remaining primitive-field migration;
 6. decide the long-term operational store, project asset ownership, recovery/export, backup, and multi-process policy beyond schema 2;
 7. add scenario, immutable study request/result, provenance, and artifact models;
 8. add a geographic map behind an adapter while retaining the technical Canvas only as a diagnostic if useful;

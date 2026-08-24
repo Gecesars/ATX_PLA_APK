@@ -4,8 +4,10 @@ import com.gecesars.atxplan.data.project.ProjectRepository
 import com.gecesars.atxplan.data.project.ProjectStorageException
 import com.gecesars.atxplan.domain.application.AppCoroutineDispatchers
 import com.gecesars.atxplan.domain.application.AppUseCases
+import com.gecesars.atxplan.domain.application.EpochMillisClock
 import com.gecesars.atxplan.domain.application.LinkBudgetCalculator
 import com.gecesars.atxplan.domain.application.ProjectCreator
+import com.gecesars.atxplan.domain.application.RenameProjectCommand
 import com.gecesars.atxplan.domain.model.PlannerProject
 import com.gecesars.atxplan.domain.model.ProjectCatalog
 import com.gecesars.atxplan.domain.model.ProjectFactory
@@ -50,6 +52,7 @@ class AppViewModelTest {
         assertFalse(viewModel.state.value.isLoading)
         assertTrue(viewModel.state.value.isCatalogWritable)
         assertEquals(catalog, viewModel.state.value.catalog)
+        assertEquals(0L, viewModel.state.value.catalogMutationCompletionCount)
         assertNull(viewModel.state.value.storageError)
         assertEquals(1, repository.loadCalls)
     }
@@ -150,6 +153,255 @@ class AppViewModelTest {
         }
 
     @Test
+    fun `rename action persists before publishing state and emits a success effect`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val initial = catalogWithProjects("Original Name")
+            val repository = FakeProjectRepository(initial).apply {
+                saveDelayMillis = 50L
+            }
+            val viewModel = createViewModel(repository)
+            advanceUntilIdle()
+            val projectId = initial.selectedProjectId.orEmpty()
+
+            viewModel.onAction(
+                AppUiAction.RenameProject(
+                    RenameProjectCommand(
+                        projectId = projectId,
+                        expectedName = "Original Name",
+                        newName = "  Renamed Project  ",
+                    ),
+                ),
+            )
+            runCurrent()
+
+            assertTrue(viewModel.state.value.isSavingCatalog)
+            assertEquals(initial, viewModel.state.value.catalog)
+            assertTrue(repository.savedCatalogs.isEmpty())
+
+            advanceUntilIdle()
+
+            val state = viewModel.state.value
+            assertFalse(state.isSavingCatalog)
+            assertEquals("Renamed Project", state.selectedProject?.name)
+            assertEquals(10_000L, state.selectedProject?.updatedAtEpochMillis)
+            assertEquals(state.catalog, repository.savedCatalogs.single())
+            assertEquals(
+                AppUiEffect.ShowNotice(
+                    "Project renamed from \"Original Name\" to \"Renamed Project\" " +
+                        "in local storage.",
+                ),
+                state.pendingEffect,
+            )
+        }
+
+    @Test
+    fun `rename no-op does not save or clear an unresolved storage failure`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val initial = catalogWithProjects("Durable Name")
+            val repository = FakeProjectRepository(initial).apply {
+                saveError = ProjectStorageException("Storage remains unavailable.")
+            }
+            val viewModel = createViewModel(repository)
+            advanceUntilIdle()
+
+            viewModel.createProject("Failed Save", "")
+            advanceUntilIdle()
+            val unresolvedProblem = viewModel.state.value.storageProblem
+
+            repository.saveError = null
+            viewModel.renameProject(
+                RenameProjectCommand(
+                    initial.selectedProjectId.orEmpty(),
+                    "Durable Name",
+                    "  Durable Name  ",
+                ),
+            )
+            advanceUntilIdle()
+
+            assertEquals(initial, viewModel.state.value.catalog)
+            assertEquals(unresolvedProblem, viewModel.state.value.storageProblem)
+            assertNull(viewModel.state.value.pendingEffect)
+            assertTrue(repository.savedCatalogs.isEmpty())
+
+            viewModel.renameProject(
+                RenameProjectCommand(
+                    initial.selectedProjectId.orEmpty(),
+                    "Durable Name",
+                    "Recovered Name",
+                ),
+            )
+            advanceUntilIdle()
+
+            assertNull(viewModel.state.value.storageProblem)
+            assertEquals("Recovered Name", viewModel.state.value.selectedProject?.name)
+            assertEquals(1, repository.savedCatalogs.size)
+        }
+
+    @Test
+    fun `rename save failure retains the prior durable UI catalog`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val initial = catalogWithProjects("Durable Name")
+            val repository = FakeProjectRepository(initial).apply {
+                saveError = ProjectStorageException("Storage is read-only.")
+            }
+            val viewModel = createViewModel(repository)
+            advanceUntilIdle()
+
+            viewModel.renameProject(
+                RenameProjectCommand(
+                    initial.selectedProjectId.orEmpty(),
+                    "Durable Name",
+                    "Unsaved Name",
+                ),
+            )
+            advanceUntilIdle()
+
+            assertEquals(initial, viewModel.state.value.catalog)
+            assertEquals("Durable Name", viewModel.state.value.selectedProject?.name)
+            assertEquals("Storage is read-only.", viewModel.state.value.storageError)
+            assertEquals(AppProblemCode.CATALOG_SAVE_FAILED, viewModel.state.value.storageProblem?.code)
+            assertFalse(viewModel.state.value.isSavingCatalog)
+            assertNull(viewModel.state.value.pendingEffect)
+            assertTrue(repository.savedCatalogs.isEmpty())
+        }
+
+    @Test
+    fun `stale view model rename rebases on a peer RF path commit`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val initial = catalogWithProjects("Path Project")
+            val repository = FakeProjectRepository(initial)
+            val staleRenameViewModel = createViewModel(repository)
+            val peerRfViewModel = createViewModel(repository)
+            advanceUntilIdle()
+            val projectId = initial.selectedProjectId.orEmpty()
+
+            peerRfViewModel.addRfPath(RfPathDraft().toCommand(projectId).getOrThrow())
+            advanceUntilIdle()
+
+            assertTrue(staleRenameViewModel.state.value.selectedProject?.networks.orEmpty().isEmpty())
+            assertEquals(1, repository.catalogToLoad.selectedProject?.networks?.size)
+
+            staleRenameViewModel.renameProject(
+                RenameProjectCommand(projectId, "Path Project", "Rebased RF Project"),
+            )
+            advanceUntilIdle()
+
+            val durableProject = repository.catalogToLoad.selectedProject!!
+            assertEquals("Rebased RF Project", durableProject.name)
+            assertEquals(1, durableProject.networks.size)
+            assertEquals(1, durableProject.sites.size)
+            assertEquals(1, durableProject.receivers.size)
+            assertEquals(
+                durableProject.networks.single().id,
+                durableProject.sites.single().sectors.single().networkId,
+            )
+            assertEquals(
+                durableProject.networks.single().id,
+                durableProject.receivers.single().networkId,
+            )
+            assertEquals(repository.catalogToLoad, staleRenameViewModel.state.value.catalog)
+            assertEquals(2, repository.savedCatalogs.size)
+        }
+
+    @Test
+    fun `competing project renames reject the stale command without overwriting the first commit`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val initial = catalogWithProjects("Original Name")
+            val repository = FakeProjectRepository(initial)
+            val firstViewModel = createViewModel(repository)
+            val staleViewModel = createViewModel(repository)
+            advanceUntilIdle()
+            val projectId = initial.selectedProjectId.orEmpty()
+
+            firstViewModel.renameProject(
+                RenameProjectCommand(projectId, "Original Name", "First Durable Rename"),
+            )
+            advanceUntilIdle()
+
+            staleViewModel.renameProject(
+                RenameProjectCommand(projectId, "Original Name", "Stale Rename"),
+            )
+            advanceUntilIdle()
+
+            assertEquals("First Durable Rename", repository.catalogToLoad.selectedProject?.name)
+            assertEquals("First Durable Rename", staleViewModel.state.value.selectedProject?.name)
+            assertEquals(repository.catalogToLoad, staleViewModel.state.value.catalog)
+            assertEquals(1, repository.savedCatalogs.size)
+            assertEquals(
+                AppUiEffect.ShowNotice(
+                    "The project name changed in local storage. " +
+                        "Review the latest name and try again.",
+                ),
+                staleViewModel.state.value.pendingEffect,
+            )
+            assertFalse(staleViewModel.state.value.isSavingCatalog)
+            assertNull(staleViewModel.state.value.storageProblem)
+        }
+
+    @Test
+    fun `identical competing rename refreshes the stale view model without a conflict`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val initial = catalogWithProjects("Original Name")
+            val repository = FakeProjectRepository(initial)
+            val firstViewModel = createViewModel(repository)
+            val staleViewModel = createViewModel(repository)
+            advanceUntilIdle()
+            val projectId = initial.selectedProjectId.orEmpty()
+
+            firstViewModel.renameProject(
+                RenameProjectCommand(projectId, "Original Name", "Shared Durable Rename"),
+            )
+            advanceUntilIdle()
+            staleViewModel.renameProject(
+                RenameProjectCommand(projectId, "Original Name", "Shared Durable Rename"),
+            )
+            advanceUntilIdle()
+
+            assertEquals("Shared Durable Rename", repository.catalogToLoad.selectedProject?.name)
+            assertEquals(repository.catalogToLoad, staleViewModel.state.value.catalog)
+            assertEquals(1, repository.savedCatalogs.size)
+            assertNull(staleViewModel.state.value.pendingEffect)
+            assertNull(staleViewModel.state.value.storageProblem)
+            assertFalse(staleViewModel.state.value.isSavingCatalog)
+        }
+
+    @Test
+    fun `stale rename refreshes the catalog without clearing an unresolved storage failure`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val initial = catalogWithProjects("Original Name")
+            val repository = FakeProjectRepository(initial)
+            val peerViewModel = createViewModel(repository)
+            val staleViewModel = createViewModel(repository)
+            advanceUntilIdle()
+            val projectId = initial.selectedProjectId.orEmpty()
+
+            repository.saveError = ProjectStorageException("Storage remains unavailable.")
+            staleViewModel.createProject("Failed Save", "")
+            advanceUntilIdle()
+            val unresolvedProblem = staleViewModel.state.value.storageProblem
+
+            repository.saveError = null
+            peerViewModel.renameProject(
+                RenameProjectCommand(projectId, "Original Name", "Peer Rename"),
+            )
+            advanceUntilIdle()
+            staleViewModel.renameProject(
+                RenameProjectCommand(projectId, "Original Name", "Stale Rename"),
+            )
+            advanceUntilIdle()
+
+            assertEquals("Peer Rename", repository.catalogToLoad.selectedProject?.name)
+            assertEquals(repository.catalogToLoad, staleViewModel.state.value.catalog)
+            assertEquals(unresolvedProblem, staleViewModel.state.value.storageProblem)
+            assertEquals(1, repository.savedCatalogs.size)
+            assertEquals(
+                "The project name changed in local storage. " +
+                    "Review the latest name and try again.",
+                staleViewModel.state.value.notice,
+            )
+        }
+
+    @Test
     fun `invalid project data emits an effect without attempting a save`() =
         runTest(mainDispatcherRule.dispatcher) {
             val initial = catalogWithProjects("Existing")
@@ -166,6 +418,44 @@ class AppViewModelTest {
                     .contains("between 2 and 80 characters"),
             )
             assertTrue(repository.savedCatalogs.isEmpty())
+        }
+
+    @Test
+    fun `immediate catalog rejection increments the completion count exactly once`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val repository = FakeProjectRepository(catalogWithProjects("Existing"))
+            val viewModel = createViewModel(repository)
+            advanceUntilIdle()
+
+            viewModel.createProject("x", "Customer")
+            advanceUntilIdle()
+
+            assertEquals(1L, viewModel.state.value.catalogMutationCompletionCount)
+            assertFalse(viewModel.state.value.isSavingCatalog)
+            assertTrue(repository.savedCatalogs.isEmpty())
+
+            advanceUntilIdle()
+            assertEquals(1L, viewModel.state.value.catalogMutationCompletionCount)
+        }
+
+    @Test
+    fun `no-op catalog transaction increments the completion count without saving`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val initial = catalogWithProjects("Selected")
+            val repository = FakeProjectRepository(initial)
+            val viewModel = createViewModel(repository)
+            advanceUntilIdle()
+
+            viewModel.selectProject(initial.selectedProjectId.orEmpty())
+            advanceUntilIdle()
+
+            assertEquals(1L, viewModel.state.value.catalogMutationCompletionCount)
+            assertEquals(initial, viewModel.state.value.catalog)
+            assertFalse(viewModel.state.value.isSavingCatalog)
+            assertTrue(repository.savedCatalogs.isEmpty())
+
+            advanceUntilIdle()
+            assertEquals(1L, viewModel.state.value.catalogMutationCompletionCount)
         }
 
     @Test
@@ -418,6 +708,7 @@ class AppViewModelTest {
         calculator: LinkBudgetCalculator = LinkBudgetCalculator { input ->
             RfCalculator.linkBudget(input)
         },
+        clock: EpochMillisClock = EpochMillisClock { 10_000L },
     ): AppViewModel {
         val dispatchers = AppCoroutineDispatchers(
             storage = mainDispatcherRule.dispatcher,
@@ -434,6 +725,7 @@ class AppViewModelTest {
                 dispatchers = dispatchers,
                 projectCreator = projectCreator,
                 linkBudgetCalculator = calculator,
+                clock = clock,
             ),
         )
     }

@@ -9,6 +9,8 @@ import com.gecesars.atxplan.data.project.ProjectRepository
 import com.gecesars.atxplan.data.project.ProjectStorageException
 import com.gecesars.atxplan.domain.application.AppUseCases
 import com.gecesars.atxplan.domain.application.AddRfPathCommand
+import com.gecesars.atxplan.domain.application.RenameProjectCommand
+import com.gecesars.atxplan.domain.application.RenameProjectStatus
 import com.gecesars.atxplan.domain.model.PlannerProject
 import com.gecesars.atxplan.domain.model.ProjectCatalog
 import com.gecesars.atxplan.domain.rf.LinkBudgetInput
@@ -26,6 +28,8 @@ import kotlinx.coroutines.sync.withLock
 
 sealed interface AppUiAction {
     data class CreateProject(val name: String, val customer: String) : AppUiAction
+
+    data class RenameProject(val command: RenameProjectCommand) : AppUiAction
 
     data class SelectProject(val projectId: String) : AppUiAction
 
@@ -63,6 +67,7 @@ data class AppUiState(
     val isLoading: Boolean = true,
     val isCatalogWritable: Boolean = false,
     val isSavingCatalog: Boolean = false,
+    val catalogMutationCompletionCount: Long = 0L,
     val isCalculating: Boolean = false,
     val catalog: ProjectCatalog = ProjectCatalog(),
     val pendingEffect: AppUiEffect? = null,
@@ -104,6 +109,7 @@ class AppViewModel(
     fun onAction(action: AppUiAction) {
         when (action) {
             is AppUiAction.CreateProject -> handleCreateProject(action.name, action.customer)
+            is AppUiAction.RenameProject -> handleRenameProject(action.command)
             is AppUiAction.SelectProject -> handleSelectProject(action.projectId)
             is AppUiAction.CalculateLinkBudget -> handleCalculateLinkBudget(action.input)
             is AppUiAction.AddRfPath -> handleAddRfPath(action.command)
@@ -114,6 +120,10 @@ class AppViewModel(
 
     fun createProject(name: String, customer: String) {
         onAction(AppUiAction.CreateProject(name, customer))
+    }
+
+    fun renameProject(command: RenameProjectCommand) {
+        onAction(AppUiAction.RenameProject(command))
     }
 
     fun selectProject(projectId: String) {
@@ -192,6 +202,30 @@ class AppViewModel(
         }
     }
 
+    private fun handleRenameProject(command: RenameProjectCommand) {
+        persistCatalogMutation { current ->
+            val result = useCases.renameProject(current, command)
+            when (result.status) {
+                RenameProjectStatus.UNCHANGED -> null
+                RenameProjectStatus.STALE_NAME -> CatalogMutation(
+                    updatedCatalog = result.catalog,
+                    noChangeEffect = AppUiEffect.ShowNotice(
+                        "The project name changed in local storage. " +
+                            "Review the latest name and try again.",
+                    ),
+                )
+                RenameProjectStatus.CHANGED -> CatalogMutation(
+                    updatedCatalog = result.catalog,
+                    successEffect = AppUiEffect.ShowNotice(
+                        "Project renamed from \"${command.expectedName}\" " +
+                            "to \"${result.project.name}\" " +
+                            "in local storage.",
+                    ),
+                )
+            }
+        }
+    }
+
     private fun handleSelectProject(projectId: String) {
         persistCatalogMutation { current ->
             useCases.selectProject(current, projectId)?.let { updated ->
@@ -267,36 +301,49 @@ class AppViewModel(
                             pendingEffect = AppUiEffect.ShowNotice(
                                 "The local catalog must load successfully before it can be changed.",
                             ),
+                            catalogMutationCompletionCount =
+                                it.catalogMutationCompletionCount + 1L,
                         )
                     }
                     return@withLock
                 }
                 mutableState.update { it.copy(isSavingCatalog = true) }
                 runSuspendCatching {
-                    var catalogMutation: CatalogMutation? = null
+                    var requestedMutation: CatalogMutation? = null
+                    var didCommitChange = false
                     val committedCatalog = useCases.updateProjectCatalog { latestCatalog ->
-                        try {
+                        val requested = try {
                             mutation(latestCatalog)
                         } catch (error: Exception) {
                             throw CatalogMutationRejected(error)
-                        }.takeIf { requested ->
-                            requested != null && requested.updatedCatalog != latestCatalog
-                        }.also { catalogMutation = it }
-                            ?.updatedCatalog
-                            ?: latestCatalog
+                        }
+                        requestedMutation = requested
+                        didCommitChange = requested != null &&
+                            requested.updatedCatalog != latestCatalog
+                        if (didCommitChange) {
+                            checkNotNull(requested).updatedCatalog
+                        } else {
+                            latestCatalog
+                        }
                     }
                     PersistedCatalogMutation(
                         catalog = committedCatalog,
-                        successEffect = catalogMutation?.successEffect,
-                        didCommitChange = catalogMutation != null,
+                        completionEffect = if (didCommitChange) {
+                            requestedMutation?.successEffect
+                        } else {
+                            requestedMutation?.noChangeEffect
+                        },
+                        didCommitChange = didCommitChange,
                     )
                 }
                     .onSuccess { committed ->
                         mutableState.update {
                             it.copy(
                                 isSavingCatalog = false,
+                                catalogMutationCompletionCount =
+                                    it.catalogMutationCompletionCount + 1L,
                                 catalog = committed.catalog,
-                                pendingEffect = committed.successEffect ?: it.pendingEffect,
+                                pendingEffect = committed.completionEffect ?: it.pendingEffect,
                                 storageProblem = if (committed.didCommitChange) {
                                     null
                                 } else {
@@ -311,6 +358,8 @@ class AppViewModel(
                             mutableState.update {
                                 it.copy(
                                     isSavingCatalog = false,
+                                    catalogMutationCompletionCount =
+                                        it.catalogMutationCompletionCount + 1L,
                                     pendingEffect = AppUiEffect.ShowNotice(
                                         rejected.cause?.message ?: "Invalid project data.",
                                     ),
@@ -320,6 +369,8 @@ class AppViewModel(
                             mutableState.update {
                                 it.copy(
                                     isSavingCatalog = false,
+                                    catalogMutationCompletionCount =
+                                        it.catalogMutationCompletionCount + 1L,
                                     storageProblem = storageProblem(
                                         code = AppProblemCode.CATALOG_SAVE_FAILED,
                                         error = error,
@@ -336,11 +387,12 @@ class AppViewModel(
     private data class CatalogMutation(
         val updatedCatalog: ProjectCatalog,
         val successEffect: AppUiEffect? = null,
+        val noChangeEffect: AppUiEffect? = null,
     )
 
     private data class PersistedCatalogMutation(
         val catalog: ProjectCatalog,
-        val successEffect: AppUiEffect?,
+        val completionEffect: AppUiEffect?,
         val didCommitChange: Boolean,
     )
 

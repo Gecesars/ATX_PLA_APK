@@ -2,8 +2,10 @@ package com.gecesars.atxplan
 
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -19,6 +21,7 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Rule
 import org.junit.Test
@@ -122,6 +125,89 @@ class MainActivityTest {
     }
 
     @Test
+    fun projectRenameRouteDraftAndDirtyGuardSurviveActivityRecreation() {
+        val suffix = System.nanoTime().toString()
+        createSelectedProject("Rename Guard $suffix")
+        openProjectRename()
+        val draftName = "Restored Rename $suffix"
+        composeRule.onNodeWithTag("rename_project_name_field")
+            .performTextReplacement(draftName)
+
+        composeRule.activityRule.scenario.recreate()
+
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            composeRule.onAllNodes(hasTestTag("project_rename_list"))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("rename_project_name_field").assert(hasText(draftName))
+
+        composeRule.onNodeWithContentDescription("Back to Projects").performClick()
+        composeRule.onNodeWithText("Discard project name changes?").assertIsDisplayed()
+        composeRule.onNodeWithText("Keep Editing").performClick()
+        composeRule.onNodeWithTag("rename_project_name_field").assert(hasText(draftName))
+
+        composeRule.onNodeWithText("Studies").performClick()
+        composeRule.onNodeWithText("Discard project name changes?").assertIsDisplayed()
+        composeRule.onNodeWithText("Keep Editing").performClick()
+
+        composeRule.activityRule.scenario.onActivity { activity ->
+            activity.onBackPressedDispatcher.onBackPressed()
+        }
+        composeRule.onNodeWithText("Discard project name changes?").assertIsDisplayed()
+        composeRule.onNodeWithText("Discard Changes").performClick()
+        composeRule.waitForIdle()
+        scrollToRenameProjectButton()
+    }
+
+    @Test
+    fun normalizedProjectNameDoesNotTriggerDirtyGuard() {
+        val projectName = "Whitespace Guard ${System.nanoTime()}"
+        createSelectedProject(projectName)
+        openProjectRename()
+        composeRule.onNodeWithTag("rename_project_name_field")
+            .performTextReplacement("  $projectName  ")
+
+        composeRule.onNodeWithContentDescription("Back to Projects").performClick()
+
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            composeRule.onAllNodes(hasTestTag("project_rename_list"))
+                .fetchSemanticsNodes().isEmpty()
+        }
+        composeRule.onNodeWithTag("projects_list").assertIsDisplayed()
+    }
+
+    @Test
+    fun renamedProjectIsPersistedAndVisibleAfterActivityRecreation() {
+        val suffix = System.nanoTime().toString()
+        createSelectedProject("Rename Save $suffix")
+        openProjectRename()
+        val renamedProject = "Persisted Rename $suffix"
+        composeRule.onNodeWithTag("rename_project_name_field")
+            .performTextReplacement(renamedProject)
+        composeRule.onNodeWithTag("save_project_name_button")
+            .assertHeightIsAtLeast(48.dp)
+            .performClick()
+
+        composeRule.waitUntil(timeoutMillis = 10_000L) {
+            composeRule.onAllNodes(hasTestTag("project_rename_list"))
+                .fetchSemanticsNodes().isEmpty()
+        }
+        composeRule.onNodeWithTag("projects_list")
+            .performScrollToNode(hasText(renamedProject))
+        composeRule.onNodeWithText(renamedProject).assertIsDisplayed()
+
+        composeRule.activityRule.scenario.recreate()
+
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            composeRule.onAllNodes(hasTestTag("projects_list"))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("projects_list")
+            .performScrollToNode(hasText(renamedProject))
+        composeRule.onNodeWithText(renamedProject).assertIsDisplayed()
+    }
+
+    @Test
     fun completeRfPathIsPersistedAndVisibleAfterActivityRecreation() {
         composeRule.onNodeWithText("Projects").performClick()
         composeRule.waitUntil(timeoutMillis = 5_000L) {
@@ -130,7 +216,7 @@ class MainActivityTest {
         }
         composeRule.onNodeWithTag("new_project_button").performClick()
         composeRule.onNodeWithTag("project_name_field").performTextReplacement("Device RF Path")
-        composeRule.onNodeWithTag("create_project_confirm").performClick()
+        composeRule.onNodeWithTag("create_project_confirm").performDirectClick()
         composeRule.waitUntil(timeoutMillis = 5_000L) {
             composeRule.onAllNodes(hasTestTag("create_project_confirm"))
                 .fetchSemanticsNodes().isEmpty()
@@ -172,6 +258,47 @@ class MainActivityTest {
         composeRule.onNodeWithTag("projects_list")
             .performScrollToNode(hasTestTag("add_rf_path_button"))
         composeRule.onNodeWithTag("add_rf_path_button").assertIsDisplayed()
+    }
+
+    private fun createSelectedProject(name: String) {
+        composeRule.onNodeWithText("Projects").performClick()
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            composeRule.onAllNodes(hasTestTag("projects_list"))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("projects_list")
+            .performScrollToNode(hasTestTag("new_project_button"))
+        composeRule.onNodeWithTag("new_project_button").performClick()
+        composeRule.onNodeWithTag("project_name_field").performTextReplacement(name)
+        composeRule.onNodeWithTag("create_project_confirm").performDirectClick()
+        composeRule.waitUntil(timeoutMillis = 10_000L) {
+            composeRule.onAllNodes(hasTestTag("create_project_confirm"))
+                .fetchSemanticsNodes().isEmpty()
+        }
+    }
+
+    private fun openProjectRename() {
+        scrollToRenameProjectButton()
+        composeRule.onNodeWithTag("rename_project_button")
+            .assertHeightIsAtLeast(48.dp)
+            .performDirectClick()
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            composeRule.onAllNodes(hasTestTag("project_rename_list"))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("save_project_name_button").assertHeightIsAtLeast(48.dp)
+    }
+
+    private fun scrollToRenameProjectButton() {
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            runCatching {
+                composeRule.onAllNodes(hasTestTag("projects_list"))
+                    .fetchSemanticsNodes().isNotEmpty()
+            }.getOrDefault(false)
+        }
+        composeRule.onNodeWithTag("projects_list")
+            .performScrollToNode(hasTestTag("rename_project_button"))
+        composeRule.onNodeWithTag("rename_project_button").assertIsDisplayed()
     }
 }
 

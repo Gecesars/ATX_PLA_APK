@@ -37,7 +37,9 @@ sealed interface AtxRoute : NavKey {
                 MapRoute.stableId -> MapRoute
                 StudiesRoute.stableId -> StudiesRoute
                 CatalogRoute.stableId -> CatalogRoute
-                else -> parseRfPathEditorRoute(stableId) ?: UnsupportedRoute(stableId)
+                else -> parseRfPathEditorRoute(stableId)
+                    ?: parseProjectRenameRoute(stableId)
+                    ?: UnsupportedRoute(stableId)
             }
         }
 
@@ -45,6 +47,14 @@ sealed interface AtxRoute : NavKey {
         fun rfPathEditor(projectId: String?): AtxRoute =
             if (projectId != null && projectId.isValidRouteProjectId()) {
                 RfPathEditorRoute(projectId)
+            } else {
+                DashboardRoute
+            }
+
+        /** Creates a nested rename route, or Dashboard when its project ID is not saveable. */
+        fun projectRename(projectId: String?): AtxRoute =
+            if (projectId != null && projectId.isValidRouteProjectId()) {
+                ProjectRenameRoute(projectId)
             } else {
                 DashboardRoute
             }
@@ -91,6 +101,18 @@ data class RfPathEditorRoute(
         get() = if (hasValidProjectId) "$RF_PATH_EDITOR_PREFIX$projectId" else DashboardRoute.stableId
 }
 
+/** Nested project-name editor. The durable catalog remains the source of full project data. */
+@Serializable
+data class ProjectRenameRoute(
+    val projectId: String,
+) : AtxRoute {
+    internal val hasValidProjectId: Boolean
+        get() = projectId.isValidRouteProjectId()
+
+    override val stableId: String
+        get() = if (hasValidProjectId) "$PROJECT_RENAME_PREFIX$projectId" else DashboardRoute.stableId
+}
+
 /** A bounded unknown identifier that the shell renders through its safe fallback branch. */
 class UnsupportedRoute internal constructor(
     rawStableId: String,
@@ -122,6 +144,7 @@ internal fun AtxRoute.supportedOrDashboard(): AtxRoute = when (this) {
     -> this
 
     is RfPathEditorRoute -> if (hasValidProjectId) this else DashboardRoute
+    is ProjectRenameRoute -> if (hasValidProjectId) this else DashboardRoute
     is UnsupportedRoute -> DashboardRoute
 }
 
@@ -160,6 +183,7 @@ private fun AtxRoute.persistedStableId(): String = when (this) {
     -> stableId
 
     is RfPathEditorRoute -> if (hasValidProjectId) stableId else DashboardRoute.stableId
+    is ProjectRenameRoute -> if (hasValidProjectId) stableId else DashboardRoute.stableId
     is UnsupportedRoute -> stableId
 }
 
@@ -167,6 +191,12 @@ private fun parseRfPathEditorRoute(stableId: String): RfPathEditorRoute? {
     if (!stableId.startsWith(RF_PATH_EDITOR_PREFIX)) return null
     val projectId = stableId.removePrefix(RF_PATH_EDITOR_PREFIX)
     return projectId.takeIf(String::isValidRouteProjectId)?.let(::RfPathEditorRoute)
+}
+
+private fun parseProjectRenameRoute(stableId: String): ProjectRenameRoute? {
+    if (!stableId.startsWith(PROJECT_RENAME_PREFIX)) return null
+    val projectId = stableId.removePrefix(PROJECT_RENAME_PREFIX)
+    return projectId.takeIf(String::isValidRouteProjectId)?.let(::ProjectRenameRoute)
 }
 
 private fun String.isValidRouteProjectId(): Boolean =
@@ -177,5 +207,6 @@ private fun String.isValidRouteProjectId(): Boolean =
 
 internal const val MAX_RF_PATH_PROJECT_ID_LENGTH = 128
 internal const val RF_PATH_EDITOR_PREFIX = "rf-path-editor:"
+internal const val PROJECT_RENAME_PREFIX = "project-rename:"
 private const val MAX_UNKNOWN_ROUTE_ID_LENGTH = 160
 private const val MAX_PERSISTED_ROUTE_ID_LENGTH = 160

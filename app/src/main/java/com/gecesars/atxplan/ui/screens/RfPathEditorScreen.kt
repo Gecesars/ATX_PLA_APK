@@ -38,6 +38,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.mapSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -59,11 +60,18 @@ import com.gecesars.atxplan.domain.model.RadioSystem
 import com.gecesars.atxplan.ui.components.ScreenHeader
 import com.gecesars.atxplan.ui.forms.RfPathDraft
 
+private data class PendingRfPathSave(
+    val projectRevision: String,
+    val completionCount: Long,
+)
+
 @Composable
 fun RfPathEditorScreen(
     project: PlannerProject?,
     isLoadingCatalog: Boolean,
+    isCatalogWritable: Boolean,
     isSaving: Boolean,
+    catalogMutationCompletionCount: Long,
     onSave: (AddRfPathCommand) -> Unit,
     onDirtyStateChange: (Boolean) -> Unit,
     onSavePendingChange: (Boolean) -> Unit,
@@ -83,33 +91,29 @@ fun RfPathEditorScreen(
         mutableStateOf(RfPathDraft())
     }
     var formError by rememberSaveable(project.id) { mutableStateOf<String?>(null) }
-    var pendingSaveRevision by rememberSaveable(project.id) { mutableStateOf<String?>(null) }
-    var observedSaveInProgress by rememberSaveable(project.id) { mutableStateOf(false) }
+    var pendingSave by remember(project.id) { mutableStateOf<PendingRfPathSave?>(null) }
     val projectRevision = project.rfPathRevision
     val isDirty = draft != RfPathDraft()
 
     LaunchedEffect(project.id, isDirty) {
         onDirtyStateChange(isDirty)
     }
-    LaunchedEffect(project.id, pendingSaveRevision) {
-        onSavePendingChange(pendingSaveRevision != null)
+    LaunchedEffect(project.id, pendingSave) {
+        onSavePendingChange(pendingSave != null)
     }
-    LaunchedEffect(projectRevision, isSaving, pendingSaveRevision) {
-        val baselineRevision = pendingSaveRevision ?: return@LaunchedEffect
+    LaunchedEffect(projectRevision, catalogMutationCompletionCount, pendingSave) {
+        val pending = pendingSave ?: return@LaunchedEffect
         when {
-            projectRevision != baselineRevision -> {
-                pendingSaveRevision = null
-                observedSaveInProgress = false
+            projectRevision != pending.projectRevision -> {
+                pendingSave = null
                 draft = RfPathDraft()
                 formError = null
                 onDirtyStateChange(false)
                 onSavePendingChange(false)
                 onSaveSucceeded()
             }
-            isSaving -> observedSaveInProgress = true
-            observedSaveInProgress -> {
-                pendingSaveRevision = null
-                observedSaveInProgress = false
+            catalogMutationCompletionCount != pending.completionCount -> {
+                pendingSave = null
                 onSavePendingChange(false)
             }
         }
@@ -418,8 +422,10 @@ fun RfPathEditorScreen(
                     draft.toCommand(project.id)
                         .onSuccess { command ->
                             formError = null
-                            pendingSaveRevision = projectRevision
-                            observedSaveInProgress = false
+                            pendingSave = PendingRfPathSave(
+                                projectRevision = projectRevision,
+                                completionCount = catalogMutationCompletionCount,
+                            )
                             onSavePendingChange(true)
                             onSave(command)
                         }
@@ -427,7 +433,7 @@ fun RfPathEditorScreen(
                             formError = error.message ?: "Check the RF path values and try again."
                         }
                 },
-                enabled = !isSaving && pendingSaveRevision == null,
+                enabled = isCatalogWritable && !isSaving && pendingSave == null,
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 48.dp)
@@ -437,7 +443,7 @@ fun RfPathEditorScreen(
             ) {
                 Icon(Icons.Outlined.Save, contentDescription = null)
                 Text(
-                    if (isSaving || pendingSaveRevision != null) {
+                    if (isSaving || pendingSave != null) {
                         "Saving RF Path..."
                     } else {
                         "Save RF Path Locally"

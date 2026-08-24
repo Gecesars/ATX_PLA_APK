@@ -90,6 +90,7 @@ data class AppUseCases(
     val loadProjectCatalog: LoadProjectCatalogUseCase,
     val updateProjectCatalog: UpdateProjectCatalogUseCase,
     val createProject: CreateProjectUseCase,
+    val renameProject: RenameProjectUseCase,
     val selectProject: SelectProjectUseCase,
     val addRfPath: AddRfPathUseCase,
     val calculateLinkBudget: CalculateLinkBudgetUseCase,
@@ -112,6 +113,7 @@ data class AppUseCases(
             loadProjectCatalog = LoadProjectCatalogUseCase(repository, dispatchers.storage),
             updateProjectCatalog = UpdateProjectCatalogUseCase(repository, dispatchers.storage),
             createProject = CreateProjectUseCase(projectCreator),
+            renameProject = RenameProjectUseCase(clock),
             selectProject = SelectProjectUseCase(),
             addRfPath = AddRfPathUseCase(rfEntityIdGenerator, clock),
             calculateLinkBudget = CalculateLinkBudgetUseCase(
