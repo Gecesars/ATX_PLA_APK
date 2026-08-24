@@ -1,6 +1,6 @@
 # Android Roadmap
 
-> Evidence baseline: August 24, 2026. The repository now contains an adaptive Compose shell, typed and saveable Navigation 3 routes, explicit UDF/application boundaries, a transactional schema-2 JSON repository with v1 migration, a persisted combined RF-path editor, a bounded RF calculator, CI, JVM tests, and Android instrumentation. This roadmap does not treat those foundations as complete desktop or RadioPlanner parity.
+> Evidence baseline: August 24, 2026. The repository now contains an adaptive Compose shell, typed and saveable Navigation 3 routes, explicit UDF/application boundaries, a transactional schema-2 JSON repository with v1 migration, transactional project rename and duplication, a persisted combined RF-path editor, a bounded RF calculator, CI, JVM tests, and Android instrumentation. This roadmap does not treat those foundations as complete desktop or RadioPlanner parity.
 
 ## 1. Delivery strategy
 
@@ -22,19 +22,19 @@ Sequencing principles:
 | Item | Status | Current evidence | Remaining gap |
 |---|---|---|---|
 | Package and compatibility | Delivered | `com.gecesars.atxplan`, `minSdk 23`, `targetSdk 36`, `compileSdk 36.1`, version `0.1.0`. | Formal physical-device matrix and release policy. |
-| Build and lint | Delivered | Debug/test APKs built; latest lint has 0 errors. | Dependency/toolchain update advisories and no signed release. |
+| Build and lint | Delivered | Debug/test APKs built; latest lint has 0 errors and 10 dependency/tooling warnings. | Dependency/toolchain update advisories and no signed release. |
 | CI | Delivered | GitHub Actions runs unit tests, lint, debug APK, and debug test APK builds. | Connected Android test is not in CI. |
 | Compose theme and shell | Delivered | Custom light/dark ATX theme, Material 3, edge-to-edge, compact bottom bar, expanded navigation rail. | Full accessibility, locale enforcement, and device-matrix validation. |
-| Compact phone information density | Delivered baseline | Scalable compact typography and shared components, 12–16 dp feature gutters, responsive metrics/fields/cards/map height, a short-height rail, IME resizing for the project-name editor, and explicit 48 dp minimums on changed controls have manual evidence on one physical Android 16 phone: 1280 × 2772 pixels, density 520, portrait at font scales 1.15/1.30 and landscape at 1.15. | This is not a complete OEM/API/aspect-ratio/theme/font-scale/accessibility matrix; the app does not clamp or override system font scale. |
+| Compact phone information density | Delivered baseline | Scalable compact typography and shared components, 12–16 dp feature gutters, responsive metrics/fields/cards/map height, a short-height rail, IME resizing for the project-name editor, and explicit 48 dp minimums on changed controls have manual evidence on one physical Android 16 phone: 1280 × 2772 pixels, density 520, portrait at font scales 1.15/1.30 and landscape at 1.15. The compact adaptive Duplicate Project dialog was separately validated on an Android 16/API 36 emulator at font scales 1.0/1.30, including short landscape with the IME open. | These bounded physical-device and emulator observations are not a complete OEM/API/aspect-ratio/theme/font-scale/accessibility matrix; the app does not clamp or override system font scale. |
 | Navigation 3 | Foundation | Serializable stable-ID route keys, a saveable typed `NavBackStack`, bounded unknown-route fallback, and the nested RF-path and project-name editors have saved-instance-state restoration tests. | Deep links, deleted-ID recovery UX, adaptive list/detail, and true system process-death/rotation testing across the device matrix remain. |
 | UDF/ViewModel | Foundation | Explicit `AppUiAction`/`AppUiEffect`, structured problem/recovery values, injected use cases/dispatchers, serialized catalog mutations, cancellation-aware calculation, and ViewModel transition tests exist. | Feature-level ViewModels, cross-instance catalog observation, the DI/scoping decision, durable jobs, broader observability, accessibility, and system recovery evidence remain. |
 | Project persistence | Delivered baseline | Schema-2 strict UTF-8 JSON uses `AtomicFile`, `fd.sync`, a 5 MiB limit, explicit v1 migration, and a mutex-protected read-transform-write transaction. Tests cover migration, corruption, future schema, malformed UTF-8, failed writes, and concurrency. | Recovery/export UX, multi-process policy, storage-exhaustion evidence against Android storage, asset ownership, backup, and the long-term JSON-versus-Room decision remain. |
-| Project workflow | Foundation | Load, create, select, rename, and display projects; seed the synthetic demo; and add one linked network/site/sector/receiver through the persisted Add RF Path flow. | Delete/duplicate/archive, independent create/edit/delete for every RF entity, scenarios, imports, and impact-aware linked deletion remain. |
+| Project workflow | Foundation | Load, create, select, rename, duplicate, and display projects; seed the synthetic demo; and add one linked network/site/sector/receiver through the persisted Add RF Path flow. Duplication copies the latest durable source within one repository transaction, assigns a fresh root ID/timestamps, preserves project-scoped nested IDs/references/data/order and study timestamps, leaves the source unchanged, appends the copy, and selects it. | Delete/archive, independent create/edit/delete for every RF entity, scenarios, imports, impact-aware linked deletion, and duplication lineage/provenance remain. |
 | Domain model | Foundation | Validated engineering value types, receiver/CPE, typed coordinates, and explicit receiver/sector network references extend the catalog/network/site/sector/study foundation. | Existing legacy entity primitives still need staged migration; scenarios, datasets, study requests/results, and artifacts are not modeled. |
 | Engineering canvas | Foundation | Offline Canvas plots sites and active azimuths. | Real GIS/map renderer, projection, camera, offline source, editing, attribution. |
 | RF calculation | Delivered | FSPL, EIRP, received power, fade margin, midpoint Fresnel radius, thermal noise, and SNR. | Geodesy, terrain, curvature, LOS, patterns, diffraction, persistence, manifest. |
-| JVM tests | Delivered baseline | Domain values/references, RF formulas, schema migration and storage faults, transactional concurrency, form parsing, ViewModel transitions, and English-only source hygiene have automated coverage. | Property/numerical golden, accessibility, performance, export, and complete system-flow coverage remain. |
-| Instrumented tests | Delivered baseline | The current twenty tests pass on an Android 16/API 36 emulator, covering top-level/nested typed routes, RF-path and project-name draft protection, explicit mutation-completion and transient pending-save recovery, legacy/normalized/competing rename behavior, accessibility behavior, persisted rename, and a create-project -> persist-RF-path -> Activity-recreation flow. The preceding eighteen-test revision passed on the physical Android 16 reference phone. | A fresh physical run of the current suite, true process termination, rotation/device matrix, broader accessibility automation, and CI execution remain. |
+| JVM tests | Delivered baseline | The current 101 tests pass and cover domain values/references, RF formulas, schema migration and storage faults, transactional concurrency and duplication, form parsing, ViewModel transitions, and English-only source hygiene. | Property/numerical golden, accessibility, performance, export, and complete system-flow coverage remain. |
+| Instrumented tests | Delivered baseline | The current 25 tests pass on an Android 16/API 36 emulator, covering top-level/nested typed routes, RF-path and project-name draft protection, explicit mutation-completion and transient pending-save recovery, legacy/normalized/competing rename behavior, accessibility behavior, persisted rename, project-duplication draft/rejection/durable-selection/recreation behavior, and a create-project -> persist-RF-path -> Activity-recreation flow. The preceding 18-test revision passed on the physical Android 16 reference phone. | A fresh physical run of the current suite, true process termination, rotation/device matrix, broader accessibility automation, and CI execution remain. |
 | Product language | Delivered baseline | Production UI/errors/demo/tests and documentation are English; a unit test scans production sources for common Portuguese terms. | The blacklist is partial and must expand with new resource types. |
 | Public release | Blocked | Debug baseline only; backup disabled. | License, signing, SBOM, privacy, shrinker, upgrade testing, release channel. |
 
@@ -50,7 +50,7 @@ Already delivered or founded:
 - typed, saveable Navigation 3 routes including nested RF-path and project-name editors;
 - explicit action/effect ViewModel flow, use cases, injected dispatchers, and structured recovery;
 - schema-2 transactional JSON catalog with explicit v1 migration and defensive tests;
-- project create/select/rename, synthetic demo, and a combined persisted RF-path creation slice;
+- project create/select/rename/duplicate, synthetic demo, and a combined persisted RF-path creation slice;
 - typed engineering values, receiver/CPE, and network references;
 - free-space RF calculator and numerical unit tests.
 
@@ -58,7 +58,7 @@ Still required to close P0:
 
 - continued English-only enforcement and complete accessibility review;
 - true process-death/system-flow and broad device restoration evidence;
-- complete project lifecycle and independent RF-entity create/edit/delete;
+- remaining project lifecycle work (archive/delete and lineage/provenance policy) and independent RF-entity create/edit/delete;
 - durable jobs, recovery/export UX, and the long-term operational-store decision;
 - real offline geographic map;
 - local DEM, terrain profile, geodesy, curvature, LOS, and Fresnel clearance;
@@ -123,12 +123,12 @@ A gate cannot be satisfied by documentation alone. It requires executable artifa
 - API 23 minimum, target 36, compile 36.1;
 - Kotlin/Compose/Material 3 baseline and custom theme;
 - adaptive five-area shell;
-- compact responsive feature information density with bounded physical Android 16 portrait checks at approximately 394 dp and font scales 1.15/1.30 plus a baseline landscape check;
+- compact responsive feature information density with bounded physical Android 16 portrait checks at approximately 394 dp and font scales 1.15/1.30 plus a baseline landscape check, and separate API 36 emulator validation of the compact Duplicate Project dialog at font scales 1.0/1.30 including short landscape with the IME open;
 - Navigation 3 dependency and top-level display;
 - atomic JSON repository and demonstration project;
 - free-space RF calculator;
-- CI workflow, unit tests, lint, debug APK/test APK;
-- twenty Android 16 emulator instrumented navigation, saved-state, mutation-completion, accessibility, draft-protection, persisted rename, and persisted Add RF Path flow tests, with the preceding eighteen-test revision also proven on the physical reference phone;
+- CI workflow, 101 passing JVM tests, lint with 0 errors and 10 dependency/tooling warnings, and debug APK/test APK;
+- 25 Android 16/API 36 emulator instrumented navigation, saved-state, mutation-completion, accessibility, draft-protection, persisted rename, project-duplication, and persisted Add RF Path flow tests, with the preceding 18-test revision also proven on the physical reference phone;
 - English production strings plus `EnglishOnlySourceTest` regression guard;
 - application backup disabled while the data policy is incomplete.
 
@@ -157,7 +157,7 @@ A gate cannot be satisfied by documentation alone. It requires executable artifa
 - immutable `AppUiState` and `StateFlow` with lifecycle-aware collection;
 - injected application use cases, storage/computation dispatchers, repository, clock, ID generator, and calculator boundary;
 - cancellation-aware calculation and serialized durable catalog mutations;
-- ViewModel tests for loading, create/select/rename, save failure, retry, concurrency, invalid mutations, cancellation, and stale calculation results;
+- ViewModel tests for loading, create/select/rename/duplicate, mutation-completion accounting, save failure, retry, concurrency, invalid mutations, cancellation, and stale calculation results;
 - serializable stable-ID `AtxRoute` keys and a saveable typed Navigation 3 back stack;
 - safe unknown/malformed route fallback and nested `RfPathEditorRoute(projectId)`;
 - saved-instance-state instrumentation for top-level, unknown, and nested editor routes;
@@ -195,7 +195,7 @@ A gate cannot be satisfied by documentation alone. It requires executable artifa
 
 ### F2 — Complete project and RF entity lifecycle
 
-**State:** Foundation implemented; the first project-update and combined persisted RF-entity slices are delivered.
+**State:** Foundation implemented; the first project-update, project-duplication, and combined persisted RF-entity slices are delivered.
 
 **Objective:** evolve the current catalog/demo into editable, durable engineering projects.
 
@@ -207,7 +207,9 @@ A gate cannot be satisfied by documentation alone. It requires executable artifa
 - validated engineering value objects for coordinates, frequency, bandwidth, power, gain, loss, distance, height, azimuth, and tilt with primitive JSON representation;
 - receiver/CPE model plus backward-compatible receiver collection and nullable sector network reference;
 - aggregate duplicate/reference validation for receivers and linked sectors;
-- create/select/rename project workflow, including a saveable project-name editor and transactional rename use case, plus a combined Add RF Path editor/use case that atomically adds one network, one site/sector, and one receiver with injected IDs and clock;
+- create/select/rename project workflow, including a saveable project-name editor and transactional rename use case;
+- compact adaptive project-duplication dialog and transactional use case that read the latest durable source, assign a fresh route-safe root project ID and fresh root timestamps, preserve the project-scoped nested graph/IDs/references/data/order, demonstration flag, and study timestamps, leave the source unchanged, append the copy, and select it;
+- combined Add RF Path editor/use case that atomically adds one network, one site/sector, and one receiver with injected IDs and clock;
 - JSON round trips preserve IDs, `Double` precision, explicit units, and network references;
 - synthetic FM demo with one network, three sites, and two study summaries.
 
@@ -216,13 +218,13 @@ A gate cannot be satisfied by documentation alone. It requires executable artifa
 - scenario, dataset reference, study request/result, and artifact models;
 - independent create/edit/delete flows for sites, sectors, receivers, networks, and metadata;
 - staged migration of remaining legacy primitive entity fields to canonical unit types;
-- duplicate, archive, and delete projects;
+- archive and delete projects, plus source-project lineage and duplication-provenance policy;
 - impact-aware linked deletion and richer conflict diagnostics;
 - decision and transition plan for JSON catalog versus Room/SQLite and asset files;
 - recovery/export workflow for preserved unreadable/future catalogs;
 - durable jobs, multi-process policy, Android `AtomicFile` interruption, and storage-exhaustion system evidence.
 
-**Delivered vertical slices:** rename an existing project through one repository transaction while preserving its identity and RF graph and rejecting a stale competing name; open an existing project → enter a network, transmitter site/sector, and receiver → commit one repository transaction → reopen/round-trip with IDs, precision, units, and links preserved.
+**Delivered vertical slices:** rename an existing project through one repository transaction while preserving its identity and RF graph and rejecting a stale competing name; duplicate the latest durable source aggregate through one repository transaction with a fresh root ID/timestamps, unchanged source, preserved project-scoped nested IDs/references/data, and durable selection of the appended copy; open an existing project → enter a network, transmitter site/sector, and receiver → commit one repository transaction → reopen/round-trip with IDs, precision, units, and links preserved. The duplicated project does not yet carry source-project lineage or a duplication-provenance marker.
 
 **Remaining phase demonstrator:** cover project creation and the same persisted entity flow through true process termination/relaunch, then exercise independent edits and linked deletion impact.
 
@@ -445,7 +447,7 @@ A gate cannot be satisfied by documentation alone. It requires executable artifa
 | MOB-009 | Enforce English-only product language | Delivered baseline | P0 | all layers | English production sources/tests plus automated regression scan. |
 | MOB-010 | Harden restorable typed navigation | Foundation | P0 | MOB-004 | Stable-ID save/restore and malformed/nested route tests delivered; deep links, deleted IDs, process termination, and tablet matrix remain. |
 | MOB-011 | Define durable schema evolution | Foundation | P0 | MOB-006 | Schema 2 and non-destructive v1 migration fixture delivered; long-term store/asset/backup/recovery ADR remains. |
-| MOB-012 | Complete RF value types and entity CRUD | Foundation | P0 | MOB-007/011 | Typed values, receiver/references, project rename, and combined Add RF Path round trip delivered; independent edit/delete and the remaining project lifecycle operations remain. |
+| MOB-012 | Complete RF value types and entity CRUD | Foundation | P0 | MOB-007/011 | Typed values, receiver/references, project rename/duplication, and combined Add RF Path round trip delivered; independent edit/delete, archive/delete, and lineage/provenance remain. |
 | MOB-013 | Run geographic map spike | Planned | P0 | license gate | Lifecycle, offline, attribution, and performance report. |
 | MOB-014 | Define offline catalog/package format | Planned | P0 | MOB-013 | Safe fixture install, validation, ownership, and removal. |
 | MOB-015 | Implement DEM adapter and terrain profile | Planned | P0 | MOB-014 | Golden profile with NoData and provenance. |
@@ -457,7 +459,7 @@ A gate cannot be satisfied by documentation alone. It requires executable artifa
 | MOB-021 | Compare Kotlin and native compute | Planned | P2 | MOB-020 | Numerical/performance report and ADR. |
 | MOB-022 | Specify optional compute service | Planned | P2 | proven demand | Contract, privacy, authentication, retention, local fallback. |
 | MOB-023 | Add connected test to release lane | Planned | P0 | device infrastructure | Android 16+ smoke result stored with release evidence. |
-| MOB-024 | Validate compact phone information density | Delivered baseline | P0 | MOB-003 | One physical Android 16 phone has portrait evidence at approximately 394 dp, density 520, and font scales 1.15/1.30 plus a baseline landscape check; the full device/accessibility matrix remains F8 work. |
+| MOB-024 | Validate compact phone information density | Delivered baseline | P0 | MOB-003 | One physical Android 16 phone has portrait evidence at approximately 394 dp, density 520, and font scales 1.15/1.30 plus a baseline landscape check. Separate API 36 emulator evidence covers the compact Duplicate Project dialog at font scales 1.0/1.30, including short landscape with the IME open; the full device/accessibility matrix remains F8 work. |
 
 ## 7. Definition of Ready
 

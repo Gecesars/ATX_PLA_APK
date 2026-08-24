@@ -208,6 +208,68 @@ class MainActivityTest {
     }
 
     @Test
+    fun duplicateProjectDialogDraftSurvivesActivityRecreation() {
+        val suffix = System.nanoTime().toString()
+        createSelectedProject("Duplicate Draft $suffix")
+        openProjectDuplicate()
+        val restoredDraft = "Restored Duplicate $suffix"
+        composeRule.onNodeWithTag("duplicate_project_name_field")
+            .performTextReplacement(restoredDraft)
+
+        composeRule.activityRule.scenario.recreate()
+
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            composeRule.onAllNodes(hasTestTag("duplicate_project_name_field"))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("duplicate_project_name_field")
+            .assert(hasText(restoredDraft))
+        composeRule.onNodeWithTag("duplicate_project_confirm")
+            .assertHeightIsAtLeast(48.dp)
+        composeRule.onNodeWithText("Cancel").performClick()
+        composeRule.onNodeWithTag("duplicate_project_name_field").assertDoesNotExist()
+    }
+
+    @Test
+    fun duplicatedProjectIsSelectedPersistedAndVisibleAfterActivityRecreation() {
+        val suffix = System.nanoTime().toString()
+        val sourceName = "Duplicate Source $suffix"
+        val duplicateName = "Durable Duplicate $suffix"
+        createSelectedProject(sourceName)
+        openProjectDuplicate()
+        composeRule.onNodeWithTag("duplicate_project_name_field")
+            .performTextReplacement(duplicateName)
+        composeRule.onNodeWithTag("duplicate_project_confirm")
+            .assertHeightIsAtLeast(48.dp)
+            .performDirectClick()
+
+        composeRule.waitUntil(timeoutMillis = 10_000L) {
+            composeRule.onAllNodes(hasTestTag("duplicate_project_name_field"))
+                .fetchSemanticsNodes().isEmpty()
+        }
+        composeRule.onNodeWithTag("projects_list")
+            .performScrollToNode(hasTestTag("selected_project_card"))
+        composeRule.onNodeWithTag("selected_project_card")
+            .assert(hasText(duplicateName))
+            .assertIsDisplayed()
+
+        composeRule.activityRule.scenario.recreate()
+
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            composeRule.onAllNodes(hasTestTag("projects_list"))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("projects_list")
+            .performScrollToNode(hasTestTag("selected_project_card"))
+        composeRule.onNodeWithTag("selected_project_card")
+            .assert(hasText(duplicateName))
+            .assertIsDisplayed()
+        composeRule.onNodeWithTag("projects_list")
+            .performScrollToNode(hasText(sourceName))
+        composeRule.onNodeWithText(sourceName).assertIsDisplayed()
+    }
+
+    @Test
     fun completeRfPathIsPersistedAndVisibleAfterActivityRecreation() {
         composeRule.onNodeWithText("Projects").performClick()
         composeRule.waitUntil(timeoutMillis = 5_000L) {
@@ -287,6 +349,23 @@ class MainActivityTest {
                 .fetchSemanticsNodes().isNotEmpty()
         }
         composeRule.onNodeWithTag("save_project_name_button").assertHeightIsAtLeast(48.dp)
+    }
+
+    private fun openProjectDuplicate() {
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            composeRule.onAllNodes(hasTestTag("projects_list"))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("projects_list")
+            .performScrollToNode(hasTestTag("duplicate_project_button"))
+        composeRule.onNodeWithTag("duplicate_project_button")
+            .assertIsDisplayed()
+            .assertHeightIsAtLeast(48.dp)
+            .performDirectClick()
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            composeRule.onAllNodes(hasTestTag("duplicate_project_name_field"))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
     }
 
     private fun scrollToRenameProjectButton() {

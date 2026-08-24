@@ -1,24 +1,35 @@
 package com.gecesars.atxplan.ui.screens
 
+import android.content.res.Configuration
+import android.view.WindowManager
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.CloudOff
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Science
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -32,21 +43,31 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogWindowProvider
+import com.gecesars.atxplan.domain.application.DuplicateProjectCommand
 import com.gecesars.atxplan.domain.model.PlannerProject
 import com.gecesars.atxplan.domain.model.RadioSystem
 import com.gecesars.atxplan.ui.AppUiState
@@ -57,6 +78,8 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+private const val PROJECT_NAME_LIMIT = 80
+
 @Composable
 fun ProjectsScreen(
     uiState: AppUiState,
@@ -64,10 +87,69 @@ fun ProjectsScreen(
     onSelectProject: (String) -> Unit,
     onAddRfPath: (String) -> Unit,
     onRenameProject: (String) -> Unit,
+    onDuplicateProject: (DuplicateProjectCommand) -> Unit,
 ) {
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
     var projectCountBeforeCreate by rememberSaveable { mutableStateOf<Int?>(null) }
     var observedCreateSave by rememberSaveable { mutableStateOf(false) }
+    var duplicateSourceProjectId by rememberSaveable { mutableStateOf<String?>(null) }
+    var duplicateDraftName by rememberSaveable { mutableStateOf("") }
+    var duplicateBaselineProjectIds by rememberSaveable {
+        mutableStateOf<List<String>>(emptyList())
+    }
+    var duplicateBaselineCompletionCount by rememberSaveable { mutableLongStateOf(0L) }
+    var pendingDuplicateCompletionCount by remember { mutableStateOf<Long?>(null) }
+
+    fun dismissDuplicateDialog() {
+        duplicateSourceProjectId = null
+        duplicateDraftName = ""
+        duplicateBaselineProjectIds = emptyList()
+        duplicateBaselineCompletionCount = 0L
+        pendingDuplicateCompletionCount = null
+    }
+
+    val duplicateSourceProject = duplicateSourceProjectId?.let { sourceId ->
+        uiState.catalog.projects.firstOrNull { project -> project.id == sourceId }
+    }
+    val normalizedDuplicateName = duplicateDraftName.trim()
+    val selectedNewDuplicate = uiState.catalog.selectedProjectId?.let { selectedId ->
+        uiState.catalog.projects.firstOrNull { project ->
+            project.id == selectedId &&
+                project.id !in duplicateBaselineProjectIds &&
+                project.name == normalizedDuplicateName
+        }
+    }
+    val durableDuplicateIsObservable = duplicateSourceProjectId != null &&
+        duplicateSourceProjectId in duplicateBaselineProjectIds &&
+        uiState.catalogMutationCompletionCount != duplicateBaselineCompletionCount &&
+        selectedNewDuplicate != null
+
+    LaunchedEffect(
+        durableDuplicateIsObservable,
+        uiState.catalogMutationCompletionCount,
+        pendingDuplicateCompletionCount,
+    ) {
+        if (durableDuplicateIsObservable) {
+            dismissDuplicateDialog()
+        } else {
+            val pendingCompletionCount = pendingDuplicateCompletionCount
+            if (
+                pendingCompletionCount != null &&
+                uiState.catalogMutationCompletionCount != pendingCompletionCount
+            ) {
+                pendingDuplicateCompletionCount = null
+            }
+        }
+    }
+    LaunchedEffect(duplicateSourceProjectId, duplicateSourceProject, uiState.isLoading) {
+        if (
+            duplicateSourceProjectId != null &&
+            duplicateSourceProject == null &&
+            !uiState.isLoading
+        ) {
+            dismissDuplicateDialog()
+        }
+    }
 
     LaunchedEffect(uiState.isSavingCatalog, uiState.catalog.projects.size) {
         val previousCount = projectCountBeforeCreate ?: return@LaunchedEffect
@@ -158,6 +240,18 @@ fun ProjectsScreen(
                         canEdit = uiState.isCatalogWritable && !uiState.isSavingCatalog,
                         onAddRfPath = { onAddRfPath(selected.id) },
                         onRenameProject = { onRenameProject(selected.id) },
+                        onDuplicateProject = {
+                            duplicateSourceProjectId = selected.id
+                            duplicateDraftName = suggestedDuplicateProjectName(
+                                sourceName = selected.name,
+                                existingNames = uiState.catalog.projects.map(PlannerProject::name),
+                            )
+                            duplicateBaselineProjectIds =
+                                uiState.catalog.projects.map(PlannerProject::id)
+                            duplicateBaselineCompletionCount =
+                                uiState.catalogMutationCompletionCount
+                            pendingDuplicateCompletionCount = null
+                        },
                     )
                 }
             }
@@ -173,6 +267,33 @@ fun ProjectsScreen(
             },
         )
     }
+
+    duplicateSourceProject?.let { sourceProject ->
+        DuplicateProjectDialog(
+            sourceProject = sourceProject,
+            draftName = duplicateDraftName,
+            isCatalogWritable = uiState.isCatalogWritable,
+            isSubmitting = pendingDuplicateCompletionCount != null || uiState.isSavingCatalog,
+            onNameChange = { duplicateDraftName = it.take(PROJECT_NAME_LIMIT) },
+            onDismiss = ::dismissDuplicateDialog,
+            onConfirm = {
+                if (
+                    pendingDuplicateCompletionCount == null &&
+                    !uiState.isSavingCatalog &&
+                    uiState.isCatalogWritable &&
+                    normalizedDuplicateName.length in 2..PROJECT_NAME_LIMIT
+                ) {
+                    pendingDuplicateCompletionCount = uiState.catalogMutationCompletionCount
+                    onDuplicateProject(
+                        DuplicateProjectCommand(
+                            sourceProjectId = sourceProject.id,
+                            newName = normalizedDuplicateName,
+                        ),
+                    )
+                }
+            },
+        )
+    }
 }
 
 @Composable
@@ -183,7 +304,10 @@ private fun ProjectCard(
     onClick: () -> Unit,
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = onClick),
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (selected) Modifier.testTag("selected_project_card") else Modifier)
+            .clickable(enabled = enabled, onClick = onClick),
         colors = CardDefaults.cardColors(
             containerColor = if (selected) {
                 MaterialTheme.colorScheme.primaryContainer
@@ -266,6 +390,7 @@ private fun SelectedProjectDetails(
     canEdit: Boolean,
     onAddRfPath: () -> Unit,
     onRenameProject: () -> Unit,
+    onDuplicateProject: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
@@ -321,16 +446,41 @@ private fun SelectedProjectDetails(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                OutlinedButton(
-                    onClick = onRenameProject,
-                    enabled = canEdit,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 48.dp)
-                        .testTag("rename_project_button"),
-                ) {
-                    Icon(Icons.Outlined.Edit, contentDescription = null)
-                    Text("Rename Project")
+                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                    val useActionRow = maxWidth >= 330.dp && LocalDensity.current.fontScale <= 1.2f
+                    if (useActionRow) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            RenameProjectButton(
+                                enabled = canEdit,
+                                onClick = onRenameProject,
+                                modifier = Modifier.weight(1f),
+                            )
+                            DuplicateProjectButton(
+                                enabled = canEdit,
+                                onClick = onDuplicateProject,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    } else {
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            RenameProjectButton(
+                                enabled = canEdit,
+                                onClick = onRenameProject,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            DuplicateProjectButton(
+                                enabled = canEdit,
+                                onClick = onDuplicateProject,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
                 }
                 Button(
                     onClick = onAddRfPath,
@@ -356,6 +506,42 @@ private fun SelectedProjectDetails(
 }
 
 @Composable
+private fun RenameProjectButton(
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier
+            .heightIn(min = 48.dp)
+            .testTag("rename_project_button"),
+    ) {
+        Icon(Icons.Outlined.Edit, contentDescription = null)
+        Text("Rename")
+    }
+}
+
+@Composable
+private fun DuplicateProjectButton(
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier
+            .heightIn(min = 48.dp)
+            .testTag("duplicate_project_button"),
+    ) {
+        Icon(Icons.Outlined.ContentCopy, contentDescription = null)
+        Text("Duplicate")
+    }
+}
+
+@Composable
 private fun EmptyProjectsCard() {
     Card(shape = RoundedCornerShape(16.dp)) {
         Column(
@@ -369,6 +555,209 @@ private fun EmptyProjectsCard() {
                 "Create a project to get started. No data will be sent to the cloud.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+}
+
+@Composable
+@OptIn(ExperimentalLayoutApi::class)
+private fun DuplicateProjectDialog(
+    sourceProject: PlannerProject,
+    draftName: String,
+    isCatalogWritable: Boolean,
+    isSubmitting: Boolean,
+    onNameChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    val cleanName = draftName.trim()
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val isImeVisible = WindowInsets.isImeVisible
+    val configuration = LocalConfiguration.current
+    val useCompactImeLayout = isImeVisible &&
+        configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val validationError = if (cleanName.length !in 2..PROJECT_NAME_LIMIT) {
+        "Use a project name between 2 and 80 characters."
+    } else {
+        null
+    }
+    AlertDialog(
+        onDismissRequest = { if (!isSubmitting) onDismiss() },
+        icon = if (useCompactImeLayout) {
+            null
+        } else {
+            { Icon(Icons.Outlined.ContentCopy, contentDescription = null) }
+        },
+        title = if (useCompactImeLayout) {
+            null
+        } else {
+            {
+                Text(
+                    text = "Duplicate Project",
+                    modifier = Modifier.semantics { heading() },
+                    style = MaterialTheme.typography.titleLarge,
+                )
+            }
+        },
+        text = {
+            DialogImeResizeEffect()
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .imePadding()
+                    .testTag("project_duplicate_dialog_content"),
+                contentPadding = PaddingValues(bottom = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                item(key = "source_project") {
+                    if (!useCompactImeLayout) {
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                text = "Source Project",
+                                modifier = Modifier.semantics { heading() },
+                                style = MaterialTheme.typography.titleSmall,
+                            )
+                            Text(
+                                text = sourceProject.name,
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = "${projectCountLabel(sourceProject.networks.size, "network", "networks")}, " +
+                                    "${projectCountLabel(sourceProject.sites.size, "site", "sites")}, " +
+                                    "${projectCountLabel(sourceProject.receivers.size, "receiver", "receivers")}, and " +
+                                    projectCountLabel(
+                                        sourceProject.studies.size,
+                                        "study summary",
+                                        "study summaries",
+                                    ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+                item(key = "copy_project_name") {
+                    OutlinedTextField(
+                        value = draftName,
+                        onValueChange = onNameChange,
+                        enabled = !isSubmitting,
+                        label = { Text("Copy project name") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(
+                            onDone = { keyboardController?.hide() },
+                        ),
+                        isError = validationError != null,
+                        supportingText = validationError?.let { message ->
+                            {
+                                Text(
+                                    text = message,
+                                    modifier = Modifier.semantics {
+                                        liveRegion = LiveRegionMode.Polite
+                                    },
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("duplicate_project_name_field"),
+                    )
+                }
+                item(key = "copy_behavior") {
+                    if (!useCompactImeLayout) {
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                            ),
+                            shape = RoundedCornerShape(14.dp),
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(10.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.Top,
+                            ) {
+                                Icon(
+                                    Icons.Outlined.Info,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp),
+                                )
+                                Text(
+                                    text = "The latest saved version is copied and selected with a new project " +
+                                        "ID and timestamps; the source remains unchanged. Customer, notes, " +
+                                        "demo status, RF assets, " +
+                                        "project-scoped links, and study summaries remain unchanged.",
+                                    modifier = Modifier.weight(1f),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                )
+                            }
+                        }
+                    }
+                }
+                if (!isCatalogWritable) {
+                    item(key = "catalog_write_error") {
+                        Text(
+                            text = "The local catalog must be writable before this project can be copied.",
+                            modifier = Modifier.semantics {
+                                liveRegion = LiveRegionMode.Polite
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (!useCompactImeLayout) {
+                Button(
+                    onClick = onConfirm,
+                    enabled = isCatalogWritable && validationError == null && !isSubmitting,
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("duplicate_project_confirm"),
+                ) {
+                    Text(
+                        text = if (isSubmitting) "Duplicating..." else "Duplicate",
+                        modifier = if (isSubmitting) {
+                            Modifier.semantics { liveRegion = LiveRegionMode.Polite }
+                        } else {
+                            Modifier
+                        },
+                    )
+                }
+            }
+        },
+        dismissButton = {
+            if (!useCompactImeLayout) {
+                TextButton(
+                    onClick = onDismiss,
+                    enabled = !isSubmitting,
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) {
+                    Text("Cancel")
+                }
+            }
+        },
+    )
+}
+
+@Composable
+@Suppress("DEPRECATION")
+private fun DialogImeResizeEffect() {
+    val view = LocalView.current
+    DisposableEffect(view) {
+        val window = (view.parent as? DialogWindowProvider)?.window
+        val previousSoftInputMode = window?.attributes?.softInputMode
+        window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        onDispose {
+            previousSoftInputMode?.let { mode -> window?.setSoftInputMode(mode) }
         }
     }
 }
@@ -423,6 +812,35 @@ private fun CreateProjectDialog(
             }
         },
     )
+}
+
+internal fun suggestedDuplicateProjectName(
+    sourceName: String,
+    existingNames: Collection<String>,
+): String {
+    val sourceStem = sourceName.trim().ifBlank { "Project" }
+    val occupiedNames = existingNames
+        .mapTo(hashSetOf()) { name -> name.trim().lowercase(Locale.ROOT) }
+
+    repeat(occupiedNames.size + 1) { zeroBasedIndex ->
+        val copyNumber = zeroBasedIndex + 1
+        val suffix = if (copyNumber == 1) " Copy" else " Copy $copyNumber"
+        val maxStemLength = (PROJECT_NAME_LIMIT - suffix.length).coerceAtLeast(1)
+        val boundedStem = sourceStem
+            .take(maxStemLength)
+            .trimEnd()
+            .ifBlank { "Project".take(maxStemLength) }
+        val candidate = "$boundedStem$suffix".take(PROJECT_NAME_LIMIT).trim()
+        if (
+            candidate.length in 2..PROJECT_NAME_LIMIT &&
+            candidate.lowercase(Locale.ROOT) !in occupiedNames
+        ) {
+            return candidate
+        }
+    }
+
+    // There are more candidate suffixes than occupied names, so this is defensive only.
+    return "Project Copy"
 }
 
 private fun formatDate(epochMillis: Long): String =

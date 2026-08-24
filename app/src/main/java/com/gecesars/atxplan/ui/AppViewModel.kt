@@ -9,6 +9,7 @@ import com.gecesars.atxplan.data.project.ProjectRepository
 import com.gecesars.atxplan.data.project.ProjectStorageException
 import com.gecesars.atxplan.domain.application.AppUseCases
 import com.gecesars.atxplan.domain.application.AddRfPathCommand
+import com.gecesars.atxplan.domain.application.DuplicateProjectCommand
 import com.gecesars.atxplan.domain.application.RenameProjectCommand
 import com.gecesars.atxplan.domain.application.RenameProjectStatus
 import com.gecesars.atxplan.domain.model.PlannerProject
@@ -30,6 +31,8 @@ sealed interface AppUiAction {
     data class CreateProject(val name: String, val customer: String) : AppUiAction
 
     data class RenameProject(val command: RenameProjectCommand) : AppUiAction
+
+    data class DuplicateProject(val command: DuplicateProjectCommand) : AppUiAction
 
     data class SelectProject(val projectId: String) : AppUiAction
 
@@ -110,6 +113,7 @@ class AppViewModel(
         when (action) {
             is AppUiAction.CreateProject -> handleCreateProject(action.name, action.customer)
             is AppUiAction.RenameProject -> handleRenameProject(action.command)
+            is AppUiAction.DuplicateProject -> handleDuplicateProject(action.command)
             is AppUiAction.SelectProject -> handleSelectProject(action.projectId)
             is AppUiAction.CalculateLinkBudget -> handleCalculateLinkBudget(action.input)
             is AppUiAction.AddRfPath -> handleAddRfPath(action.command)
@@ -124,6 +128,10 @@ class AppViewModel(
 
     fun renameProject(command: RenameProjectCommand) {
         onAction(AppUiAction.RenameProject(command))
+    }
+
+    fun duplicateProject(command: DuplicateProjectCommand) {
+        onAction(AppUiAction.DuplicateProject(command))
     }
 
     fun selectProject(projectId: String) {
@@ -223,6 +231,19 @@ class AppViewModel(
                     ),
                 )
             }
+        }
+    }
+
+    private fun handleDuplicateProject(command: DuplicateProjectCommand) {
+        persistCatalogMutation { current ->
+            val result = useCases.duplicateProject(current, command)
+            CatalogMutation(
+                updatedCatalog = result.catalog,
+                successEffect = AppUiEffect.ShowNotice(
+                    "Project \"${result.sourceProject.name}\" was duplicated as " +
+                        "\"${result.duplicatedProject.name}\" in local storage.",
+                ),
+            )
         }
     }
 

@@ -113,6 +113,7 @@ fun AtxPlanApp() {
         snackbarHostState = snackbarHostState,
         onCreateProject = viewModel::createProject,
         onRenameProject = viewModel::renameProject,
+        onDuplicateProject = viewModel::duplicateProject,
         onSelectProject = viewModel::selectProject,
         onCalculateLink = viewModel::calculateLinkBudget,
         onSaveRfPath = viewModel::addRfPath,
@@ -127,6 +128,7 @@ private fun AtxPlanShell(
     snackbarHostState: SnackbarHostState,
     onCreateProject: (String, String) -> Unit,
     onRenameProject: (com.gecesars.atxplan.domain.application.RenameProjectCommand) -> Unit,
+    onDuplicateProject: (com.gecesars.atxplan.domain.application.DuplicateProjectCommand) -> Unit,
     onSelectProject: (String) -> Unit,
     onCalculateLink: (com.gecesars.atxplan.domain.rf.LinkBudgetInput) -> Unit,
     onSaveRfPath: (com.gecesars.atxplan.domain.application.AddRfPathCommand) -> Unit,
@@ -276,6 +278,7 @@ private fun AtxPlanShell(
                                         uiState = currentUiState.value,
                                         onCreateProject = onCreateProject,
                                         onSelectProject = onSelectProject,
+                                        onDuplicateProject = onDuplicateProject,
                                         onRenameProject = { projectId ->
                                             val route = AtxRoute.projectRename(projectId)
                                             if (

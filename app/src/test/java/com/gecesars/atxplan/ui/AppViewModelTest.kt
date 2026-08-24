@@ -4,9 +4,11 @@ import com.gecesars.atxplan.data.project.ProjectRepository
 import com.gecesars.atxplan.data.project.ProjectStorageException
 import com.gecesars.atxplan.domain.application.AppCoroutineDispatchers
 import com.gecesars.atxplan.domain.application.AppUseCases
+import com.gecesars.atxplan.domain.application.DuplicateProjectCommand
 import com.gecesars.atxplan.domain.application.EpochMillisClock
 import com.gecesars.atxplan.domain.application.LinkBudgetCalculator
 import com.gecesars.atxplan.domain.application.ProjectCreator
+import com.gecesars.atxplan.domain.application.ProjectDuplicationIdGenerator
 import com.gecesars.atxplan.domain.application.RenameProjectCommand
 import com.gecesars.atxplan.domain.model.PlannerProject
 import com.gecesars.atxplan.domain.model.ProjectCatalog
@@ -39,6 +41,7 @@ class AppViewModelTest {
     val mainDispatcherRule = MainDispatcherRule()
 
     private var projectSequence = 0L
+    private var duplicationSequence = 0L
 
     @Test
     fun `initial load exposes the persisted catalog`() = runTest(mainDispatcherRule.dispatcher) {
@@ -150,6 +153,132 @@ class AppViewModelTest {
 
             assertNull(viewModel.state.value.pendingEffect)
             assertNull(viewModel.state.value.notice)
+        }
+
+    @Test
+    fun `duplicate action persists the latest source before publishing and selects the copy`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val initial = catalogWithProjects("Source Project")
+            val repository = FakeProjectRepository(initial).apply {
+                saveDelayMillis = 50L
+            }
+            val viewModel = createViewModel(repository)
+            advanceUntilIdle()
+
+            viewModel.duplicateProject(
+                DuplicateProjectCommand(
+                    sourceProjectId = initial.selectedProjectId.orEmpty(),
+                    newName = "  Independent Copy  ",
+                ),
+            )
+            runCurrent()
+
+            assertTrue(viewModel.state.value.isSavingCatalog)
+            assertEquals(initial, viewModel.state.value.catalog)
+            assertTrue(repository.savedCatalogs.isEmpty())
+
+            advanceUntilIdle()
+
+            val state = viewModel.state.value
+            val source = state.catalog.projects.first()
+            val duplicate = state.catalog.projects.last()
+            assertFalse(state.isSavingCatalog)
+            assertEquals(2, state.catalog.projects.size)
+            assertEquals(initial.projects.single(), source)
+            assertEquals("duplicate-test-1", duplicate.id)
+            assertEquals("Independent Copy", duplicate.name)
+            assertEquals(10_000L, duplicate.createdAtEpochMillis)
+            assertEquals(10_000L, duplicate.updatedAtEpochMillis)
+            assertEquals(duplicate.id, state.catalog.selectedProjectId)
+            assertEquals(state.catalog, repository.savedCatalogs.single())
+            assertEquals(1L, state.catalogMutationCompletionCount)
+            assertEquals(
+                AppUiEffect.ShowNotice(
+                    "Project \"Source Project\" was duplicated as \"Independent Copy\" " +
+                        "in local storage.",
+                ),
+                state.pendingEffect,
+            )
+        }
+
+    @Test
+    fun `duplicate save failure retains the prior catalog and completes exactly once`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val initial = catalogWithProjects("Durable Source")
+            val repository = FakeProjectRepository(initial).apply {
+                saveError = ProjectStorageException("Storage is read-only.")
+            }
+            val viewModel = createViewModel(repository)
+            advanceUntilIdle()
+
+            viewModel.duplicateProject(
+                DuplicateProjectCommand(
+                    sourceProjectId = initial.selectedProjectId.orEmpty(),
+                    newName = "Unsaved Copy",
+                ),
+            )
+            advanceUntilIdle()
+
+            val state = viewModel.state.value
+            assertEquals(initial, state.catalog)
+            assertEquals(initial.selectedProjectId, state.catalog.selectedProjectId)
+            assertEquals(1L, state.catalogMutationCompletionCount)
+            assertEquals("Storage is read-only.", state.storageError)
+            assertFalse(state.isSavingCatalog)
+            assertTrue(repository.savedCatalogs.isEmpty())
+        }
+
+    @Test
+    fun `stale view model duplicates the latest durable RF graph without changing the source`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val initial = catalogWithProjects("RF Source")
+            val repository = FakeProjectRepository(initial)
+            val staleDuplicateViewModel = createViewModel(repository)
+            val peerRfViewModel = createViewModel(repository)
+            advanceUntilIdle()
+            val sourceId = initial.selectedProjectId.orEmpty()
+
+            peerRfViewModel.addRfPath(RfPathDraft().toCommand(sourceId).getOrThrow())
+            advanceUntilIdle()
+            val durableSourceAfterPeer = repository.catalogToLoad.selectedProject!!
+            assertEquals(1, durableSourceAfterPeer.networks.size)
+
+            staleDuplicateViewModel.duplicateProject(
+                DuplicateProjectCommand(sourceId, "RF Source Copy"),
+            )
+            advanceUntilIdle()
+
+            val durableCatalog = repository.catalogToLoad
+            val source = durableCatalog.projects.first { project -> project.id == sourceId }
+            val duplicate = durableCatalog.selectedProject!!
+            assertEquals(2, durableCatalog.projects.size)
+            assertEquals(durableSourceAfterPeer, source)
+            assertEquals(source.networks, duplicate.networks)
+            assertEquals(source.sites, duplicate.sites)
+            assertEquals(source.receivers, duplicate.receivers)
+            assertEquals(repository.catalogToLoad, staleDuplicateViewModel.state.value.catalog)
+            assertEquals(2, repository.savedCatalogs.size)
+        }
+
+    @Test
+    fun `concurrent project duplicates both survive serialized durable transactions`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val initial = catalogWithProjects("Shared Source")
+            val repository = FakeProjectRepository(initial)
+            val firstViewModel = createViewModel(repository)
+            val secondViewModel = createViewModel(repository)
+            advanceUntilIdle()
+            val sourceId = initial.selectedProjectId.orEmpty()
+
+            firstViewModel.duplicateProject(DuplicateProjectCommand(sourceId, "First Copy"))
+            secondViewModel.duplicateProject(DuplicateProjectCommand(sourceId, "Second Copy"))
+            advanceUntilIdle()
+
+            val durable = repository.catalogToLoad
+            assertEquals(listOf("Shared Source", "First Copy", "Second Copy"), durable.projects.map { it.name })
+            assertEquals(3, durable.projects.map { it.id }.distinct().size)
+            assertEquals("Second Copy", durable.selectedProject?.name)
+            assertEquals(2, repository.savedCatalogs.size)
         }
 
     @Test
@@ -725,6 +854,10 @@ class AppViewModelTest {
                 dispatchers = dispatchers,
                 projectCreator = projectCreator,
                 linkBudgetCalculator = calculator,
+                projectDuplicationIdGenerator = ProjectDuplicationIdGenerator {
+                    duplicationSequence += 1
+                    "duplicate-test-$duplicationSequence"
+                },
                 clock = clock,
             ),
         )

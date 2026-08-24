@@ -91,6 +91,7 @@ data class AppUseCases(
     val updateProjectCatalog: UpdateProjectCatalogUseCase,
     val createProject: CreateProjectUseCase,
     val renameProject: RenameProjectUseCase,
+    val duplicateProject: DuplicateProjectUseCase,
     val selectProject: SelectProjectUseCase,
     val addRfPath: AddRfPathUseCase,
     val calculateLinkBudget: CalculateLinkBudgetUseCase,
@@ -108,12 +109,15 @@ data class AppUseCases(
             rfEntityIdGenerator: RfEntityIdGenerator = RfEntityIdGenerator { kind ->
                 "${kind.idPrefix}-${UUID.randomUUID()}"
             },
+            projectDuplicationIdGenerator: ProjectDuplicationIdGenerator =
+                ProjectDuplicationIdGenerator { "project-${UUID.randomUUID()}" },
             clock: EpochMillisClock = EpochMillisClock { System.currentTimeMillis() },
         ): AppUseCases = AppUseCases(
             loadProjectCatalog = LoadProjectCatalogUseCase(repository, dispatchers.storage),
             updateProjectCatalog = UpdateProjectCatalogUseCase(repository, dispatchers.storage),
             createProject = CreateProjectUseCase(projectCreator),
             renameProject = RenameProjectUseCase(clock),
+            duplicateProject = DuplicateProjectUseCase(projectDuplicationIdGenerator, clock),
             selectProject = SelectProjectUseCase(),
             addRfPath = AddRfPathUseCase(rfEntityIdGenerator, clock),
             calculateLinkBudget = CalculateLinkBudgetUseCase(

@@ -1,6 +1,6 @@
 # Android Architecture
 
-> Architecture baseline and target as of August 24, 2026. The repository contains a working Compose application, typed/saveable Navigation 3 routes, explicit UDF and use-case boundaries, a transactional schema-2 JSON repository with v1 migration, validated RF-domain models, a combined Add RF Path editor, and a bounded RF calculator. Sections labeled Target or Planned describe the next architecture and must not be read as delivered functionality.
+> Architecture baseline and target as of August 24, 2026. The repository contains a working Compose application, typed/saveable Navigation 3 routes, explicit UDF and use-case boundaries, a transactional schema-2 JSON repository with v1 migration, validated RF-domain models, transactional project rename and duplication, a combined Add RF Path editor, and a bounded RF calculator. Sections labeled Target or Planned describe the next architecture and must not be read as delivered functionality.
 
 ## 1. Architecture goals
 
@@ -34,6 +34,7 @@ flowchart TD
     NAV --> STUDIES[Studies]
     NAV --> CATALOG[Data Catalog]
     NAV --> EDITOR[Add RF Path editor]
+    PROJECTS --> DUPLICATE[Duplicate Project dialog]
     VM --> USE[AppUseCases]
     USE --> PORT[ProjectRepository]
     USE --> RF[RfCalculator]
@@ -51,16 +52,17 @@ flowchart TD
 | UI shell | Delivered | Compose Material 3, edge-to-edge, custom light/dark theme. | Full accessibility/device-matrix validation remains. |
 | Adaptive navigation | Delivered | Bottom navigation on compact width; navigation rail at 720 dp or wider; rail labels/header collapse to accessible icons below 520 dp height. | Feature contents are not all adaptive list/detail layouts. |
 | Navigation 3 | Foundation | Serializable stable-ID `AtxRoute` keys, a saveable typed back stack, safe unknown-route fallback, and nested RF-path and project-name editors have saved-instance-state tests. | Deep links, deleted-ID UX, route ownership, and true process-death/rotation/device-matrix flows remain. |
-| State management | Foundation | Immutable state, explicit actions/effects, structured problems/recovery, injected use cases/dispatchers, serialized catalog mutations, cancellation, and ViewModel tests. | One application ViewModel remains; cross-instance catalog observation, DI/scoping, durable jobs, broader observability, accessibility, and system recovery remain. |
+| State management | Foundation | Immutable state, explicit actions/effects, structured problems/recovery, injected use cases/dispatchers, serialized catalog mutations, an explicit mutation-completion counter, cancellation, and ViewModel tests. | One application ViewModel remains; cross-instance catalog observation, DI/scoping, durable jobs, broader observability, accessibility, and system recovery remain. |
 | Repository boundary | Delivered | `ProjectRepository` interface separates ViewModel from file implementation. | Only the project catalog uses a repository. |
 | JSON persistence | Delivered baseline | Strict UTF-8 serialization, schema 2, explicit v1 migration, private `AtomicFile`, `fd.sync`, 5 MiB limit, and mutex-protected read-transform-write transactions have migration/fault/concurrency tests. | Recovery/export, assets/jobs, backup, multi-process policy, storage-exhaustion system evidence, and the long-term store decision remain. |
 | Domain | Foundation | Project/catalog/network/site/sector/receiver/study models, engineering value types, and receiver/sector network-reference validation are implemented. | Legacy primitive entity fields need staged migration; no scenario, dataset, artifact, or full study model exists. |
+| Project workflow | Delivered bounded slices | Create/select/rename/duplicate use cases operate through repository transactions. Duplication copies the latest durable source aggregate, assigns a fresh root project ID/timestamps, preserves project-scoped nested IDs/references/data/order and study timestamps, leaves the source unchanged, appends the copy, and selects it. | Archive/delete and a source-lineage/duplication-provenance policy are not delivered. |
 | RF-path workflow | Delivered bounded slice | A saveable Compose draft calls a validated, deterministic use case and persists one linked network/site/sector/receiver transaction. | It is not complete entity CRUD, a terrain link study, or process-death system proof. |
 | RF engine | Delivered | Pure Kotlin FSPL, EIRP, received power, margin, midpoint Fresnel radius, noise floor, and SNR; results carry explicit in-memory model and implementation provenance. | Synchronous bounded calculation only; no terrain, geodesy, patterns, or persisted execution manifest. |
 | Engineering map | Foundation | Compose Canvas plots normalized site coordinates and active azimuth rays. | It is not a cartographic renderer or GIS engine. |
 | Dataset catalog | Foundation | Static capability screen. | No dataset inventory or file operation exists. |
-| Tests | Delivered baseline | Automated domain, RF, persistence migration/fault/concurrency, use-case, form, ViewModel, source-language, route saved-state, explicit mutation-completion recovery, draft-protection/accessibility semantics, persisted rename, and persisted Add RF Path Activity-flow tests exist; the current 20-test instrumented suite passes on an Android 16/API 36 emulator. The preceding 18-test revision passed on the physical Android 16 reference phone. | A fresh physical run of the current suite, broader accessibility automation, performance, export, true system process-death, and a formal device matrix remain. |
-| Build automation | Delivered baseline | CI runs unit tests, lint, and debug/test APK assembly. | Connected test and signed release are outside current CI. |
+| Tests | Delivered baseline | The current 101 JVM tests cover domain, RF, persistence migration/fault/concurrency, use cases, forms, ViewModel behavior, and source-language rules. The current 25-test instrumented suite covers route saved state, explicit mutation-completion recovery, draft protection/accessibility semantics, persisted rename, project duplication, and the persisted Add RF Path Activity flow on an Android 16/API 36 emulator. The preceding 18-test revision passed on the physical Android 16 reference phone. | A fresh physical run of the current suite, broader accessibility automation, performance, export, true system process-death, and a formal device matrix remain. |
+| Build automation | Delivered baseline | CI runs unit tests, lint, and debug/test APK assembly; current local lint has 0 errors and 10 dependency/tooling warnings. | Connected test and signed release are outside current CI. |
 | Product language | Delivered baseline | Production UI/errors/demo/tests are English and a unit test scans for common Portuguese source terms. | The blacklist is partial and must cover future resource/file types. |
 
 ## 3. Principles
@@ -136,7 +138,9 @@ ATX Plan is an information-dense engineering tool, so compact layout is a functi
 - may constrain noncritical navigation labels and decorative summaries when their full meaning remains available through semantics;
 - validates compact phones and larger windows separately instead of applying one fixed-density layout everywhere.
 
-The current compact pass is measured on a physical Android 16 phone at approximately 394 dp portrait width and `fontScale = 1.15`. Responsive fallbacks were also inspected in portrait at `fontScale = 1.30`, after which the original setting was restored. Baseline landscape checks verified the short-height navigation rail, wide feature layouts, and the resized project-name editor with the IME before rotation was restored. This is evidence for one reference device, not a complete accessibility or device matrix.
+The current compact pass is measured on a physical Android 16 phone at approximately 394 dp portrait width and `fontScale = 1.15`. Responsive fallbacks were also inspected in portrait at `fontScale = 1.30`, after which the original setting was restored. Baseline landscape checks verified the short-height navigation rail, wide feature layouts, and the resized project-name editor with the IME before rotation was restored. This physical evidence remains bounded to one reference device.
+
+The compact adaptive Duplicate Project dialog was separately validated on an Android 16/API 36 emulator at `fontScale = 1.0` and `fontScale = 1.30`, including short landscape with the IME open. Its editable name, validation, and actions remain reachable without clamping or overriding the system font scale. These physical-device and emulator observations are not a complete accessibility or device matrix.
 
 ### Domain/application layer
 
@@ -320,6 +324,7 @@ The current pure Kotlin/serialization domain includes:
 - `Sector` with active flag, azimuth, electrical tilt, height, power, gain, feeder loss, frequency, and a backward-compatible nullable network reference;
 - `Receiver`/CPE with typed coordinate, height, gain, system loss, sensitivity, noise figure, azimuth/tilt, and a required project-local network reference;
 - aggregate duplicate and referential-integrity validation for receivers and linked sectors;
+- a validated `DuplicateProjectCommand`/result/use case that reads the latest durable source inside the transaction, generates a fresh route-safe root project ID and root timestamps, preserves the project-scoped nested graph and references, appends the copy, and selects it without changing the source;
 - a validated `AddRfPathCommand`/result/use case that generates stable IDs and creates one linked network, site/sector, and receiver as one immutable catalog transition;
 - `StudySummary`, study types, and lifecycle statuses;
 - factory-created user projects and a synthetic demonstration project.
@@ -399,7 +404,7 @@ The current screen calculates the first Fresnel radius at the path midpoint. Tes
 
 ### Application use cases
 
-Delivered use cases load and transactionally update the catalog, create/select/rename projects, add the combined RF path, and calculate the bounded link budget. `RenameProjectUseCase` changes the validated name, may advance the update timestamp, preserves project identity and its nested graph, and rejects a command whose expected durable name is stale. `AddRfPathUseCase` accepts typed drafts and injected ID/clock providers; its result carries the committed catalog projection and linked entities.
+Delivered use cases load and transactionally update the catalog, create/select/rename/duplicate projects, add the combined RF path, and calculate the bounded link budget. `RenameProjectUseCase` changes the validated name, may advance the update timestamp, preserves project identity and its nested graph, and rejects a command whose expected durable name is stale. `DuplicateProjectUseCase` intentionally resolves the source from the latest durable catalog inside the repository transaction. It normalizes and validates the requested name, creates a fresh route-safe root ID and fresh root creation/update timestamps, deep-copies the aggregate containers while retaining project-scoped nested IDs, references, data, order, demonstration flag, and study timestamps, leaves the source unchanged, appends the copy, and selects it. It does not yet record source-project lineage or a duplication-provenance marker. `AddRfPathUseCase` accepts typed drafts and injected ID/clock providers; its result carries the committed catalog projection and linked entities.
 
 Remaining target use cases include:
 
@@ -423,7 +428,7 @@ Use cases accept domain commands, define transaction boundaries, return typed pr
 
 ### Current repository
 
-`ProjectRepository` exposes `loadCatalog()` and `updateCatalog(transform)`. The update contract loads the latest durable catalog, applies one pure transform, and atomically writes the replacement while the complete transaction is serialized. `FileProjectRepository` and the Android-independent `ProjectCatalogPersistence`:
+`ProjectRepository` exposes `loadCatalog()` and `updateCatalog(transform)`. The update contract loads the latest durable catalog, applies one pure transform, and atomically writes the replacement while the complete transaction is serialized. Project duplication therefore copies the latest committed source rather than a stale UI snapshot and publishes the selected copy only after the durable transaction succeeds. `FileProjectRepository` and the Android-independent `ProjectCatalogPersistence`:
 
 - store `atx_project_catalog_v1.json` in private app files, retaining the legacy filename so installed schema-1 catalogs are discovered;
 - use strict UTF-8 typed JSON with defaults and unknown-key tolerance;
@@ -749,13 +754,16 @@ Canonical serialization is versioned. Irrelevant timestamps and local paths do n
 
 ### Current evidence
 
+The current automated baseline contains 101 passing JVM tests and 25 passing Android 16/API 36 emulator instrumented tests. Local lint reports 0 errors and 10 dependency/tooling warnings.
+
 - project/domain tests cover schema defaults, validation, engineering-value boundaries, primitive JSON, receiver/sector references, legacy compatibility, and exact round trips;
-- application tests cover deterministic Add RF Path success, invalid commands, generated-ID duplication/collision, atomic failure, clock policy, references, and JSON precision;
+- application tests cover transactional project duplication, complete aggregate preservation, latest-durable-source behavior, fresh/colliding route-safe root IDs, root timestamp policy, invalid commands, source immutability, deterministic Add RF Path success, atomic failure, references, and JSON precision;
 - persistence tests cover explicit v1→v2 migration, failed migration promotion, malformed/invalid/future data, strict UTF-8, size limits, atomic write failure, and concurrent repository instances;
-- ViewModel tests cover load/create/select/rename/Add RF Path transitions, structured failures/retry, mutation ordering/concurrency, invalid mutations, calculation cancellation, and stale-result suppression;
+- ViewModel tests cover load/create/select/rename/duplicate/Add RF Path transitions, structured failures/retry, mutation-completion accounting, mutation ordering/concurrency, latest-durable duplication, invalid mutations, calculation cancellation, and stale-result suppression;
 - RF and form tests cover implemented formulas, invalid physical inputs, unit parsing, defaults, and typed command conversion;
 - the English-only source test scans production Kotlin/XML for common Portuguese terms;
-- the current 20-test instrumented suite passes on an Android 16/API 36 emulator and covers the Dashboard-to-Studies smoke path, saved-instance-state restoration for supported, unknown, malformed, nested RF-path, and nested project-name routes, explicit mutation-completion and transient pending-save recovery, legacy/normalized/competing rename behavior, draft-discard/accessibility behavior, persisted project rename, and create-project -> persist-RF-path -> Activity recreation; the preceding 18-test revision passed on the physical Android 16 reference phone;
+- the current 25-test instrumented suite passes on an Android 16/API 36 emulator and covers the Dashboard-to-Studies smoke path, saved-instance-state restoration for supported, unknown, malformed, nested RF-path, and nested project-name routes, explicit mutation-completion and transient pending-save recovery, legacy/normalized/competing rename behavior, draft-discard/accessibility behavior, persisted project rename, project-duplication draft restoration/rejection recovery/durable selected-copy persistence and Activity recreation, and create-project -> persist-RF-path -> Activity recreation; the preceding 18-test revision passed on the physical Android 16 reference phone;
+- the compact Duplicate Project dialog also has manual API 36 emulator evidence at font scales 1.0/1.30, including short landscape with the IME open;
 - lint/build evidence remains part of the debug baseline, but accessibility automation, performance, broader device/system flows, and release validation remain open.
 
 ### Target matrix
@@ -835,7 +843,7 @@ Until measured targets exist, absolute requirements are:
 2. preserve `MainActivity` as a thin host and move dependency assembly into an approved composition-root/DI policy;
 3. split the application-wide ViewModel into feature contracts and introduce durable job/effect/problem contracts as flows grow;
 4. complete deep-link/deleted-ID handling and prove navigation plus durable selection through true process death, rotation, accessibility, and the device matrix;
-5. continue project lifecycle after rename with duplicate/archive/delete and add independent network/site/sector/receiver edit/delete while staging remaining primitive-field migration;
+5. continue project lifecycle after delivered rename/duplication with archive/delete and a lineage/provenance policy, and add independent network/site/sector/receiver edit/delete while staging remaining primitive-field migration;
 6. decide the long-term operational store, project asset ownership, recovery/export, backup, and multi-process policy beyond schema 2;
 7. add scenario, immutable study request/result, provenance, and artifact models;
 8. add a geographic map behind an adapter while retaining the technical Canvas only as a diagnostic if useful;

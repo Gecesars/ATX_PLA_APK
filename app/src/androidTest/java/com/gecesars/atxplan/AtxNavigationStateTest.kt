@@ -6,6 +6,7 @@ import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -13,10 +14,13 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextReplacement
 import androidx.navigation3.runtime.NavBackStack
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.gecesars.atxplan.domain.model.PlannerProject
+import com.gecesars.atxplan.domain.model.ProjectCatalog
+import com.gecesars.atxplan.ui.AppUiState
 import com.gecesars.atxplan.ui.navigation.AtxRoute
 import com.gecesars.atxplan.ui.navigation.DashboardRoute
 import com.gecesars.atxplan.ui.navigation.PROJECT_RENAME_PREFIX
@@ -30,6 +34,7 @@ import com.gecesars.atxplan.ui.navigation.activeRoute
 import com.gecesars.atxplan.ui.navigation.rememberAtxNavBackStack
 import com.gecesars.atxplan.ui.navigation.replaceTopLevel
 import com.gecesars.atxplan.ui.screens.ProjectRenameScreen
+import com.gecesars.atxplan.ui.screens.ProjectsScreen
 import com.gecesars.atxplan.ui.screens.RfPathEditorScreen
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -301,6 +306,112 @@ class AtxNavigationStateTest {
     }
 
     @Test
+    fun duplicateDialogRestoresItsDraftButNotTransientPendingState() {
+        val restorationTester = StateRestorationTester(composeRule)
+        var duplicateRequests = 0
+        restorationTester.setContent {
+            ProjectsScreen(
+                uiState = duplicateUiState(),
+                onCreateProject = { _, _ -> },
+                onSelectProject = {},
+                onAddRfPath = {},
+                onRenameProject = {},
+                onDuplicateProject = { duplicateRequests += 1 },
+            )
+        }
+        composeRule.onNodeWithTag("projects_list")
+            .performScrollToNode(hasTestTag("duplicate_project_button"))
+        composeRule.onNodeWithTag("duplicate_project_button").performClick()
+        val restoredDraft = "Restored Project Copy"
+        composeRule.onNodeWithTag("duplicate_project_name_field")
+            .performTextReplacement(restoredDraft)
+        composeRule.onNodeWithTag("duplicate_project_confirm").performClick()
+        composeRule.onNodeWithText("Duplicating...").assertIsDisplayed()
+        composeRule.runOnIdle { assertEquals(1, duplicateRequests) }
+
+        restorationTester.emulateSavedInstanceStateRestore()
+
+        composeRule.onNodeWithTag("duplicate_project_name_field")
+            .assert(hasText(restoredDraft))
+        composeRule.onNodeWithTag("duplicate_project_confirm")
+            .assertIsEnabled()
+            .assert(hasText("Duplicate"))
+    }
+
+    @Test
+    fun restoredDuplicateDialogClosesWhenDurableSelectedCopyBecomesObservable() {
+        val restorationTester = StateRestorationTester(composeRule)
+        val uiState = mutableStateOf(duplicateUiState())
+        var requestedName = ""
+        restorationTester.setContent {
+            ProjectsScreen(
+                uiState = uiState.value,
+                onCreateProject = { _, _ -> },
+                onSelectProject = {},
+                onAddRfPath = {},
+                onRenameProject = {},
+                onDuplicateProject = { command -> requestedName = command.newName },
+            )
+        }
+        composeRule.onNodeWithTag("projects_list")
+            .performScrollToNode(hasTestTag("duplicate_project_button"))
+        composeRule.onNodeWithTag("duplicate_project_button").performClick()
+        val durableName = "Durable Project Copy"
+        composeRule.onNodeWithTag("duplicate_project_name_field")
+            .performTextReplacement(durableName)
+        composeRule.onNodeWithTag("duplicate_project_confirm").performClick()
+
+        restorationTester.emulateSavedInstanceStateRestore()
+        composeRule.onNodeWithTag("duplicate_project_name_field").assertIsDisplayed()
+
+        composeRule.runOnIdle {
+            assertEquals(durableName, requestedName)
+            val source = restorationProject
+            val duplicate = source.copy(id = "project-restored-copy", name = durableName)
+            uiState.value = duplicateUiState(
+                projects = listOf(source, duplicate),
+                selectedProjectId = duplicate.id,
+                completionCount = 8L,
+            )
+        }
+
+        composeRule.onNodeWithTag("duplicate_project_name_field").assertDoesNotExist()
+        composeRule.onNodeWithTag("projects_list").assertIsDisplayed()
+    }
+
+    @Test
+    fun rejectedDuplicateAttemptRetainsDraftAndClearsPendingState() {
+        val uiState = mutableStateOf(duplicateUiState())
+        composeRule.setContent {
+            ProjectsScreen(
+                uiState = uiState.value,
+                onCreateProject = { _, _ -> },
+                onSelectProject = {},
+                onAddRfPath = {},
+                onRenameProject = {},
+                onDuplicateProject = {},
+            )
+        }
+        composeRule.onNodeWithTag("projects_list")
+            .performScrollToNode(hasTestTag("duplicate_project_button"))
+        composeRule.onNodeWithTag("duplicate_project_button").performClick()
+        val retainedDraft = "Retry This Copy"
+        composeRule.onNodeWithTag("duplicate_project_name_field")
+            .performTextReplacement(retainedDraft)
+        composeRule.onNodeWithTag("duplicate_project_confirm").performClick()
+
+        composeRule.runOnIdle {
+            uiState.value = duplicateUiState(completionCount = 8L)
+        }
+
+        composeRule.onNodeWithTag("duplicate_project_name_field")
+            .assert(hasText(retainedDraft))
+        composeRule.onNodeWithTag("duplicate_project_confirm")
+            .assertIsEnabled()
+            .assert(hasText("Duplicate"))
+    }
+
+    @Test
     fun rfDraftRestoresButUnobservedSavePendingDoesNot() {
         val restorationTester = StateRestorationTester(composeRule)
         var saveRequests = 0
@@ -342,5 +453,19 @@ class AtxNavigationStateTest {
         name = "Restoration Project",
         createdAtEpochMillis = 1L,
         updatedAtEpochMillis = 1L,
+    )
+
+    private fun duplicateUiState(
+        projects: List<PlannerProject> = listOf(restorationProject),
+        selectedProjectId: String = restorationProject.id,
+        completionCount: Long = 7L,
+    ) = AppUiState(
+        isLoading = false,
+        isCatalogWritable = true,
+        catalogMutationCompletionCount = completionCount,
+        catalog = ProjectCatalog(
+            selectedProjectId = selectedProjectId,
+            projects = projects,
+        ),
     )
 }
