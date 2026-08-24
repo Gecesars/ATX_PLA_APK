@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "selectedProjectId": "legacy-project",
+  "projects": [
+    {
+      "id": "legacy-project",
+      "name": "Legacy Mountain Link",
+      "customer": "Legacy Carrier",
+      "notes": "Schema 1 fixture",
+      "createdAtEpochMillis": 1000,
+      "updatedAtEpochMillis": 2000,
+      "isDemonstration": false,
+      "networks": [
+        {
+          "id": "legacy-network",
+          "name": "Legacy UHF Network",
+          "system": "LAND_MOBILE",
+          "downlinkFrequencyMHz": 450.25,
+          "bandwidthMHz": 0.0125
+        }
+      ],
+      "sites": [
+        {
+          "id": "legacy-site",
+          "name": "Legacy Summit",
+          "location": {
+            "latitude": -23.55052,
+            "longitude": -46.63331
+          },
+          "groundElevationM": 760.5,
+          "notes": "Surveyed elevation",
+          "sectors": [
+            {
+              "id": "legacy-sector",
+              "name": "Legacy TX",
+              "active": true,
+              "azimuthDegrees": 315.0,
+              "electricalTiltDegrees": -2.0,
+              "antennaHeightM": 42.0,
+              "transmitPowerDbm": 44.0,
+              "antennaGainDbi": 11.5,
+              "feederLossDb": 1.75,
+              "frequencyMHz": 450.25
+            }
+          ]
+        }
+      ],
+      "studies": [
+        {
+          "id": "legacy-study",
+          "name": "Legacy Point-to-Point Study",
+          "type": "POINT_TO_POINT",
+          "status": "READY",
+          "updatedAtEpochMillis": 2000
+        }
+      ]
+    }
+  ]
+}

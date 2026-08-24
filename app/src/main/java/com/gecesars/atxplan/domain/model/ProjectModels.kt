@@ -3,7 +3,7 @@ package com.gecesars.atxplan.domain.model
 import kotlinx.serialization.Serializable
 import java.util.UUID
 
-const val PROJECT_CATALOG_SCHEMA_VERSION = 1
+const val PROJECT_CATALOG_SCHEMA_VERSION = 2
 
 @Serializable
 data class ProjectCatalog(
@@ -34,6 +34,7 @@ data class PlannerProject(
     val networks: List<RfNetwork> = emptyList(),
     val sites: List<RadioSite> = emptyList(),
     val studies: List<StudySummary> = emptyList(),
+    val receivers: List<Receiver> = emptyList(),
 ) {
     init {
         require(id.isNotBlank()) { "The project requires an ID." }
@@ -43,6 +44,35 @@ data class PlannerProject(
         }
         require(sites.map(RadioSite::id).distinct().size == sites.size) {
             "The project contains duplicate sites."
+        }
+        val networkIds = networks.map(RfNetwork::id).toSet()
+        val sectorsWithMissingNetworks = sites.flatMap { site ->
+            site.sectors
+                .filter { sector ->
+                    sector.networkId != null && sector.networkId !in networkIds
+                }
+                .map { sector -> "${site.id}/${sector.id}" }
+        }.sorted()
+        require(sectorsWithMissingNetworks.isEmpty()) {
+            "Sectors reference networks outside this project: " +
+                "${sectorsWithMissingNetworks.joinToString()}."
+        }
+        val duplicateReceiverIds = receivers
+            .groupingBy(Receiver::id)
+            .eachCount()
+            .filterValues { count -> count > 1 }
+            .keys
+            .sorted()
+        require(duplicateReceiverIds.isEmpty()) {
+            "The project contains duplicate receiver IDs: ${duplicateReceiverIds.joinToString()}."
+        }
+        val receiversWithMissingNetworks = receivers
+            .filterNot { receiver -> receiver.networkId in networkIds }
+            .map(Receiver::id)
+            .sorted()
+        require(receiversWithMissingNetworks.isEmpty()) {
+            "Receivers reference networks outside this project: " +
+                "${receiversWithMissingNetworks.joinToString()}."
         }
     }
 }
@@ -109,6 +139,34 @@ data class GeoPoint(
     }
 }
 
+/**
+ * A receive endpoint or customer-premises equipment profile.
+ *
+ * Unit-bearing value objects keep RF assumptions explicit while retaining
+ * primitive numeric values in serialized JSON.
+ */
+@Serializable
+data class Receiver(
+    val id: String,
+    val name: String,
+    val networkId: String,
+    val location: GeoCoordinate,
+    val antennaHeightM: HeightM,
+    val antennaGainDbi: GainDbi = GainDbi(0.0),
+    val systemLossDb: LossDb = LossDb(0.0),
+    val sensitivityDbm: PowerDbm,
+    val noiseFigureDb: LossDb = LossDb(0.0),
+    val azimuthDegrees: AzimuthDegrees = AzimuthDegrees(0.0),
+    val electricalTiltDegrees: TiltDegrees = TiltDegrees(0.0),
+    val notes: String = "",
+) {
+    init {
+        require(id.isNotBlank()) { "The receiver requires an ID." }
+        require(name.isNotBlank()) { "The receiver requires a name." }
+        require(networkId.isNotBlank()) { "The receiver requires a network reference." }
+    }
+}
+
 @Serializable
 data class Sector(
     val id: String,
@@ -121,6 +179,7 @@ data class Sector(
     val antennaGainDbi: Double,
     val feederLossDb: Double,
     val frequencyMHz: Double,
+    val networkId: String? = null,
 ) {
     init {
         require(id.isNotBlank() && name.isNotBlank()) { "Invalid sector." }
@@ -141,6 +200,9 @@ data class Sector(
         }
         require(frequencyMHz > 0.0 && frequencyMHz.isFinite()) {
             "The frequency must be positive."
+        }
+        require(networkId == null || networkId.isNotBlank()) {
+            "A sector network reference cannot be blank."
         }
     }
 }

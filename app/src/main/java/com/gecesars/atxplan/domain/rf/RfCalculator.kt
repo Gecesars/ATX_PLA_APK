@@ -17,6 +17,32 @@ data class LinkBudgetInput(
     val receiverNoiseFigureDb: Double,
 )
 
+enum class LinkBudgetExecutionMode {
+    LOCAL,
+    REMOTE,
+}
+
+data class LinkBudgetProvenance(
+    val modelId: String,
+    val modelLabel: String,
+    val implementationId: String,
+    val implementationLabel: String,
+    val executionMode: LinkBudgetExecutionMode,
+    val dataProvenance: String,
+    val methodology: String,
+    val limitations: String,
+) {
+    init {
+        require(modelId.isNotBlank()) { "The calculation model requires an ID." }
+        require(modelLabel.isNotBlank()) { "The calculation model requires a label." }
+        require(implementationId.isNotBlank()) { "The calculation implementation requires an ID." }
+        require(implementationLabel.isNotBlank()) { "The calculation implementation requires a label." }
+        require(dataProvenance.isNotBlank()) { "Calculation data provenance must be explicit." }
+        require(methodology.isNotBlank()) { "The calculation methodology must be explicit." }
+        require(limitations.isNotBlank()) { "The calculation limitations must be explicit." }
+    }
+}
+
 data class LinkBudgetResult(
     val freeSpacePathLossDb: Double,
     val eirpDbm: Double,
@@ -25,12 +51,28 @@ data class LinkBudgetResult(
     val firstFresnelMidpointRadiusM: Double,
     val noiseFloorDbm: Double,
     val signalToNoiseDb: Double,
+    val provenance: LinkBudgetProvenance,
 )
 
 object RfCalculator {
     private const val SPEED_OF_LIGHT_M_PER_S = 299_792_458.0
     private const val FSPL_KM_MHZ_CONSTANT_DB = 32.447783
     private const val THERMAL_NOISE_DENSITY_DBM_HZ = -174.0
+
+    val PROVENANCE = LinkBudgetProvenance(
+        modelId = "itu-r-p525-fspl",
+        modelLabel = "P.525/FSPL",
+        implementationId = "atx-plan-kotlin-fspl-v1",
+        implementationLabel = "ATX Plan Kotlin RF engine v1",
+        executionMode = LinkBudgetExecutionMode.LOCAL,
+        dataProvenance = "No external datasets",
+        methodology =
+            "FSPL = 32.447783 + 20·log₁₀(f MHz) + 20·log₁₀(d km). " +
+                "The displayed radius is the first Fresnel zone at the path midpoint.",
+        limitations =
+            "This baseline does not include terrain, Earth curvature, clutter, antenna patterns, " +
+                "or variability. These terms are never assumed silently.",
+    )
 
     fun linkBudget(input: LinkBudgetInput): LinkBudgetResult {
         validate(input)
@@ -54,6 +96,7 @@ object RfCalculator {
             ),
             noiseFloorDbm = noiseFloorDbm,
             signalToNoiseDb = receivedPowerDbm - noiseFloorDbm,
+            provenance = PROVENANCE,
         )
     }
 

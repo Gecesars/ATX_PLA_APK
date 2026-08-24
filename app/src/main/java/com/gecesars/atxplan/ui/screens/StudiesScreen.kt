@@ -1,6 +1,7 @@
 package com.gecesars.atxplan.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.FlowRow
@@ -32,12 +33,18 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.gecesars.atxplan.domain.model.PlannerProject
+import com.gecesars.atxplan.domain.rf.LinkBudgetExecutionMode
 import com.gecesars.atxplan.domain.rf.LinkBudgetInput
+import com.gecesars.atxplan.domain.rf.LinkBudgetProvenance
 import com.gecesars.atxplan.domain.rf.LinkBudgetResult
 import com.gecesars.atxplan.ui.components.ScreenHeader
 import com.gecesars.atxplan.ui.components.StatusPill
@@ -49,8 +56,10 @@ import java.util.Locale
 @Composable
 fun StudiesScreen(
     project: PlannerProject?,
+    resultInput: LinkBudgetInput?,
     result: LinkBudgetResult?,
     calculatorError: String?,
+    isCalculating: Boolean,
     onCalculate: (LinkBudgetInput) -> Unit,
 ) {
     var frequency by rememberSaveable { mutableStateOf("900") }
@@ -65,6 +74,21 @@ fun StudiesScreen(
     var bandwidth by rememberSaveable { mutableStateOf("10") }
     var noiseFigure by rememberSaveable { mutableStateOf("6") }
     var formError by rememberSaveable { mutableStateOf<String?>(null) }
+    val currentInput = linkBudgetInputOrNull(
+        frequency = frequency,
+        distance = distance,
+        txPower = txPower,
+        txGain = txGain,
+        txLoss = txLoss,
+        rxGain = rxGain,
+        rxLoss = rxLoss,
+        additionalLoss = additionalLoss,
+        sensitivity = sensitivity,
+        bandwidth = bandwidth,
+        noiseFigure = noiseFigure,
+    )
+    val resultMatchesCurrentInput = result != null && resultInput == currentInput
+    val currentProvenance = result?.takeIf { resultMatchesCurrentInput }?.provenance
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
@@ -74,7 +98,9 @@ fun StudiesScreen(
         item {
             ScreenHeader(
                 title = "Link Budget",
-                subtitle = "Local P.525/FSPL baseline with explicit terms and verifiable units.",
+                subtitle = currentProvenance?.let { provenance ->
+                    "${provenance.modelLabel} result with explicit terms and verifiable units."
+                } ?: "Calculation provenance is recorded with every completed result.",
             )
         }
         item {
@@ -82,9 +108,20 @@ fun StudiesScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                StatusPill("Local Calculation", StatusTone.POSITIVE)
-                StatusPill("No Terrain Data", StatusTone.WARNING)
-                StatusPill("Pure Kotlin", StatusTone.INFO)
+                if (currentProvenance == null) {
+                    StatusPill("Awaiting Calculation", StatusTone.INFO)
+                } else {
+                    StatusPill(currentProvenance.modelLabel, StatusTone.INFO)
+                    StatusPill(
+                        executionModeLabel(currentProvenance.executionMode),
+                        if (currentProvenance.executionMode == LinkBudgetExecutionMode.LOCAL) {
+                            StatusTone.POSITIVE
+                        } else {
+                            StatusTone.WARNING
+                        },
+                    )
+                    StatusPill(currentProvenance.implementationLabel, StatusTone.INFO)
+                }
             }
         }
         project?.let {
@@ -139,83 +176,94 @@ fun StudiesScreen(
         if (effectiveError != null) {
             item { ErrorCard(effectiveError) }
         }
+        if (result != null && !resultMatchesCurrentInput) {
+            item { StaleResultCard() }
+        }
+        if (isCalculating) {
+            item {
+                Text(
+                    text = "Calculating the current link budget.",
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
         item {
             Button(
                 onClick = {
-                    val values = listOf(
-                        frequency,
-                        distance,
-                        txPower,
-                        txGain,
-                        txLoss,
-                        rxGain,
-                        rxLoss,
-                        additionalLoss,
-                        sensitivity,
-                        bandwidth,
-                        noiseFigure,
-                    ).map(::parseDecimal)
-                    if (values.any { it == null }) {
+                    if (currentInput == null) {
                         formError = "Check the fields and enter decimal numbers only."
                     } else {
                         formError = null
-                        onCalculate(
-                            LinkBudgetInput(
-                                frequencyMHz = values[0]!!,
-                                distanceKm = values[1]!!,
-                                transmitPowerDbm = values[2]!!,
-                                transmitAntennaGainDbi = values[3]!!,
-                                transmitLossDb = values[4]!!,
-                                receiveAntennaGainDbi = values[5]!!,
-                                receiveLossDb = values[6]!!,
-                                additionalPathLossDb = values[7]!!,
-                                receiverSensitivityDbm = values[8]!!,
-                                bandwidthMHz = values[9]!!,
-                                receiverNoiseFigureDb = values[10]!!,
-                            ),
-                        )
+                        onCalculate(currentInput)
                     }
                 },
+                enabled = !isCalculating,
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
                 contentPadding = PaddingValues(vertical = 15.dp),
             ) {
                 Icon(Icons.Outlined.Calculate, contentDescription = null)
                 Spacer(Modifier.padding(horizontal = 4.dp))
-                Text("Calculate Link Budget")
+                Text(if (isCalculating) "Calculating..." else "Calculate Link Budget")
             }
         }
-        result?.let { linkResult ->
+        result?.takeIf { resultMatchesCurrentInput }?.let { linkResult ->
             item { ResultSection(linkResult) }
         }
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                shape = RoundedCornerShape(18.dp),
-            ) {
-                Column(
-                    modifier = Modifier.fillMaxWidth().padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Outlined.Functions, contentDescription = null)
-                        Spacer(Modifier.padding(horizontal = 5.dp))
-                        Text("Baseline Scope", fontWeight = FontWeight.SemiBold)
-                    }
-                    Text(
-                        "FSPL = 32.447783 + 20·log₁₀(f MHz) + 20·log₁₀(d km). The displayed radius is the first Fresnel zone at the path midpoint.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        "This baseline does not yet include terrain, Earth curvature, clutter, antenna patterns, or variability. These terms are never assumed silently.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+        item { ProvenanceCard(currentProvenance) }
+    }
+}
+
+@Composable
+private fun ProvenanceCard(provenance: LinkBudgetProvenance?) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape = RoundedCornerShape(18.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.Functions, contentDescription = null)
+                Spacer(Modifier.padding(horizontal = 5.dp))
+                Text(
+                    text = provenance?.let { "${it.modelLabel} Scope" } ?: "Calculation Provenance",
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            if (provenance == null) {
+                Text(
+                    "Run a calculation to record its model, implementation, data sources, " +
+                        "methodology, and limitations.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                ProvenanceText("Model ID: ${provenance.modelId}")
+                ProvenanceText(provenance.methodology)
+                ProvenanceText(provenance.limitations)
+                ProvenanceText("Implementation: ${provenance.implementationLabel}")
+                ProvenanceText("Implementation ID: ${provenance.implementationId}")
+                ProvenanceText("Data provenance: ${provenance.dataProvenance}")
             }
         }
     }
+}
+
+@Composable
+private fun ProvenanceText(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+private fun executionModeLabel(mode: LinkBudgetExecutionMode): String = when (mode) {
+    LinkBudgetExecutionMode.LOCAL -> "Local Calculation"
+    LinkBudgetExecutionMode.REMOTE -> "Remote Calculation"
 }
 
 @Composable
@@ -233,9 +281,22 @@ private fun ParameterSection(title: String, content: @Composable ColumnScope.() 
 
 @Composable
 private fun TwoFields(first: @Composable () -> Unit, second: @Composable () -> Unit) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        Column(modifier = Modifier.weight(1f)) { first() }
-        Column(modifier = Modifier.weight(1f)) { second() }
+    val largeText = LocalDensity.current.fontScale >= 1.3f
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        if (largeText || maxWidth < 420.dp) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                first()
+                second()
+            }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Column(modifier = Modifier.weight(1f)) { first() }
+                Column(modifier = Modifier.weight(1f)) { second() }
+            }
+        }
     }
 }
 
@@ -268,7 +329,10 @@ private fun NumericField(
 
 @Composable
 private fun ResultSection(result: LinkBudgetResult) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(
+        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
         Text("Results", style = MaterialTheme.typography.titleLarge)
         ResultMetric("Free-space path loss", result.freeSpacePathLossDb, "dB")
         ResultMetric("EIRP", result.eirpDbm, "dBm")
@@ -324,7 +388,10 @@ private fun ErrorCard(message: String) {
         shape = RoundedCornerShape(16.dp),
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(14.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .semantics { liveRegion = LiveRegionMode.Polite }
+                .padding(14.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
@@ -332,6 +399,62 @@ private fun ErrorCard(message: String) {
             Text(message, modifier = Modifier.weight(1f))
         }
     }
+}
+
+@Composable
+private fun StaleResultCard() {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Text(
+            text = "Inputs changed. The previous result is hidden until you calculate again.",
+            modifier = Modifier.fillMaxWidth().padding(14.dp),
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+        )
+    }
+}
+
+private fun linkBudgetInputOrNull(
+    frequency: String,
+    distance: String,
+    txPower: String,
+    txGain: String,
+    txLoss: String,
+    rxGain: String,
+    rxLoss: String,
+    additionalLoss: String,
+    sensitivity: String,
+    bandwidth: String,
+    noiseFigure: String,
+): LinkBudgetInput? {
+    val values = listOf(
+        frequency,
+        distance,
+        txPower,
+        txGain,
+        txLoss,
+        rxGain,
+        rxLoss,
+        additionalLoss,
+        sensitivity,
+        bandwidth,
+        noiseFigure,
+    ).map(::parseDecimal)
+    if (values.any { it == null }) return null
+    return LinkBudgetInput(
+        frequencyMHz = values[0]!!,
+        distanceKm = values[1]!!,
+        transmitPowerDbm = values[2]!!,
+        transmitAntennaGainDbi = values[3]!!,
+        transmitLossDb = values[4]!!,
+        receiveAntennaGainDbi = values[5]!!,
+        receiveLossDb = values[6]!!,
+        additionalPathLossDb = values[7]!!,
+        receiverSensitivityDbm = values[8]!!,
+        bandwidthMHz = values[9]!!,
+        receiverNoiseFigureDb = values[10]!!,
+    )
 }
 
 private fun parseDecimal(value: String): Double? = value.trim().replace(',', '.').toDoubleOrNull()

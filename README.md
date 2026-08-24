@@ -9,13 +9,13 @@ The product, source-facing messages, and project documentation use English as th
 The foundation release delivers:
 
 - a responsive Jetpack Compose and Material 3 shell for phones and tablets;
-- Navigation 3 with five areas: dashboard, projects, map, studies, and data;
-- a local, versioned, size-limited project catalog saved with atomic writes;
-- project creation and selection;
+- Navigation 3 with five areas plus a typed, saveable nested RF-path editor route;
+- a local schema-2, strict UTF-8, size-limited project catalog with explicit v1 migration and transactional atomic mutation;
+- project creation/selection and a combined Add RF Path flow that persists one linked network, transmitter site/sector, and receiver;
 - a synthetic demonstration project with networks, sites, sectors, and study summaries;
 - an offline engineering canvas showing site positions and active azimuths;
-- a local link budget with FSPL/P.525, EIRP, received power, margin, noise floor, SNR, and first Fresnel-zone calculations;
-- a UI-independent Kotlin domain model with numerical tests;
+- a local link budget with FSPL/P.525, EIRP, received power, margin, noise floor, SNR, first Fresnel-zone calculations, and explicit in-memory result provenance;
+- a UI-independent Kotlin domain/application model with validated engineering values, receiver/network references, deterministic use cases, and automated tests;
 - a custom light/dark theme, API 23 minimum, and the `com.gecesars.atxplan` application ID;
 - a GitHub Actions pipeline for build, tests, and lint.
 
@@ -74,9 +74,12 @@ Instrumented tests require an emulator or connected device:
 ```text
 app/src/main/java/com/gecesars/atxplan/
 |-- data/project/       # storage and concrete repository
-|-- domain/model/       # projects, networks, sites, sectors, and studies
+|-- domain/application/ # injected use cases and transactional commands
+|-- domain/model/       # projects, RF entities, typed units, and studies
 |-- domain/rf/          # pure Kotlin calculations
 |-- ui/components/      # shared components
+|-- ui/forms/           # saveable RF-path draft and parsing boundary
+|-- ui/navigation/      # typed stable-ID Navigation 3 routes
 |-- ui/screens/         # Compose flows
 |-- ui/theme/           # design system
 |-- ui/AppViewModel.kt  # UDF state and coordination

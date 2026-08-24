@@ -8,14 +8,17 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Calculate
 import androidx.compose.material.icons.outlined.Dashboard
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Map
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -25,12 +28,15 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -42,26 +48,38 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.ui.NavDisplay
 import com.gecesars.atxplan.ui.components.StorageErrorBanner
+import com.gecesars.atxplan.ui.navigation.AtxRoute
+import com.gecesars.atxplan.ui.navigation.CatalogRoute
+import com.gecesars.atxplan.ui.navigation.DashboardRoute
+import com.gecesars.atxplan.ui.navigation.MapRoute
+import com.gecesars.atxplan.ui.navigation.ProjectsRoute
+import com.gecesars.atxplan.ui.navigation.RfPathEditorRoute
+import com.gecesars.atxplan.ui.navigation.StudiesRoute
+import com.gecesars.atxplan.ui.navigation.UnsupportedRoute
+import com.gecesars.atxplan.ui.navigation.activeRoute
+import com.gecesars.atxplan.ui.navigation.rememberAtxNavBackStack
+import com.gecesars.atxplan.ui.navigation.replaceTopLevel
 import com.gecesars.atxplan.ui.screens.CatalogScreen
 import com.gecesars.atxplan.ui.screens.DashboardScreen
 import com.gecesars.atxplan.ui.screens.EngineeringMapScreen
 import com.gecesars.atxplan.ui.screens.ProjectsScreen
+import com.gecesars.atxplan.ui.screens.RfPathEditorScreen
 import com.gecesars.atxplan.ui.screens.StudiesScreen
 import com.gecesars.atxplan.ui.theme.AtxNavy
 import com.gecesars.atxplan.ui.theme.AtxTeal
 
-private data object DashboardRoute
-private data object ProjectsRoute
-private data object MapRoute
-private data object StudiesRoute
-private data object CatalogRoute
-
 private data class TopLevelDestination(
-    val route: Any,
+    val route: AtxRoute,
     val label: String,
     val compactLabel: String = label,
     val icon: ImageVector,
 )
+
+private sealed interface PendingEditorNavigation {
+    data object Back : PendingEditorNavigation
+
+    data class TopLevel(val route: AtxRoute) : PendingEditorNavigation
+}
 
 private val destinations = listOf(
     TopLevelDestination(DashboardRoute, "Overview", "Home", Icons.Outlined.Dashboard),
@@ -91,6 +109,8 @@ fun AtxPlanApp() {
         onCreateProject = viewModel::createProject,
         onSelectProject = viewModel::selectProject,
         onCalculateLink = viewModel::calculateLinkBudget,
+        onSaveRfPath = viewModel::addRfPath,
+        onRetryLoad = viewModel::retryLoad,
     )
 }
 
@@ -102,14 +122,60 @@ private fun AtxPlanShell(
     onCreateProject: (String, String) -> Unit,
     onSelectProject: (String) -> Unit,
     onCalculateLink: (com.gecesars.atxplan.domain.rf.LinkBudgetInput) -> Unit,
+    onSaveRfPath: (com.gecesars.atxplan.domain.application.AddRfPathCommand) -> Unit,
+    onRetryLoad: () -> Unit,
 ) {
-    val backStack = remember { mutableStateListOf<Any>(DashboardRoute) }
+    val backStack = rememberAtxNavBackStack()
     val currentUiState = rememberUpdatedState(uiState)
-    val activeRoute = backStack.lastOrNull() ?: DashboardRoute
-    val navigate: (Any) -> Unit = { route ->
-        if (activeRoute != route) {
-            backStack.clear()
-            backStack.add(route)
+    val activeRoute = backStack.activeRoute
+    var isRfEditorDirty by rememberSaveable { mutableStateOf(false) }
+    var isRfSavePending by rememberSaveable { mutableStateOf(false) }
+    var pendingEditorNavigation by remember { mutableStateOf<PendingEditorNavigation?>(null) }
+    var navigationNotice by remember { mutableStateOf<String?>(null) }
+    val activeTopLevelRoute = when (activeRoute) {
+        is RfPathEditorRoute -> ProjectsRoute
+        else -> activeRoute
+    }
+    val navigateImmediately: (AtxRoute) -> Unit = backStack::replaceTopLevel
+    val navigateBackImmediately: () -> Unit = {
+        if (backStack.size > 1) backStack.removeLastOrNull() else backStack.replaceTopLevel(ProjectsRoute)
+    }
+    val canLeaveEditor = activeRoute !is RfPathEditorRoute ||
+        (!isRfSavePending && !uiState.isSavingCatalog)
+    val performNavigation: (PendingEditorNavigation) -> Unit = { request ->
+        when (request) {
+            PendingEditorNavigation.Back -> navigateBackImmediately()
+            is PendingEditorNavigation.TopLevel -> navigateImmediately(request.route)
+        }
+    }
+    val requestNavigation: (PendingEditorNavigation) -> Unit = { request ->
+        when {
+            activeRoute is RfPathEditorRoute && !canLeaveEditor -> Unit
+            activeRoute is RfPathEditorRoute && isRfEditorDirty -> {
+                pendingEditorNavigation = request
+            }
+            else -> performNavigation(request)
+        }
+    }
+    val navigate: (AtxRoute) -> Unit = { route ->
+        requestNavigation(PendingEditorNavigation.TopLevel(route))
+    }
+    val navigateBack: () -> Unit = {
+        requestNavigation(PendingEditorNavigation.Back)
+    }
+
+    LaunchedEffect(activeRoute) {
+        if (activeRoute !is RfPathEditorRoute) {
+            isRfEditorDirty = false
+            isRfSavePending = false
+            pendingEditorNavigation = null
+        }
+    }
+
+    LaunchedEffect(navigationNotice) {
+        navigationNotice?.let { message ->
+            snackbarHostState.showSnackbar(message)
+            navigationNotice = null
         }
     }
 
@@ -118,8 +184,9 @@ private fun AtxPlanShell(
         Row(modifier = Modifier.fillMaxSize()) {
             if (expanded) {
                 AtxNavigationRail(
-                    activeRoute = activeRoute,
+                    activeRoute = activeTopLevelRoute,
                     onNavigate = navigate,
+                    enabled = canLeaveEditor,
                     modifier = Modifier.fillMaxHeight(),
                 )
             }
@@ -127,10 +194,29 @@ private fun AtxPlanShell(
                 modifier = Modifier.weight(1f),
                 topBar = {
                     CenterAlignedTopAppBar(
+                        navigationIcon = {
+                            if (activeRoute is RfPathEditorRoute) {
+                                IconButton(
+                                    onClick = navigateBack,
+                                    enabled = canLeaveEditor,
+                                ) {
+                                    Icon(
+                                        Icons.AutoMirrored.Outlined.ArrowBack,
+                                        contentDescription = "Back to Projects",
+                                    )
+                                }
+                            }
+                        },
                         title = {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text(
-                                    text = destinations.first { it.route == activeRoute }.label,
+                                    text = if (activeRoute is RfPathEditorRoute) {
+                                        "Add RF Path"
+                                    } else {
+                                        destinations.firstOrNull { it.route == activeRoute }
+                                            ?.label
+                                            ?: destinations.first().label
+                                    },
                                     style = MaterialTheme.typography.titleMedium,
                                 )
                                 uiState.selectedProject?.let { project ->
@@ -147,7 +233,11 @@ private fun AtxPlanShell(
                 },
                 bottomBar = {
                     if (!expanded) {
-                        AtxBottomNavigation(activeRoute = activeRoute, onNavigate = navigate)
+                        AtxBottomNavigation(
+                            activeRoute = activeTopLevelRoute,
+                            onNavigate = navigate,
+                            enabled = canLeaveEditor,
+                        )
                     }
                 },
                 snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -157,11 +247,15 @@ private fun AtxPlanShell(
                         .fillMaxSize()
                         .padding(padding),
                 ) {
-                    uiState.storageError?.let { StorageErrorBanner(it) }
+                    uiState.storageError?.let {
+                        StorageErrorBanner(message = it, onRetry = onRetryLoad)
+                    }
                     NavDisplay(
                         backStack = backStack,
                         modifier = Modifier.fillMaxSize(),
-                        onBack = { if (backStack.size > 1) backStack.removeLastOrNull() },
+                        onBack = {
+                            if (backStack.size > 1) navigateBack()
+                        },
                         entryProvider = { route ->
                             when (route) {
                                 DashboardRoute -> NavEntry(route) {
@@ -177,6 +271,16 @@ private fun AtxPlanShell(
                                         uiState = currentUiState.value,
                                         onCreateProject = onCreateProject,
                                         onSelectProject = onSelectProject,
+                                        onAddRfPath = { projectId ->
+                                            val route = AtxRoute.rfPathEditor(projectId)
+                                            if (route is RfPathEditorRoute && backStack.lastOrNull() != route) {
+                                                backStack.add(route)
+                                            } else if (route !is RfPathEditorRoute) {
+                                                navigationNotice = "The RF Path Editor cannot open this project " +
+                                                    "because its stored ID is not navigation-safe. The project " +
+                                                    "data was not changed."
+                                            }
+                                        },
                                     )
                                 }
                                 MapRoute -> NavEntry(route) {
@@ -185,13 +289,41 @@ private fun AtxPlanShell(
                                 StudiesRoute -> NavEntry(route) {
                                     StudiesScreen(
                                         project = currentUiState.value.selectedProject,
+                                        resultInput = currentUiState.value.linkBudgetInput,
                                         result = currentUiState.value.linkBudgetResult,
                                         calculatorError = currentUiState.value.calculatorError,
+                                        isCalculating = currentUiState.value.isCalculating,
                                         onCalculate = onCalculateLink,
                                     )
                                 }
                                 CatalogRoute -> NavEntry(route) { CatalogScreen() }
-                                else -> NavEntry(Unit) { Text("Unknown destination") }
+                                is RfPathEditorRoute -> NavEntry(route) {
+                                    val state = currentUiState.value
+                                    RfPathEditorScreen(
+                                        project = state.catalog.projects
+                                            .firstOrNull { project -> project.id == route.projectId },
+                                        isLoadingCatalog = state.isLoading,
+                                        isSaving = state.isSavingCatalog,
+                                        onSave = onSaveRfPath,
+                                        onDirtyStateChange = { isRfEditorDirty = it },
+                                        onSavePendingChange = { isRfSavePending = it },
+                                        onSaveSucceeded = {
+                                            isRfEditorDirty = false
+                                            isRfSavePending = false
+                                            pendingEditorNavigation = null
+                                            navigateBackImmediately()
+                                        },
+                                        onBack = navigateBack,
+                                    )
+                                }
+                                is UnsupportedRoute -> NavEntry(route) {
+                                    DashboardScreen(
+                                        uiState = currentUiState.value,
+                                        onOpenProjects = { navigate(ProjectsRoute) },
+                                        onOpenMap = { navigate(MapRoute) },
+                                        onOpenStudies = { navigate(StudiesRoute) },
+                                    )
+                                }
                             }
                         },
                     )
@@ -199,12 +331,39 @@ private fun AtxPlanShell(
             }
         }
     }
+
+    pendingEditorNavigation?.let { request ->
+        AlertDialog(
+            onDismissRequest = { pendingEditorNavigation = null },
+            title = { Text("Discard unsaved RF path?") },
+            text = {
+                Text("Your changes have not been saved. Discard the draft and leave the editor?")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingEditorNavigation = null
+                        isRfEditorDirty = false
+                        performNavigation(request)
+                    },
+                ) {
+                    Text("Discard Draft")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingEditorNavigation = null }) {
+                    Text("Keep Editing")
+                }
+            },
+        )
+    }
 }
 
 @Composable
 private fun AtxNavigationRail(
-    activeRoute: Any,
-    onNavigate: (Any) -> Unit,
+    activeRoute: AtxRoute,
+    onNavigate: (AtxRoute) -> Unit,
+    enabled: Boolean,
     modifier: Modifier = Modifier,
 ) {
     NavigationRail(
@@ -226,6 +385,7 @@ private fun AtxNavigationRail(
         destinations.forEach { destination ->
             NavigationRailItem(
                 selected = activeRoute == destination.route,
+                enabled = enabled,
                 onClick = { onNavigate(destination.route) },
                 icon = { Icon(destination.icon, contentDescription = destination.label) },
                 label = { Text(destination.compactLabel) },
@@ -235,11 +395,16 @@ private fun AtxNavigationRail(
 }
 
 @Composable
-private fun AtxBottomNavigation(activeRoute: Any, onNavigate: (Any) -> Unit) {
+private fun AtxBottomNavigation(
+    activeRoute: AtxRoute,
+    onNavigate: (AtxRoute) -> Unit,
+    enabled: Boolean,
+) {
     NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
         destinations.forEach { destination ->
             NavigationBarItem(
                 selected = activeRoute == destination.route,
+                enabled = enabled,
                 onClick = { onNavigate(destination.route) },
                 icon = { Icon(destination.icon, contentDescription = destination.label) },
                 label = { Text(destination.compactLabel) },

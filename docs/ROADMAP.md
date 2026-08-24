@@ -1,6 +1,6 @@
 # Android Roadmap
 
-> Evidence baseline: August 24, 2026. The repository has moved beyond an Android template: it now contains an adaptive Compose/Navigation 3 shell, an atomic JSON project repository, a validated demonstration domain, five product areas, a bounded RF calculator, CI, unit tests, and an Android 16 instrumented smoke test. This roadmap does not treat those foundations as complete desktop or RadioPlanner parity.
+> Evidence baseline: August 24, 2026. The repository now contains an adaptive Compose shell, typed and saveable Navigation 3 routes, explicit UDF/application boundaries, a transactional schema-2 JSON repository with v1 migration, a persisted combined RF-path editor, a bounded RF calculator, CI, JVM tests, and Android instrumentation. This roadmap does not treat those foundations as complete desktop or RadioPlanner parity.
 
 ## 1. Delivery strategy
 
@@ -22,18 +22,18 @@ Sequencing principles:
 | Item | Status | Current evidence | Remaining gap |
 |---|---|---|---|
 | Package and compatibility | Delivered | `com.gecesars.atxplan`, `minSdk 23`, `targetSdk 36`, `compileSdk 36.1`, version `0.1.0`. | Formal physical-device matrix and release policy. |
-| Build and lint | Delivered | Debug/test APKs built; latest lint has 0 errors. | Nine dependency-version warnings and no signed release. |
+| Build and lint | Delivered | Debug/test APKs built; latest lint has 0 errors. | Dependency/toolchain update advisories and no signed release. |
 | CI | Delivered | GitHub Actions runs unit tests, lint, debug APK, and debug test APK builds. | Connected Android test is not in CI. |
 | Compose theme and shell | Delivered | Custom light/dark ATX theme, Material 3, edge-to-edge, compact bottom bar, expanded navigation rail. | Full accessibility, locale enforcement, and device-matrix validation. |
-| Navigation 3 | Foundation | Five top-level destinations render through `NavDisplay`. | Restorable typed back stack, deep links, internal destinations, and process-death tests. |
-| UDF/ViewModel | Foundation | `AppUiState`, `StateFlow`, lifecycle collection, ViewModel coordination, repository callbacks, notice/error state. | Explicit actions/effects, use cases, DI, injected dispatchers, ViewModel tests. |
-| Project persistence | Delivered baseline | Schema-1 typed JSON in private storage with `AtomicFile`, `fd.sync`, 5 MiB limit, future-schema rejection, and rollback on failed save. | Atomicity is per write; save ordering is not serialized. Migration, concurrency, failure-injection, and recovery tests are missing. |
-| Project workflow | Foundation | Load, create, select, and display projects; seed synthetic demo when catalog is absent. | Rename/delete/duplicate/archive, RF entity CRUD, receivers, scenarios, imports. |
-| Domain model | Foundation | Catalog, project, network, RF system, site, sector, coordinate, and study-summary models with validation. | Canonical unit value types, receiver, datasets, study requests/results, artifacts. |
+| Navigation 3 | Foundation | Serializable stable-ID route keys, a saveable typed `NavBackStack`, bounded unknown-route fallback, and the nested RF-path editor have saved-instance-state restoration tests. | Deep links, deleted-ID recovery UX, adaptive list/detail, and true system process-death/rotation testing across the device matrix remain. |
+| UDF/ViewModel | Foundation | Explicit `AppUiAction`/`AppUiEffect`, structured problem/recovery values, injected use cases/dispatchers, serialized catalog mutations, cancellation-aware calculation, and ViewModel transition tests exist. | Feature-level ViewModels, cross-instance catalog observation, the DI/scoping decision, durable jobs, broader observability, accessibility, and system recovery evidence remain. |
+| Project persistence | Delivered baseline | Schema-2 strict UTF-8 JSON uses `AtomicFile`, `fd.sync`, a 5 MiB limit, explicit v1 migration, and a mutex-protected read-transform-write transaction. Tests cover migration, corruption, future schema, malformed UTF-8, failed writes, and concurrency. | Recovery/export UX, multi-process policy, storage-exhaustion evidence against Android storage, asset ownership, backup, and the long-term JSON-versus-Room decision remain. |
+| Project workflow | Foundation | Load, create, select, and display projects; seed the synthetic demo; and add one linked network/site/sector/receiver through the persisted Add RF Path flow. | Rename/delete/duplicate/archive, independent create/edit/delete for every RF entity, scenarios, imports, and impact-aware linked deletion remain. |
+| Domain model | Foundation | Validated engineering value types, receiver/CPE, typed coordinates, and explicit receiver/sector network references extend the catalog/network/site/sector/study foundation. | Existing legacy entity primitives still need staged migration; scenarios, datasets, study requests/results, and artifacts are not modeled. |
 | Engineering canvas | Foundation | Offline Canvas plots sites and active azimuths. | Real GIS/map renderer, projection, camera, offline source, editing, attribution. |
 | RF calculation | Delivered | FSPL, EIRP, received power, fade margin, midpoint Fresnel radius, thermal noise, and SNR. | Geodesy, terrain, curvature, LOS, patterns, diffraction, persistence, manifest. |
-| Unit tests | Delivered | Nine passing tests across project model/serialization, RF formulas, and English-only source hygiene. | Repository, ViewModel, migration, navigation, and export tests. |
-| Instrumented test | Delivered | One passing Compose navigation smoke test on Android 16. | Broader flow, accessibility, restoration, and CI execution. |
+| JVM tests | Delivered baseline | Domain values/references, RF formulas, schema migration and storage faults, transactional concurrency, form parsing, ViewModel transitions, and English-only source hygiene have automated coverage. | Property/numerical golden, accessibility, performance, export, and complete system-flow coverage remain. |
+| Instrumented tests | Delivered baseline | Ten tests pass on a physical Android 16 device, covering top-level/nested typed routes, draft-discard and accessibility behavior, and a create-project -> persist-RF-path -> Activity-recreation flow. | True process termination, rotation/device matrix, broader accessibility automation, and CI execution remain. |
 | Product language | Delivered baseline | Production UI/errors/demo/tests and documentation are English; a unit test scans production sources for common Portuguese terms. | The blacklist is partial and must expand with new resource types. |
 | Public release | Blocked | Debug baseline only; backup disabled. | License, signing, SBOM, privacy, shrinker, upgrade testing, release channel. |
 
@@ -46,18 +46,19 @@ Already delivered or founded:
 - Android identity and API 23–36.1 compatibility;
 - reproducible debug build and CI workflow;
 - Compose/Material 3 shell and custom theme;
-- basic Navigation 3 top-level navigation;
-- ViewModel/repository state flow;
-- schema-1 atomic JSON catalog;
-- project create/select and synthetic demo;
+- typed, saveable Navigation 3 routes including the nested RF editor;
+- explicit action/effect ViewModel flow, use cases, injected dispatchers, and structured recovery;
+- schema-2 transactional JSON catalog with explicit v1 migration and defensive tests;
+- project create/select, synthetic demo, and a combined persisted RF-path creation slice;
+- typed engineering values, receiver/CPE, and network references;
 - free-space RF calculator and numerical unit tests.
 
 Still required to close P0:
 
 - continued English-only enforcement and complete accessibility review;
-- restorable typed Navigation 3 routes;
-- tested persistence migrations and project lifecycle;
-- canonical RF unit value types, receivers, and editable site/sector data;
+- true process-death/system-flow and broad device restoration evidence;
+- complete project lifecycle and independent RF-entity create/edit/delete;
+- durable jobs, recovery/export UX, and the long-term operational-store decision;
 - real offline geographic map;
 - local DEM, terrain profile, geodesy, curvature, LOS, and Fresnel clearance;
 - project-linked persisted study request/result;
@@ -98,8 +99,8 @@ Still required to close P0:
 |---|---|---|---|
 | **G0 — Product and identity** | Product name, package, repository, license, privacy policy, English-only policy, and supported API range approved. | **Foundation:** package/API/repository and English-only baseline exist; license/privacy/release approval remains blocked. | Public release and irreversible contracts. |
 | **G1 — Reproducible build** | Clean checkout runs unit tests, lint, debug APK, and test APK in CI with documented JDK/SDK. | **Delivered for debug baseline:** workflow and local artifacts exist. | Functional milestones if regression occurs. |
-| **G2 — Application architecture** | UDF, ViewModel, Navigation 3, dependency assembly, error model, restoration, and observability demonstrated. | **Foundation:** ViewModel/StateFlow/repository/Nav3 exist; restoration, DI, use cases, and tests remain. | Scaling feature count safely. |
-| **G3 — Durable persistence** | Exported schema, migrations, safe writes, backup policy, recovery, and data ownership validated. | **Foundation:** atomic schema-1 JSON exists; migration/recovery tests and long-term store decision remain. | Real user projects and portable assets. |
+| **G2 — Application architecture** | UDF, ViewModel, Navigation 3, dependency assembly, error model, restoration, and observability demonstrated. | **Foundation:** explicit actions/effects, structured recovery, use cases, injected dispatchers, and typed saved-state route tests exist. Feature splitting, DI/scoping policy, durable jobs/observability, accessibility, and true process-death/device flows remain. | Scaling feature count safely. |
+| **G3 — Durable persistence** | Exported schema, migrations, safe writes, backup policy, recovery, and data ownership validated. | **Foundation:** schema 2, explicit v1 migration, strict decoding, serialized transactions, and corruption/future-schema/concurrency tests exist. Recovery/export, backup/data ownership, assets/jobs, multi-process policy, and the long-term store decision remain. | Real user projects and portable assets. |
 | **G4 — Map and data** | Renderer, offline format, attribution, license, NoData, disk budget, and lifecycle approved. | **Foundation:** technical Canvas only. | Terrain and field-map claims. |
 | **G5 — Numerical core** | Units, geodesy, FSPL, LOS, and Fresnel pass independent golden cases with tolerances. | **Foundation:** FSPL/noise/Fresnel-radius baseline is tested; geodesy/terrain/LOS are missing. | Terrain-aware engineering label. |
 | **G6 — Mobile compute** | Memory/time/battery budget, cancellation, blocking strategy, and device benchmarks. | Planned. | Raster coverage and heavy engines. |
@@ -125,7 +126,7 @@ A gate cannot be satisfied by documentation alone. It requires executable artifa
 - atomic JSON repository and demonstration project;
 - free-space RF calculator;
 - CI workflow, unit tests, lint, debug APK/test APK;
-- Android 16 instrumented navigation smoke test;
+- ten physical-device Android 16 instrumented navigation, saved-state, accessibility, draft-protection, and persisted Add RF Path flow tests;
 - English production strings plus `EnglishOnlySourceTest` regression guard;
 - application backup disabled while the data policy is incomplete.
 
@@ -150,26 +151,33 @@ A gate cannot be satisfied by documentation alone. It requires executable artifa
 
 **Delivered foundation:**
 
-- `AppUiState` and `StateFlow`;
-- lifecycle-aware state collection;
+- explicit `AppUiAction`, `AppUiEffect`, `AppProblem`, problem codes, and recovery actions;
+- immutable `AppUiState` and `StateFlow` with lifecycle-aware collection;
+- injected application use cases, storage/computation dispatchers, repository, clock, ID generator, and calculator boundary;
+- cancellation-aware calculation and serialized durable catalog mutations;
+- ViewModel tests for loading, create/select, save failure, retry, concurrency, invalid mutations, cancellation, and stale calculation results;
+- serializable stable-ID `AtxRoute` keys and a saveable typed Navigation 3 back stack;
+- safe unknown/malformed route fallback and nested `RfPathEditorRoute(projectId)`;
+- saved-instance-state instrumentation for top-level, unknown, and nested editor routes;
 - ViewModel factory and repository interface;
-- storage-error rollback and notices;
-- Navigation 3 `NavDisplay` with five top-level routes;
+- storage recovery banner, retry action, and one-time notice effect;
+- Navigation 3 `NavDisplay` with five top-level routes plus the nested RF editor;
 - compact/expanded navigation UI;
 - shared screen components and custom design tokens.
 
 **Remaining scope:**
 
-- explicit `UiAction`/`UiEffect` contracts or documented equivalent;
-- use-case boundary between ViewModel and domain/data;
-- dependency injection/composition policy and injected dispatchers;
-- typed feature route API and saved/restored back stack;
-- process-death, invalid-route, and adaptive list/detail tests;
-- structured problems, sanitized diagnostics, and durable job model;
+- split the application-wide ViewModel into feature contracts as flows grow;
+- approve dependency-injection/scoping and composition-root policy;
+- deep links, deleted-ID recovery, adaptive list/detail, and route ownership contracts;
+- true process-death, rotation, background/foreground, and device-matrix system tests;
+- durable job model, sanitized diagnostics, correlation, and broader observability;
 - accessibility semantics, focus, contrast, and text-scaling validation;
 - maintain English-only UI and diagnostics as features are added.
 
-**Demonstrator:** kill and restore the process while a selected project and nested destination remain recoverable from IDs.
+**Delivered component evidence:** serialized saved-instance-state restoration preserves stable top-level and nested RF-editor route IDs and safely handles unknown/malformed routes.
+
+**Remaining exit demonstrator:** terminate and restore the application process through the Android system while the selected project and nested destination remain recoverable from durable IDs.
 
 **Exit gate:** G2.
 
@@ -184,31 +192,36 @@ A gate cannot be satisfied by documentation alone. It requires executable artifa
 
 ### F2 — Complete project and RF entity lifecycle
 
-**State:** Foundation implemented.
+**State:** Foundation implemented; the first combined persisted RF-entity slice is delivered.
 
 **Objective:** evolve the current catalog/demo into editable, durable engineering projects.
 
 **Delivered foundation:**
 
-- schema-1 `ProjectCatalog` and `PlannerProject`;
-- validated `RfNetwork`, `RadioSite`, `Sector`, `GeoPoint`, and `StudySummary`;
-- create/select/save project workflow;
-- 5 MiB defensive limit, future-schema rejection, and atomic replacement;
-- JSON serialization round-trip test;
+- schema-2 `ProjectCatalog` and `PlannerProject` with an explicit schema-1 fixture migration;
+- strict UTF-8 parsing, 5 MiB limit, future-schema/corruption preservation, atomic replacement, and serialized read-transform-write mutation;
+- tests for successful and failed migration promotion, malformed UTF-8, malformed/invalid/future documents, size limits, failed writes, and concurrent repository instances;
+- validated engineering value objects for coordinates, frequency, bandwidth, power, gain, loss, distance, height, azimuth, and tilt with primitive JSON representation;
+- receiver/CPE model plus backward-compatible receiver collection and nullable sector network reference;
+- aggregate duplicate/reference validation for receivers and linked sectors;
+- create/select project workflow plus a combined Add RF Path editor/use case that atomically adds one network, one site/sector, and one receiver with injected IDs and clock;
+- JSON round trips preserve IDs, `Double` precision, explicit units, and network references;
 - synthetic FM demo with one network, three sites, and two study summaries.
 
 **Remaining scope:**
 
-- typed value objects for coordinates, frequency, bandwidth, power, gain, loss, distance, and angle;
-- receiver/CPE, scenario, dataset reference, study request/result, and artifact models;
-- create/edit/delete sites, sectors, receivers, networks, and metadata;
+- scenario, dataset reference, study request/result, and artifact models;
+- independent create/edit/delete flows for sites, sectors, receivers, networks, and metadata;
+- staged migration of remaining legacy primitive entity fields to canonical unit types;
 - rename, duplicate, archive, and delete projects;
-- conflict and referential-integrity diagnostics;
-- schema migration fixtures from every public version;
+- impact-aware linked deletion and richer conflict diagnostics;
 - decision and transition plan for JSON catalog versus Room/SQLite and asset files;
-- failure injection around atomic writes and storage exhaustion.
+- recovery/export workflow for preserved unreadable/future catalogs;
+- durable jobs, multi-process policy, Android `AtomicFile` interruption, and storage-exhaustion system evidence.
 
-**Vertical slice:** create project → add site/sector/receiver → kill process → reopen with IDs, precision, units, and links preserved.
+**Delivered vertical slice:** open an existing project → enter a network, transmitter site/sector, and receiver → commit one repository transaction → reopen/round-trip with IDs, precision, units, and links preserved.
+
+**Remaining phase demonstrator:** cover project creation and the same persisted entity flow through true process termination/relaunch, then exercise independent edits and linked deletion impact.
 
 **Exit gate:** G3.
 
@@ -421,15 +434,15 @@ A gate cannot be satisfied by documentation alone. It requires executable artifa
 | MOB-001 | Establish production package and Android API range | Delivered | P0 | — | `com.gecesars.atxplan`, API 23–36.1 build. |
 | MOB-002 | Establish debug build/lint/unit-test CI | Delivered | P0 | MOB-001 | GitHub Actions workflow and local reports/artifacts. |
 | MOB-003 | Implement adaptive Compose shell | Delivered | P0 | MOB-001 | Five destinations on compact/expanded layout. |
-| MOB-004 | Introduce Navigation 3 top-level display | Foundation | P0 | MOB-003 | Current `NavDisplay`; restoration/deep-link work remains. |
-| MOB-005 | Introduce ViewModel/StateFlow/repository | Foundation | P0 | MOB-003 | Current state flow and repository boundary; tests/use cases remain. |
-| MOB-006 | Implement atomic schema-1 JSON catalog | Delivered | P0 | MOB-005 | `AtomicFile`, sync, size/schema checks, private storage. |
+| MOB-004 | Introduce Navigation 3 top-level display | Foundation | P0 | MOB-003 | Typed stable-ID save/restore and nested-editor tests exist; deep links and true system process-death/device flows remain. |
+| MOB-005 | Introduce ViewModel/StateFlow/repository | Foundation | P0 | MOB-003 | Explicit actions/effects, structured recovery, injected use cases/dispatchers, transactional mutations, and ViewModel tests exist; feature splitting, DI/scoping, jobs, and observability remain. |
+| MOB-006 | Implement atomic schema-2 JSON catalog | Delivered baseline | P0 | MOB-005 | `AtomicFile`, strict UTF-8, size/schema checks, explicit v1 migration, serialized transactions, and defensive tests. |
 | MOB-007 | Implement project create/select and demo | Delivered | P0 | MOB-006 | User project creation and synthetic seeded demo. |
 | MOB-008 | Implement pure Kotlin RF baseline | Delivered | P0 | domain baseline | FSPL/EIRP/received/noise/SNR/Fresnel-radius tests. |
 | MOB-009 | Enforce English-only product language | Delivered baseline | P0 | all layers | English production sources/tests plus automated regression scan. |
-| MOB-010 | Harden restorable typed navigation | Planned | P0 | MOB-004 | Process-death, invalid-route, and tablet tests. |
-| MOB-011 | Define durable schema evolution | Planned | P0 | MOB-006 | Persistence ADR and non-destructive migration fixture. |
-| MOB-012 | Complete RF value types and entity CRUD | Planned | P0 | MOB-007/011 | Site/sector/receiver lifecycle and round trip. |
+| MOB-010 | Harden restorable typed navigation | Foundation | P0 | MOB-004 | Stable-ID save/restore and malformed/nested route tests delivered; deep links, deleted IDs, process termination, and tablet matrix remain. |
+| MOB-011 | Define durable schema evolution | Foundation | P0 | MOB-006 | Schema 2 and non-destructive v1 migration fixture delivered; long-term store/asset/backup/recovery ADR remains. |
+| MOB-012 | Complete RF value types and entity CRUD | Foundation | P0 | MOB-007/011 | Typed values, receiver/references, and combined Add RF Path round trip delivered; independent edit/delete and project lifecycle remain. |
 | MOB-013 | Run geographic map spike | Planned | P0 | license gate | Lifecycle, offline, attribution, and performance report. |
 | MOB-014 | Define offline catalog/package format | Planned | P0 | MOB-013 | Safe fixture install, validation, ownership, and removal. |
 | MOB-015 | Implement DEM adapter and terrain profile | Planned | P0 | MOB-014 | Golden profile with NoData and provenance. |
@@ -478,7 +491,7 @@ Every increment must:
 
 | Milestone | Mandatory tests |
 |---|---|
-| Existing foundation | Unit, lint, debug APK, instrumented Dashboard→Studies smoke. |
+| Existing foundation | Domain/RF/persistence/use-case/form/ViewModel/language JVM suites, lint/debug artifacts, Dashboard-to-Studies smoke, and typed route saved-state instrumentation. |
 | Architecture hardening | ViewModel/UDF, navigation restoration, process death, adaptive UI, accessibility. |
 | Persistence | Repository, migration, failed write, full disk, concurrency, backup/restore policy. |
 | RF entities | Unit value types, property tests, validation, serialization round trip. |
@@ -492,9 +505,9 @@ Every increment must:
 
 | Risk | Impact | Mitigation/gate |
 |---|---|---|
-| Current JSON schema evolves without migration | Project loss or lockout | G3; fixtures and non-destructive migration policy. |
-| Concurrent catalog saves complete out of order | Newer project/selection state can be overwritten | Serialize repository writes and add concurrency/rollback tests in G3. |
-| Basic Nav3 stack is treated as complete | Lost navigation after process death | G2; typed/restorable routes and tests. |
+| Later JSON schemas evolve without explicit migrations | Project loss or lockout | Schema 1→2 fixture is delivered; G3 still requires a published evolution/asset/backup policy and fixtures for every future public schema. |
+| Catalog mutation policy diverges across processes or future stores | Newer state can be overwritten | In-process read-transform-write is serialized and concurrency-tested; define multi-process/conflict policy before another writer or store is introduced. |
+| Saved-instance-state route tests are treated as complete process recovery | Selected durable state or nested context can still be lost after system termination | G2 still requires true process-death, deleted-ID, rotation, and device-matrix flows. |
 | Technical Canvas is mistaken for a map | Incorrect geographic expectations | Keep Foundation label; G4 before map claims. |
 | Free-space result is mistaken for terrain-aware engineering | Invalid field decision | Explicit limits in UI/docs; G5 before terrain-aware label. |
 | Study result is not persisted | Lost evidence on restart | F4 immutable request/result/artifact model. |

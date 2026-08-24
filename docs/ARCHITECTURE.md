@@ -1,6 +1,6 @@
 # Android Architecture
 
-> Architecture baseline and target as of August 24, 2026. The repository already contains a working Compose/Navigation 3 application foundation, an atomic JSON repository, validated project-domain models, five screens, and a bounded RF calculator. Sections labeled Target or Planned describe the next architecture and must not be read as delivered functionality.
+> Architecture baseline and target as of August 24, 2026. The repository contains a working Compose application, typed/saveable Navigation 3 routes, explicit UDF and use-case boundaries, a transactional schema-2 JSON repository with v1 migration, validated RF-domain models, a combined Add RF Path editor, and a bounded RF calculator. Sections labeled Target or Planned describe the next architecture and must not be read as delivered functionality.
 
 ## 1. Architecture goals
 
@@ -33,11 +33,14 @@ flowchart TD
     NAV --> MAP[Engineering Map]
     NAV --> STUDIES[Studies]
     NAV --> CATALOG[Data Catalog]
-    VM --> PORT[ProjectRepository]
+    NAV --> EDITOR[Add RF Path editor]
+    VM --> USE[AppUseCases]
+    USE --> PORT[ProjectRepository]
+    USE --> RF[RfCalculator]
+    USE --> DOMAIN[Project domain models]
     PORT --> FILE[FileProjectRepository]
-    FILE --> JSON[(Schema-1 JSON / AtomicFile)]
-    VM --> RF[RfCalculator]
-    VM --> DOMAIN[Project domain models]
+    FILE --> PERSIST[ProjectCatalogPersistence]
+    PERSIST --> JSON[(Schema-2 JSON / AtomicFile)]
 ```
 
 ### 2.2 Current status by concern
@@ -47,15 +50,16 @@ flowchart TD
 | Composition root | Delivered | `MainActivity` applies the theme and hosts `AtxPlanApp`. | Dependency construction still occurs in the ViewModel factory. |
 | UI shell | Delivered | Compose Material 3, edge-to-edge, custom light/dark theme. | Full accessibility/device-matrix validation remains. |
 | Adaptive navigation | Delivered | Bottom navigation on compact width; navigation rail at 900 dp or wider. | Feature contents are not all adaptive list/detail layouts. |
-| Navigation 3 | Foundation | `NavDisplay`, five object routes, in-memory top-level stack. | Back stack is not saved, routes use `Any`, no deep links or nested flows. |
-| State management | Foundation | Immutable `AppUiState`, `StateFlow`, lifecycle collection, ViewModel callbacks, notice/error state. | No explicit action/effect protocol, use cases, or ViewModel tests. |
+| Navigation 3 | Foundation | Serializable stable-ID `AtxRoute` keys, a saveable typed back stack, safe unknown-route fallback, and nested RF editor have saved-instance-state tests. | Deep links, deleted-ID UX, route ownership, and true process-death/rotation/device-matrix flows remain. |
+| State management | Foundation | Immutable state, explicit actions/effects, structured problems/recovery, injected use cases/dispatchers, serialized catalog mutations, cancellation, and ViewModel tests. | One application ViewModel remains; cross-instance catalog observation, DI/scoping, durable jobs, broader observability, accessibility, and system recovery remain. |
 | Repository boundary | Delivered | `ProjectRepository` interface separates ViewModel from file implementation. | Only the project catalog uses a repository. |
-| JSON persistence | Delivered baseline | kotlinx.serialization, schema 1, private file, `AtomicFile`, `fd.sync`, 5 MiB limit. | Atomicity is per write; saves are not serialized. No migration, concurrency, recovery, or fault-injection tests exist. |
-| Domain | Foundation | Project/catalog/network/site/sector/coordinate/study-summary models with validation. | No receiver, scenario, dataset, artifact, canonical unit types, or full study model. |
-| RF engine | Delivered | Pure Kotlin FSPL, EIRP, received power, margin, midpoint Fresnel radius, noise floor, SNR. | Synchronous bounded calculation only; no terrain, geodesy, patterns, or engine manifest. |
+| JSON persistence | Delivered baseline | Strict UTF-8 serialization, schema 2, explicit v1 migration, private `AtomicFile`, `fd.sync`, 5 MiB limit, and mutex-protected read-transform-write transactions have migration/fault/concurrency tests. | Recovery/export, assets/jobs, backup, multi-process policy, storage-exhaustion system evidence, and the long-term store decision remain. |
+| Domain | Foundation | Project/catalog/network/site/sector/receiver/study models, engineering value types, and receiver/sector network-reference validation are implemented. | Legacy primitive entity fields need staged migration; no scenario, dataset, artifact, or full study model exists. |
+| RF-path workflow | Delivered bounded slice | A saveable Compose draft calls a validated, deterministic use case and persists one linked network/site/sector/receiver transaction. | It is not complete entity CRUD, a terrain link study, or process-death system proof. |
+| RF engine | Delivered | Pure Kotlin FSPL, EIRP, received power, margin, midpoint Fresnel radius, noise floor, and SNR; results carry explicit in-memory model and implementation provenance. | Synchronous bounded calculation only; no terrain, geodesy, patterns, or persisted execution manifest. |
 | Engineering map | Foundation | Compose Canvas plots normalized site coordinates and active azimuth rays. | It is not a cartographic renderer or GIS engine. |
 | Dataset catalog | Foundation | Static capability screen. | No dataset inventory or file operation exists. |
-| Tests | Delivered baseline | Nine unit tests and one Android 16 Compose smoke test pass. | No repository, ViewModel, restoration, migration, accessibility, or performance tests. |
+| Tests | Delivered baseline | Automated domain, RF, persistence migration/fault/concurrency, use-case, form, ViewModel, source-language, route saved-state, draft-protection/accessibility semantics, and persisted Add RF Path Activity-flow tests exist; the 10-test instrumented suite passes on a physical Android 16 device. | Broader accessibility automation, performance, export, true system process-death, and a formal device matrix remain. |
 | Build automation | Delivered baseline | CI runs unit tests, lint, and debug/test APK assembly. | Connected test and signed release are outside current CI. |
 | Product language | Delivered baseline | Production UI/errors/demo/tests are English and a unit test scans for common Portuguese source terms. | The blacklist is partial and must cover future resource/file types. |
 
@@ -174,36 +178,40 @@ Extract a module only when its API is stable, tests need Android-free execution,
 
 ### Current flow
 
-The current app implements a simple unidirectional path:
+The current app implements an explicit unidirectional application path:
 
 ```text
 Composable callback
-  -> AppViewModel method
-  -> ProjectRepository or RfCalculator
-  -> AppUiState update
+  -> AppUiAction
+  -> AppViewModel
+  -> injected application use case
+  -> transactional repository or RF calculator boundary
+  -> AppUiState and optional AppUiEffect
   -> lifecycle-aware Compose collection
 ```
 
-This is a real foundation. It is not yet the final per-feature UDF contract.
+This is a tested application foundation. It is not yet the final per-feature UDF or durable-job contract.
 
 Current strengths:
 
 - immutable top-level state;
 - private mutable `StateFlow` and read-only public state;
 - lifecycle-aware collection;
-- local persistence on an I/O dispatcher inside the repository;
-- optimistic catalog update with rollback after save failure;
-- distinct storage and calculator error fields.
+- explicit `AppUiAction` and one-time `AppUiEffect` types;
+- structured problem codes, English user messages, and recovery actions;
+- constructor-injected use cases plus replaceable storage/computation dispatchers;
+- cancellation propagation and stale-result protection for link calculations;
+- a mutex-protected mutation path that waits for catalog load and publishes only the repository-committed catalog;
+- ViewModel tests for success, recoverable failure/retry, invalid mutation, ordering, concurrency, cancellation, and stale calculation results.
 
 Current gaps:
 
-- calculation is called directly by the ViewModel rather than a use case/engine contract;
-- UI callbacks are not explicit typed actions;
-- snackbar notices are state strings rather than a documented effect protocol;
 - one application-wide ViewModel owns unrelated feature state;
-- dispatchers and repository construction are not injected by a composition framework;
-- no ViewModel transition tests exist.
-- overlapping optimistic saves are not serialized and can complete or roll back out of order.
+- dependency assembly still occurs in the ViewModel factory and no DI/scoping policy is approved;
+- effects are currently limited to notices and do not yet cover external navigation/pickers;
+- durable jobs, progress/checkpoints, correlation, and sanitized diagnostic export are not modeled;
+- selected durable state and feature context still need true process-death system-flow evidence;
+- accessibility and adaptive feature-flow validation remain incomplete.
 
 ### Target feature contract
 
@@ -236,18 +244,22 @@ Every data screen models empty, loading, content, recoverable error, blocking pr
 ### Current implementation
 
 - Navigation 3 runtime and UI version 1.1.6 are dependencies;
-- five object routes feed `NavDisplay`;
+- a sealed `AtxRoute : NavKey` contract serializes bounded stable IDs instead of class names;
+- five top-level routes plus `RfPathEditorRoute(projectId)` feed `NavDisplay`;
+- `rememberSerializable` and `NavBackStackSerializer` save and restore the typed stack through Android saved instance state;
+- unsupported, oversized, or malformed persisted route IDs resolve through a bounded safe fallback;
+- routes carry only stable project IDs and the repository resolves project content;
 - a compact bottom bar and expanded rail select destinations;
-- top-level selection clears the in-memory stack and adds one route;
+- top-level selection intentionally replaces the stack while the RF editor nests above Projects;
 - Dashboard can navigate to Projects, Map, and Studies;
-- the instrumented smoke test covers Dashboard → Studies.
+- instrumentation covers the Dashboard-to-Studies smoke path and serialized restoration of top-level, unknown, malformed, and nested-editor routes.
 
 ### Current limits
 
-- stack is created with `remember`, not a saved/restored navigation-state mechanism;
-- route type is `Any` rather than a public sealed/serializable route contract;
-- no nested details, route arguments, deep links, or capability guards;
-- process-death behavior is not tested;
+- saved-instance-state restoration tests do not replace a true system process-kill/relaunch flow;
+- no external deep links or feature registration/ownership API exists;
+- a project removed while an editor route is restored has bounded empty/error handling but not a complete recovery workflow;
+- rotation, background/foreground, phone/tablet, and broad device-matrix behavior remain unverified;
 - top-level replacement means back navigation between areas is intentionally minimal.
 
 ### Target contract
@@ -285,12 +297,15 @@ Adoption closes only after rotation, process death, invalid deep link, and phone
 The current pure Kotlin/serialization domain includes:
 
 - `ProjectCatalog` with schema version, selected-project ID, unique project IDs, and stale-selection fallback;
-- `PlannerProject` with identity, name, customer, notes, timestamps, demo flag, networks, sites, and study summaries;
+- `PlannerProject` with identity, name, customer, notes, timestamps, demo flag, networks, sites, receivers, and study summaries;
 - `RfNetwork` with system, downlink frequency, and bandwidth validation;
 - `RadioSystem` values for generic, FM, TV, LTE, 5G NR, land mobile, FWA, and air-to-ground;
 - `RadioSite` with validated location, optional elevation, and unique sectors;
 - `GeoPoint` latitude/longitude validation;
-- `Sector` with active flag, azimuth, electrical tilt, height, power, gain, feeder loss, and frequency validation;
+- `Sector` with active flag, azimuth, electrical tilt, height, power, gain, feeder loss, frequency, and a backward-compatible nullable network reference;
+- `Receiver`/CPE with typed coordinate, height, gain, system loss, sensitivity, noise figure, azimuth/tilt, and a required project-local network reference;
+- aggregate duplicate and referential-integrity validation for receivers and linked sectors;
+- a validated `AddRfPathCommand`/result/use case that generates stable IDs and creates one linked network, site/sector, and receiver as one immutable catalog transition;
 - `StudySummary`, study types, and lifecycle statuses;
 - factory-created user projects and a synthetic demonstration project.
 
@@ -311,18 +326,19 @@ erDiagram
     STUDY ||--o{ ARTIFACT_REF : produces
 ```
 
-Initial value objects:
+Delivered engineering value objects:
 
-- latitude, longitude, and coordinate;
-- distance and height;
-- frequency and bandwidth;
-- linear power, dBm, and dBW;
-- gain dBi and loss dB;
-- azimuth, elevation angle, and electrical tilt;
-- CRS ID and NoData policy;
-- dataset hash, engine ID, and engine version.
+- `LatitudeDegrees`, `LongitudeDegrees`, and `GeoCoordinate`;
+- `DistanceKm` and `HeightM`;
+- `FrequencyMHz` and `BandwidthMHz`;
+- `PowerDbm`, `GainDbi`, and `LossDb`;
+- `AzimuthDegrees` and `TiltDegrees`.
 
-Conventions:
+They validate construction and deserialization and retain primitive numeric JSON representation. The combined Add RF Path command uses them at the UI/domain boundary. Existing legacy `RfNetwork`, `GeoPoint`, and `Sector` persisted fields remain primitive `Double` values and require staged migration rather than an incompatible rewrite.
+
+Still-planned unit/domain types include linear power, dBW, elevation angle, CRS/NoData policy, dataset hash, engine ID/version, and study/artifact provenance values.
+
+Target conventions:
 
 - SI is canonical and conversions happen at boundaries;
 - dB, dBm, dBW, dBi, dBd, and dBµV/m are distinct types;
@@ -366,12 +382,15 @@ The current screen calculates the first Fresnel radius at the path midpoint. Tes
 - Hata, 3GPP, ITM, P.1812, P.1546, P.528, or FCC curves;
 - persisted request/result, engine edition, provenance manifest, or parity bench.
 
-### Target use cases
+### Application use cases
+
+Delivered use cases load and transactionally update the catalog, create/select projects, add the combined RF path, and calculate the bounded link budget. `AddRfPathUseCase` accepts typed drafts and injected ID/clock providers; its result carries the committed catalog projection and linked entities.
+
+Remaining target use cases include:
 
 ```text
-CreateProject
 UpdateProjectMetadata
-CreateSite / UpdateSector / CreateReceiver
+Create/Edit/Delete Network, Site, Sector, and Receiver
 InstallDatasetPackage
 BuildTerrainProfile
 ImportAntennaPattern
@@ -389,19 +408,21 @@ Use cases accept domain commands, define transaction boundaries, return typed pr
 
 ### Current repository
 
-`ProjectRepository` exposes `loadCatalog()` and `saveCatalog()`. `FileProjectRepository`:
+`ProjectRepository` exposes `loadCatalog()` and `updateCatalog(transform)`. The update contract loads the latest durable catalog, applies one pure transform, and atomically writes the replacement while the complete transaction is serialized. `FileProjectRepository` and the Android-independent `ProjectCatalogPersistence`:
 
-- stores `atx_project_catalog_v1.json` in private app files;
-- uses UTF-8 typed JSON with defaults and unknown-key tolerance;
-- seeds the demo catalog only when the file does not exist;
-- rejects files above 5 MiB;
-- rejects a future schema without overwriting it;
-- preserves malformed content and returns a storage problem;
-- saves only the current schema;
-- uses `AtomicFile.startWrite/finishWrite/failWrite` plus `fd.sync`;
-- performs I/O on `Dispatchers.IO`.
+- store `atx_project_catalog_v1.json` in private app files, retaining the legacy filename so installed schema-1 catalogs are discovered;
+- use strict UTF-8 typed JSON with defaults and unknown-key tolerance;
+- seed the demo catalog only when the file does not exist;
+- reject files above 5 MiB;
+- reject a future schema, malformed UTF-8/JSON, and invalid domain content without overwriting original bytes;
+- explicitly migrate schema 1 to schema 2 and atomically promote the migrated document;
+- preserve the complete v1 document if migration promotion fails;
+- save only schema 2;
+- use `AtomicFile.startWrite/finishWrite/failWrite` plus `fd.sync`;
+- share a process-wide mutex across repository instances;
+- run storage work through the injected storage dispatcher in application use cases.
 
-`AtomicFile` protects one replacement from a torn write. It does not serialize multiple `saveCatalog()` calls into a logical transaction; the repository currently has no mutex or write queue.
+Automated storage tests cover schema migration and failed promotion, malformed/invalid/future payload preservation, strict UTF-8, size limits, failed writes, and concurrent transactions. `AtomicFile` still protects the final Android replacement; the mutex is in-process and is not a multi-process locking policy.
 
 ### Target ports
 
@@ -434,22 +455,22 @@ This is an intentionally bounded first durable boundary. It is suitable for the 
 
 ### Current guarantees
 
-- schema number is serialized;
+- schema 2 is serialized and schema 1 has an explicit fixture-backed migration;
 - writes are atomic and synced;
-- invalid/future content is not silently replaced;
+- complete read-transform-write catalog mutations are serialized in-process;
+- invalid UTF-8, malformed/invalid JSON, future schema, and failed migration promotion do not replace original bytes;
 - size is limited;
-- failed save rolls UI catalog state back to the previous value.
+- the ViewModel publishes only the repository-committed catalog and exposes structured recovery state on storage failure.
 
 ### Current gaps
 
-- no migration implementation beyond accepting schema 1;
 - no recovery UI or export of an unreadable catalog;
-- no fault-injection test around `AtomicFile`;
-- no serialization of concurrent saves or stale-rollback protection;
-- no optimistic-concurrency or multi-process policy;
-- after a failed future-schema/corrupt load, an explicit create action can save the empty UI catalog over the preserved file; recovery/export UX is required first;
+- no true Android `AtomicFile` interruption/full-storage system test;
+- no multi-process locking or external-writer conflict policy;
+- no durable job/checkpoint store;
 - no separate project asset ownership;
 - no immutable study artifacts;
+- no approved transition plan for JSON versus Room/SQLite;
 - no selective backup policy because backup is disabled.
 
 ### Target storage layout
@@ -594,7 +615,7 @@ Before execution, estimate cells/profiles/samples, input/intermediate/output mem
 
 ## 16. Concurrency and durable work
 
-Current JSON file I/O is dispatched to `Dispatchers.IO`; current RF work is small and synchronous. Heavy work requires:
+Storage and computation dispatchers are injected through `AppUseCases`. Catalog read-transform-write operations are serialized by the repository and ViewModel mutation boundaries, and link calculations cancel superseded UI work. The current RF calculation is still small and bounded; durable or heavy work requires:
 
 - structured Kotlin coroutines;
 - injected dispatchers;
@@ -636,13 +657,13 @@ Unknown items are never discarded on save. `.rp3` has a separate provenance/secu
 
 ## 18. Dependency injection
 
-No DI framework is currently present. `AppViewModel.factory` constructs `FileProjectRepository`, which is acceptable for the bounded foundation but does not scale to alternate backends.
+No DI framework is currently present. Use cases, repository, dispatchers, calculator, ID generator, and clock use constructor/factory injection, while `AppViewModel.factory` still chooses `FileProjectRepository`. This is testable for the bounded foundation but does not define application/activity/ViewModel scopes or scale to alternate runtime backends.
 
 The DI decision must provide clear Application/Activity/ViewModel scopes, backend/flavor bindings, easy fakes, measured startup cost, diagnostic errors, and no global service locator. Constructor injection remains the default contract regardless of framework.
 
 ## 19. Problems, diagnostics, and observability
 
-Current code distinguishes storage and calculator errors, preserves invalid storage, and shows a storage banner/snackbar. Target taxonomy:
+Current code defines `AppProblem` with stable problem code, English user message, and recovery action. It distinguishes catalog load/save and link-budget failures, preserves invalid storage, blocks mutation after failed load, exposes Retry for catalog recovery, and emits one-time notice effects. The broader target taxonomy is:
 
 ```text
 ValidationProblem
@@ -713,12 +734,14 @@ Canonical serialization is versioned. Irrelevant timestamps and local paths do n
 
 ### Current evidence
 
-- four project-model tests: trim/timestamps, stale selection fallback, demo serialization round trip, invalid coordinates/duplicate IDs;
-- four RF tests: FSPL baseline, explicit gain/loss signs and result terms, invalid inputs, thermal noise;
-- one English-only source test that scans production Kotlin/XML for common Portuguese terms;
-- one Compose Android test: Dashboard entry point opens Studies on Android 16;
-- latest reports show nine unit tests and one instrumented test with zero failures;
-- latest lint report shows zero errors and nine dependency-version warnings.
+- project/domain tests cover schema defaults, validation, engineering-value boundaries, primitive JSON, receiver/sector references, legacy compatibility, and exact round trips;
+- application tests cover deterministic Add RF Path success, invalid commands, generated-ID duplication/collision, atomic failure, clock policy, references, and JSON precision;
+- persistence tests cover explicit v1→v2 migration, failed migration promotion, malformed/invalid/future data, strict UTF-8, size limits, atomic write failure, and concurrent repository instances;
+- ViewModel tests cover load/create/select/Add RF Path transitions, structured failures/retry, mutation ordering/concurrency, invalid mutations, calculation cancellation, and stale-result suppression;
+- RF and form tests cover implemented formulas, invalid physical inputs, unit parsing, defaults, and typed command conversion;
+- the English-only source test scans production Kotlin/XML for common Portuguese terms;
+- a 10-test instrumented suite passes on a physical Android 16 device and covers the Dashboard-to-Studies smoke path, saved-instance-state restoration for supported, unknown, malformed, and nested RF-editor routes, draft-discard/accessibility behavior, and create-project -> persist-RF-path -> Activity recreation;
+- lint/build evidence remains part of the debug baseline, but accessibility automation, performance, broader device/system flows, and release validation remain open.
 
 ### Target matrix
 
@@ -761,8 +784,8 @@ Until measured targets exist, absolute requirements are:
 | ADR | Decision | Gate |
 |---|---|---|
 | ADR-A001 | Product license, privacy, English-only policy, device matrix | G0 |
-| ADR-A002 | Navigation 3 typed/restorable stack | G2 |
-| ADR-A003 | JSON evolution, Room schema, files, and migration | G3 |
+| ADR-A002 | Navigation 3 deep links, feature ownership, deleted-ID recovery, and system process restoration | G2 |
+| ADR-A003 | Post-schema-2 JSON evolution, Room schema, files, recovery/export, backup, and migration | G3 |
 | ADR-A004 | Geographic renderer and offline map format | G4 |
 | ADR-A005 | Dataset catalog and acquisition | G4 |
 | ADR-A006 | Compute contract and scheduler | G5/G6 |
@@ -794,12 +817,12 @@ Until measured targets exist, absolute requirements are:
 ## 26. Incremental path from the current foundation
 
 1. maintain the English-only source guard and extend it to new resource types;
-2. preserve `MainActivity` as a thin host and move dependency assembly to the composition root;
-3. split the application-wide ViewModel into feature contracts as flows grow;
-4. harden Navigation 3 with typed/restorable routes;
-5. introduce canonical unit value objects and receiver/scenario/study models;
-6. add persistence migration/fault tests before schema 2;
-7. complete site/sector/receiver CRUD;
+2. preserve `MainActivity` as a thin host and move dependency assembly into an approved composition-root/DI policy;
+3. split the application-wide ViewModel into feature contracts and introduce durable job/effect/problem contracts as flows grow;
+4. complete deep-link/deleted-ID handling and prove navigation plus durable selection through true process death, rotation, accessibility, and the device matrix;
+5. complete project lifecycle and independent network/site/sector/receiver edit/delete while staging remaining primitive-field migration;
+6. decide the long-term operational store, project asset ownership, recovery/export, backup, and multi-process policy beyond schema 2;
+7. add scenario, immutable study request/result, provenance, and artifact models;
 8. add a geographic map behind an adapter while retaining the technical Canvas only as a diagnostic if useful;
 9. add dataset inventory and DEM;
 10. extend the current Kotlin RF baseline to project-linked terrain-aware studies;

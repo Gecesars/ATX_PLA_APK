@@ -29,7 +29,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.gecesars.atxplan.domain.model.PlannerProject
 import com.gecesars.atxplan.ui.AppUiState
 import com.gecesars.atxplan.ui.components.MetricCard
 import com.gecesars.atxplan.ui.components.ScreenHeader
@@ -60,7 +59,7 @@ fun DashboardScreen(
             )
         }
         item {
-            HeroCard(project = uiState.selectedProject, onOpenStudies = onOpenStudies)
+            HeroCard(uiState = uiState, onOpenStudies = onOpenStudies)
         }
         if (uiState.isLoading) {
             item {
@@ -136,7 +135,25 @@ fun DashboardScreen(
 }
 
 @Composable
-private fun HeroCard(project: PlannerProject?, onOpenStudies: () -> Unit) {
+private fun HeroCard(uiState: AppUiState, onOpenStudies: () -> Unit) {
+    val project = uiState.selectedProject
+    val title = when {
+        uiState.isLoading -> "Opening Local Catalog"
+        uiState.storageProblem != null -> "Catalog Needs Attention"
+        project != null -> project.name
+        else -> "Create Your First Project"
+    }
+    val detail = when {
+        uiState.isLoading -> "Reading validated project data from private device storage."
+        uiState.storageProblem != null ->
+            "Project changes are blocked until the local catalog is recovered."
+        project != null -> listOf(
+            countLabel(project.networks.size, "network", "networks"),
+            countLabel(project.sites.size, "site", "sites"),
+            countLabel(project.receivers.size, "receiver", "receivers"),
+        ).joinToString(" • ")
+        else -> "The local catalog is ready for networks, sites, and receivers."
+    }
     Card(
         colors = CardDefaults.cardColors(containerColor = AtxNavy),
         shape = RoundedCornerShape(26.dp),
@@ -156,18 +173,12 @@ private fun HeroCard(project: PlannerProject?, onOpenStudies: () -> Unit) {
                 )
             }
             Text(
-                text = project?.name ?: "Create Your First Project",
+                text = title,
                 color = Color.White,
                 style = MaterialTheme.typography.headlineMedium,
             )
             Text(
-                text = project?.let {
-                    listOf(
-                        countLabel(it.networks.size, "network", "networks"),
-                        countLabel(it.sites.size, "site", "sites"),
-                        countLabel(it.studies.size, "study", "studies"),
-                    ).joinToString(" • ")
-                } ?: "The local catalog is ready for networks, sites, and scenarios.",
+                text = detail,
                 color = Color.White.copy(alpha = 0.78f),
                 style = MaterialTheme.typography.bodyLarge,
             )
@@ -221,7 +232,7 @@ private fun FoundationStatusCard() {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text("Android Foundation", style = MaterialTheme.typography.titleMedium)
-                StatusPill("Stage 0", StatusTone.INFO)
+                StatusPill("Stage 1", StatusTone.INFO)
             }
             Text(
                 "Atomic persistence, adaptive navigation, typed RF models, and unit-testable calculations.",

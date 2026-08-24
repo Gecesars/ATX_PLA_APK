@@ -14,12 +14,13 @@ The repository now provides a working foundation slice:
 
 1. launch an adaptive Compose shell;
 2. navigate among Dashboard, Projects, Engineering Map, Studies, and Data Catalog with Navigation 3;
-3. load a schema-versioned project catalog from private storage;
+3. load or explicitly migrate a schema-versioned project catalog from private storage;
 4. create and select local projects;
-5. inspect a synthetic demonstration project with one RF network, three sites, sectors, and study summaries;
-6. inspect site positions and active-sector azimuths on a local technical canvas;
-7. calculate a free-space link budget locally;
-8. run unit tests and a Compose instrumented navigation test.
+5. add a linked RF network, transmitter site/sector, and receiver through one validated, transactional Add RF Path flow;
+6. inspect a synthetic demonstration project with one RF network, three sites, sectors, and study summaries;
+7. inspect site positions and active-sector azimuths on a local technical canvas;
+8. calculate a free-space link budget locally;
+9. run JVM and Android tests for the delivered domain, persistence, UDF, form, and navigation behavior.
 
 This slice is not yet the mobile engineering MVP defined later in the roadmap. It has no cartographic basemap, terrain profile, antenna pattern, persisted study result, raster coverage, desktop-project interchange, or advanced propagation engine.
 
@@ -42,24 +43,24 @@ A feature delivered on desktop is not delivered on Android. A screen or enum alo
 | Android compatibility | Delivered | `minSdk 23`, `targetSdk 36`, `compileSdk 36.1`; Java 17 bytecode. | A formal physical-device support matrix is still required. |
 | Build configuration | Foundation | Gradle 9.3.1, AGP 9.1.1, Kotlin 2.2.10, Compose BOM 2026.04.01, lint configured to abort on errors. | Release shrinking and signing are not configured. |
 | CI | Delivered | GitHub Actions builds unit tests, lint, debug APK, and debug test APK with JDK 21 and SDK 36.1. | Connected instrumented tests are not run by that workflow. |
-| Local build evidence | Delivered | Debug APK and test APK exist; latest lint report has 0 errors and 9 dependency-version warnings. | This is development evidence, not a signed release gate. |
+| Local build evidence | Delivered | Debug APK and test APK exist; latest lint report has 0 errors, with only dependency and toolchain update advisories. | This is development evidence, not a signed release gate. |
 | Compose shell | Delivered | `MainActivity` hosts `AtxPlanTheme` and `AtxPlanApp`; Material 3 and edge-to-edge are active. | The product still needs complete accessibility, localization enforcement, and process-restoration coverage. |
 | Adaptive UI | Delivered | Bottom navigation is used on compact widths and a navigation rail at 900 dp or wider. | Only the top-level shell is adaptive; feature layouts need broader device testing. |
-| Navigation 3 | Foundation | Navigation 3 `NavDisplay` drives five top-level destinations. | Routes use an in-memory `Any` back stack; saved-state restoration, deep links, and feature-owned typed routes are not delivered. |
-| UDF/ViewModel | Foundation | `AppUiState`, `StateFlow`, `AppViewModel`, lifecycle-aware collection, callbacks, notices, and storage-error rollback exist. | There are no explicit `Action`/`Effect` contracts, use-case layer, injected dispatchers, or ViewModel tests. |
+| Navigation 3 | Foundation | `NavDisplay` uses serializable stable-ID `AtxRoute` keys, a saveable typed back stack, bounded fallback for unknown routes, and a nested RF editor; saved-instance-state restoration is tested. | Deep links, deleted-ID recovery UX, adaptive list/detail, and true process-death/rotation testing across supported devices are not complete. |
+| UDF/ViewModel | Foundation | Explicit actions/effects, structured problem/recovery values, injected use cases/dispatchers, serialized catalog mutation, calculation cancellation, and ViewModel transition tests are implemented. | Feature-level ViewModels, cross-instance catalog observation, DI/scoping policy, durable jobs, diagnostics/observability, accessibility, and system recovery remain. |
 | Project repository | Delivered | `ProjectRepository` is implemented by `FileProjectRepository` in private app storage. | Only one catalog file is supported; there is no Room database or portable project container. |
-| Atomic JSON catalog | Delivered | Typed kotlinx.serialization JSON, schema 1, `AtomicFile`, `fd.sync`, 5 MiB limit, future-schema rejection, and preservation of invalid content. | Atomicity covers each individual write; saves are not serialized, and migration/concurrency/failure-injection tests do not exist yet. |
-| Project operations | Delivered | Load, create, select, save, optimistic update, and rollback on save failure. | Rename, delete, duplicate, archive, import, and entity CRUD are not delivered; overlapping optimistic saves are not coordinated. |
-| Domain model | Foundation | Kotlin models cover catalog, project, network, RF system, site, sector, geographic point, and study summary with validation. | Receiver, scenario snapshot, dataset, artifact, full study request/result, and unit value types are not modeled yet. |
+| Transactional JSON catalog | Delivered baseline | Strict UTF-8 kotlinx.serialization JSON, schema 2, explicit v1 migration, `AtomicFile`, `fd.sync`, 5 MiB limit, and a shared mutex protect complete read-transform-write mutation. Tests preserve original bytes across migration failure, corruption, future schema, malformed UTF-8, size limits, failed writes, and concurrent instances. | Recovery/export UX, multi-process policy, Android storage-exhaustion/interruption evidence, project assets, backup, and the long-term JSON-versus-Room decision remain. |
+| Project operations | Foundation | Load, create, select, and transactional mutation are delivered; Add RF Path persists one linked network/site/sector/receiver without exposing partial state. | Rename, delete, duplicate, archive, import, independent RF-entity CRUD, and impact-aware linked deletion are not delivered. |
+| Domain model | Foundation | Kotlin models now include serializable engineering value types, typed coordinate, receiver/CPE, and receiver/sector network references with duplicate/referential validation. | Existing legacy primitive entity fields still need staged migration; scenario snapshots, datasets, artifacts, and full study request/results remain. |
 | Demonstration data | Delivered | Missing storage is seeded with a clearly synthetic São Paulo FM project: one network, three sites, one sector per site, and two study summaries. | It is demonstration data and must not be used as an engineering reference. |
 | Dashboard | Delivered | Shows selected project, local project/site/study counts, foundation status, and shortcuts. | It summarizes catalog data only. |
-| Projects screen | Delivered | Lists, selects, and creates projects with name/customer validation; shows schema and selected-project details. | It does not edit project entities or lifecycle operations beyond create/select. |
+| Projects and Add RF Path | Foundation | Projects lists/selects/creates projects and opens a saveable nested editor that validates and transactionally adds one selected-system RF network, transmitter site/sector, and receiver. | This is one combined create slice, not complete independent RF-entity editing or project lifecycle CRUD. |
 | Engineering Map screen | Foundation | Offline Compose Canvas plots local site positions and active-sector azimuth rays with semantic description. | It is not a geographic map: no projection, basemap, pan/zoom, editing, scale, tiles, attribution, or DEM. |
 | Studies screen | Delivered | Validated form executes the local free-space link calculation and renders explicit result terms. | Result remains in ViewModel memory and is not tied to project endpoints or persisted as a study artifact. |
 | Data Catalog screen | Foundation | Shows an honest static capability inventory and planned gates. | It does not install, inspect, download, or remove datasets. |
-| RF calculator | Delivered | Pure Kotlin computes FSPL/P.525, EIRP, received power, fade margin, midpoint first Fresnel radius, thermal noise floor, and SNR. | No geodesic path, terrain, curvature, clutter, antenna pattern, diffraction, fading variability, or model edition manifest. |
-| Unit tests | Delivered | Nine passing tests cover project validation/serialization, RF formulas/invalid inputs, and an English-only production-source guard. | Repository atomicity/concurrency, ViewModel state, navigation, and screen forms lack unit coverage. |
-| Instrumented test | Delivered | One passing Compose test on Android 16 opens Studies from Dashboard and verifies the link-budget entry point. | It is a smoke test only and is not part of current CI. |
+| RF calculator | Delivered | Pure Kotlin computes FSPL/P.525, EIRP, received power, fade margin, midpoint first Fresnel radius, thermal noise floor, and SNR; each in-memory result carries explicit model, implementation, execution, data-source, methodology, and limitation provenance. | No geodesic path, terrain, curvature, clutter, antenna pattern, diffraction, fading variability, or persisted execution manifest. |
+| JVM tests | Delivered baseline | Automated suites cover model/value boundaries, references and JSON round trips, RF formulas, schema migration/storage faults/concurrency, application use cases, form parsing, ViewModel transitions, and English-only source hygiene. | Property/numerical golden, accessibility, performance, export, and complete system-flow coverage remain. |
+| Instrumented tests | Delivered baseline | A 10-test suite passes on a physical Android 16 device, exercising supported, unknown, and nested RF-editor route restoration, draft-discard protection, accessibility semantics, and create-project -> persist-RF-path -> Activity-recreation behavior. | True process termination, broader accessibility automation, a formal physical-device matrix, and CI execution remain. |
 | Backup policy | Delivered | Application backup is disabled in the manifest. | A selective backup/restore policy must be designed before user datasets or portable projects are introduced. |
 | Product language | Delivered baseline | Production UI, domain/storage diagnostics, demo content, tests, and these documents are in English; `EnglishOnlySourceTest` guards common Portuguese source terms. | The blacklist is a regression aid, not complete linguistic proof; new resource/file types must enter the guard. |
 
@@ -68,7 +69,8 @@ A feature delivered on desktop is not delivered on Android. A screen or enum alo
 | Screen | Current behavior | Status | Next boundary |
 |---|---|---|---|
 | **Dashboard** | Project metrics, offline message, quick navigation, selected-project summary. | Delivered | Persisted jobs, diagnostics, and real dataset availability. |
-| **Projects** | Catalog list, project selection, create dialog, network/study summary. | Delivered | Full project and RF entity CRUD, migration, delete/duplicate/archive. |
+| **Projects** | Catalog list, selection/create dialog, schema/details, and entry to the nested Add RF Path editor. | Foundation | Full project lifecycle and independent network/site/sector/receiver CRUD. |
+| **Add RF Path** | Validated saveable draft creates one linked selected-system RF network, site/sector, and receiver through one repository transaction. | Delivered bounded slice | Edit/delete, reusable profiles, process-death end-to-end proof, and study endpoint selection. |
 | **Engineering Map** | Local coordinate normalization, site markers, active-sector azimuth strokes, site list. | Foundation | Real map adapter, geographic camera, offline source, editing, attribution, DEM. |
 | **Studies** | Manual RF parameters and deterministic free-space link results. | Delivered | Endpoint selection, terrain profile, LOS, curvature, persisted study request/result. |
 | **Data Catalog** | Static matrix of delivered and planned capabilities. | Foundation | Dataset inventory, storage budget, import/download, validation, and removal. |
@@ -100,10 +102,10 @@ Roadmap phases `F0` through `F8` are defined in `ROADMAP.md`.
 | Reference capability | Android status | Priority | Target | Acceptance boundary |
 |---|---:|---:|---:|---|
 | Adaptive project-oriented shell | Delivered | P0 | F0 | Five areas render on compact and expanded layouts. |
-| Navigation 3 top-level switching | Foundation | P0 | F1 | Add restorable typed routes, process-death tests, and internal destination contracts. |
-| UDF/ViewModel/repository boundary | Foundation | P0 | F1 | Add explicit actions/effects, use cases, DI, dispatchers, and ViewModel tests. |
-| Local project catalog | Delivered | P0 | F0/F2 | Schema-1 atomic JSON catalog loads, creates, selects, and saves projects. |
-| Versioned durable persistence | Foundation | P0 | F2 | Add tested migrations, project assets, jobs, and a database/file ownership model. |
+| Navigation 3 top-level switching | Foundation | P0 | F1 | Typed stable-ID save/restore and nested editor exist; add deep links, deleted-ID UX, true process-death/device flows, and feature ownership. |
+| UDF/ViewModel/repository boundary | Foundation | P0 | F1 | Explicit actions/effects, structured recovery, use cases, injected dispatchers, transactional mutation, and tests exist; split features and define DI/jobs/observability. |
+| Local project catalog | Delivered baseline | P0 | F0/F2 | Schema-2 transactional JSON loads, explicitly migrates v1, creates/selects, and persists catalog mutations. |
+| Versioned durable persistence | Foundation | P0 | F2 | Migration/corruption/UTF-8/concurrency tests exist; add recovery/export, assets, jobs, backup, multi-process policy, and a database/file ownership decision. |
 | Project lifecycle | Foundation | P0 | F2 | Add rename, duplicate, archive, delete, recovery, and consistency checks. |
 | Desktop `.atxp` interchange | Blocked | P0 | F6 | Approve schema contract, capability negotiation, fixtures, and lossless handling of unsupported content. |
 | Scenarios and immutable snapshots | Planned | P1 | F5 | Recalculation creates a new execution without overwriting source inputs/results. |
@@ -115,10 +117,10 @@ Roadmap phases `F0` through `F8` are defined in `ROADMAP.md`.
 
 | Reference capability | Android status | Priority | Target | Acceptance boundary |
 |---|---:|---:|---:|---|
-| RF system/network model | Foundation | P1 | F2 | Existing typed model becomes editable and persisted with shared profiles. |
-| Sites | Foundation | P0 | F2 | Existing validated model gains create/edit/delete and map placement. |
-| Sectors | Foundation | P0 | F2 | Existing validated RF fields gain CRUD, typed units, and antenna reference. |
-| Receivers/CPE | Planned | P0 | F2 | Model, CRUD, thresholds, losses, gain, height, and link endpoint selection. |
+| RF system/network model | Foundation | P1 | F2 | Combined Add RF Path creates and persists one network; independent CRUD and shared profiles remain. |
+| Sites | Foundation | P0 | F2 | Combined Add RF Path creates one validated transmitter site; edit/delete and map placement remain. |
+| Sectors | Foundation | P0 | F2 | Combined creation uses typed command values and persists an explicit network reference; independent CRUD, full entity-type migration, and antenna reference remain. |
+| Receivers/CPE | Foundation | P0 | F2 | Validated typed model, network reference, thresholds, losses, gain, height, JSON round trip, and combined creation are delivered; independent CRUD and link-study endpoint selection remain. |
 | Study summaries | Foundation | P0 | F2/F4 | Existing enum/summary becomes a versioned request, execution, result, and artifact. |
 | Band, technology, channel, and noise profiles | Planned | P1 | F5 | Versioned schema with no unexplained defaults. |
 | LTE/5G, MIMO, and modulation tables | Planned | P2 | F7 | Formula/table provenance and fixtures per edition/vendor. |
@@ -146,7 +148,7 @@ Roadmap phases `F0` through `F8` are defined in `ROADMAP.md`.
 
 | Reference capability | Android status | Priority | Target | Acceptance boundary |
 |---|---:|---:|---:|---|
-| Sector azimuth and electrical tilt fields | Foundation | P0 | F2/F4 | Existing fields gain canonical value types and directional-gain use. |
+| Sector azimuth and electrical tilt fields | Foundation | P0 | F2/F4 | Canonical command value types and boundary tests exist; legacy persisted sector primitives and directional-gain use remain. |
 | HRP/VRP model | Planned | P0 | F4 | Canonical representation, cyclic horizontal interpolation, vertical convention, and fixtures. |
 | PAT/PRN/CSV/TXT/JSON import | Planned | P1 | F4/F6 | Defensive parser, preview, normalization report, and corpus. |
 | Antenna library | Planned | P1 | F4 | Versioned source/hash, tags, search, and TX/RX association. |
@@ -228,7 +230,7 @@ Roadmap phases `F0` through `F8` are defined in `ROADMAP.md`.
 
 ```mermaid
 flowchart TD
-    CURRENT[Current Compose/Nav3/JSON/RF foundation] --> HARDEN[Restoration, UDF contracts, migrations]
+    CURRENT[Current Compose/typed Nav3/schema-2/Add RF Path/RF foundation] --> HARDEN[System recovery, accessibility, jobs, and store decisions]
     HARDEN --> PROJECT[Full project and RF entity lifecycle]
     CURRENT --> MAPSPIKE[Geographic map adapter]
     PROJECT --> MAP[Editable geographic project]
@@ -265,8 +267,8 @@ Until that gate, permitted labels are **supported on Android**, **partial import
 |---|---|---|
 | Product license and public distribution policy | Blocked | License file, third-party inventory, data policy, and owner approval. |
 | Physical-device support matrix | Planned | Minimum, reference, and high-capability devices across supported Android versions. |
-| Navigation restoration contract | Planned | Typed routes, saved back stack, process-death behavior, and tests. |
-| JSON catalog evolution versus Room | Planned | Persistence ADR, migration policy, ownership model, and transition fixtures. |
+| Navigation restoration contract | Foundation | Stable-ID typed save/restore and nested-route tests exist; decide deep links/feature ownership and prove deleted-ID, process-death, rotation, and device flows. |
+| JSON catalog evolution versus Room | Foundation | Schema 2 and explicit v1 migration exist; approve long-term store, asset ownership, recovery/export, backup, multi-process, and future-schema policy. |
 | Android ↔ desktop `.atxp` contract | Blocked | Container/schema contract, read/write matrix, migrations, and fixtures. |
 | Geographic renderer and offline map format | Planned | Comparative spike, license review, and lifecycle/performance report. |
 | Heavy-compute backend | Planned | Kotlin/native benchmark and optional-service contract. |
@@ -275,7 +277,7 @@ Until that gate, permitted labels are **supported on Android**, **partial import
 ## 11. Maintenance rules
 
 - Change a status only in the same change set that adds or removes its evidence.
-- Link every delivered capability to tests and a completed roadmap gate.
+- Link every delivered capability to tests and its roadmap gate state; a bounded delivered slice must not imply that the full gate is complete.
 - Record irreversible or high-cost decisions in ADRs before adding central dependencies.
 - Keep desktop and Android status separate.
 - Do not promote a screen, enum, mock, or dependency to Delivered unless the end-to-end behavior exists.

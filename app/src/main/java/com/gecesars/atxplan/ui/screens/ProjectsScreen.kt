@@ -24,6 +24,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -31,6 +32,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,6 +40,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -56,8 +62,22 @@ fun ProjectsScreen(
     uiState: AppUiState,
     onCreateProject: (String, String) -> Unit,
     onSelectProject: (String) -> Unit,
+    onAddRfPath: (String) -> Unit,
 ) {
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
+    var projectCountBeforeCreate by rememberSaveable { mutableStateOf<Int?>(null) }
+    var observedCreateSave by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(uiState.isSavingCatalog, uiState.catalog.projects.size) {
+        val previousCount = projectCountBeforeCreate ?: return@LaunchedEffect
+        if (uiState.isSavingCatalog) {
+            observedCreateSave = true
+        } else if (observedCreateSave) {
+            if (uiState.catalog.projects.size > previousCount) showCreateDialog = false
+            projectCountBeforeCreate = null
+            observedCreateSave = false
+        }
+    }
     Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
@@ -80,46 +100,80 @@ fun ProjectsScreen(
                         projectCountLabel(uiState.catalog.projects.size, "workspace", "workspaces"),
                         style = MaterialTheme.typography.titleMedium,
                     )
-                    StatusPill("Schema 1", StatusTone.INFO)
+                    StatusPill(
+                        label = if (uiState.isSavingCatalog) {
+                            "Saving Locally"
+                        } else {
+                            "Schema ${uiState.catalog.schemaVersion}"
+                        },
+                        tone = StatusTone.INFO,
+                        modifier = if (uiState.isSavingCatalog) {
+                            Modifier.semantics { liveRegion = LiveRegionMode.Polite }
+                        } else {
+                            Modifier
+                        },
+                    )
                 }
             }
-            items(uiState.catalog.projects, key = PlannerProject::id) { project ->
-                ProjectCard(
-                    project = project,
-                    selected = uiState.selectedProject?.id == project.id,
-                    onClick = { onSelectProject(project.id) },
-                )
+            if (uiState.isLoading) {
+                item { LoadingProjectsCard() }
+            } else {
+                items(uiState.catalog.projects, key = PlannerProject::id) { project ->
+                    ProjectCard(
+                        project = project,
+                        selected = uiState.selectedProject?.id == project.id,
+                        enabled = uiState.isCatalogWritable && !uiState.isSavingCatalog,
+                        onClick = { onSelectProject(project.id) },
+                    )
+                }
             }
-            if (uiState.catalog.projects.isEmpty()) {
+            if (!uiState.isLoading && uiState.catalog.projects.isEmpty() && uiState.isCatalogWritable) {
                 item { EmptyProjectsCard() }
             }
             uiState.selectedProject?.let { selected ->
-                item { SelectedProjectDetails(selected) }
+                item {
+                    SelectedProjectDetails(
+                        project = selected,
+                        canEdit = uiState.isCatalogWritable && !uiState.isSavingCatalog,
+                        onAddRfPath = { onAddRfPath(selected.id) },
+                    )
+                }
             }
         }
-        ExtendedFloatingActionButton(
-            onClick = { showCreateDialog = true },
-            modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp),
-            icon = { Icon(Icons.Outlined.Add, contentDescription = null) },
-            text = { Text("New Project") },
-        )
+        if (uiState.isCatalogWritable && !uiState.isSavingCatalog) {
+            ExtendedFloatingActionButton(
+                onClick = { showCreateDialog = true },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(20.dp)
+                    .testTag("new_project_button"),
+                icon = { Icon(Icons.Outlined.Add, contentDescription = null) },
+                text = { Text("New Project") },
+            )
+        }
     }
 
     if (showCreateDialog) {
         CreateProjectDialog(
+            isSubmitting = projectCountBeforeCreate != null,
             onDismiss = { showCreateDialog = false },
             onConfirm = { name, customer ->
+                projectCountBeforeCreate = uiState.catalog.projects.size
                 onCreateProject(name, customer)
-                showCreateDialog = false
             },
         )
     }
 }
 
 @Composable
-private fun ProjectCard(project: PlannerProject, selected: Boolean, onClick: () -> Unit) {
+private fun ProjectCard(
+    project: PlannerProject,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
     Card(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        modifier = Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = onClick),
         colors = CardDefaults.cardColors(
             containerColor = if (selected) {
                 MaterialTheme.colorScheme.primaryContainer
@@ -178,7 +232,25 @@ private fun ProjectCard(project: PlannerProject, selected: Boolean, onClick: () 
 }
 
 @Composable
-private fun SelectedProjectDetails(project: PlannerProject) {
+private fun LoadingProjectsCard() {
+    Card(shape = RoundedCornerShape(20.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(24.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CircularProgressIndicator()
+            Text("Loading local projects")
+        }
+    }
+}
+
+@Composable
+private fun SelectedProjectDetails(
+    project: PlannerProject,
+    canEdit: Boolean,
+    onAddRfPath: () -> Unit,
+) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Spacer(Modifier.height(4.dp))
         Text("Selected Project", style = MaterialTheme.typography.titleLarge)
@@ -214,6 +286,22 @@ private fun SelectedProjectDetails(project: PlannerProject) {
                         }
                     }
                 }
+                Text("RF Assets", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "${projectCountLabel(project.sites.size, "transmitter site", "transmitter sites")} and " +
+                        "${projectCountLabel(project.receivers.size, "receiver", "receivers")} are linked " +
+                        "to this project.",
+                    modifier = Modifier.testTag("rf_asset_summary"),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Button(
+                    onClick = onAddRfPath,
+                    enabled = canEdit,
+                    modifier = Modifier.fillMaxWidth().testTag("add_rf_path_button"),
+                ) {
+                    Icon(Icons.Outlined.Add, contentDescription = null)
+                    Text("Add RF Path")
+                }
                 Text("Studies", style = MaterialTheme.typography.titleMedium)
                 Text(
                     "${projectCountLabel(project.studies.size, "study", "studies")} in the catalog; " +
@@ -244,7 +332,11 @@ private fun EmptyProjectsCard() {
 }
 
 @Composable
-private fun CreateProjectDialog(onDismiss: () -> Unit, onConfirm: (String, String) -> Unit) {
+private fun CreateProjectDialog(
+    isSubmitting: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: (String, String) -> Unit,
+) {
     var name by rememberSaveable { mutableStateOf("") }
     var customer by rememberSaveable { mutableStateOf("") }
     val valid = name.trim().length in 2..80 && customer.trim().length <= 80
@@ -260,7 +352,7 @@ private fun CreateProjectDialog(onDismiss: () -> Unit, onConfirm: (String, Strin
                     onValueChange = { name = it.take(80) },
                     label = { Text("Project name") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().testTag("project_name_field"),
                 )
                 OutlinedTextField(
                     value = customer,
@@ -272,7 +364,13 @@ private fun CreateProjectDialog(onDismiss: () -> Unit, onConfirm: (String, Strin
             }
         },
         confirmButton = {
-            Button(onClick = { onConfirm(name, customer) }, enabled = valid) { Text("Create") }
+            Button(
+                onClick = { onConfirm(name, customer) },
+                enabled = valid && !isSubmitting,
+                modifier = Modifier.testTag("create_project_confirm"),
+            ) {
+                Text(if (isSubmitting) "Saving..." else "Create")
+            }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )

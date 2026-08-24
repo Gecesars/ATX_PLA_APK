@@ -39,6 +39,31 @@ class RfCalculatorTest {
     }
 
     @Test
+    fun `link budget carries explicit production calculation provenance`() {
+        val result = RfCalculator.linkBudget(
+            LinkBudgetInput(
+                frequencyMHz = 900.0,
+                distanceKm = 10.0,
+                transmitPowerDbm = 43.0,
+                transmitAntennaGainDbi = 15.0,
+                transmitLossDb = 2.0,
+                receiveAntennaGainDbi = 0.0,
+                receiveLossDb = 0.0,
+                additionalPathLossDb = 0.0,
+                receiverSensitivityDbm = -95.0,
+                bandwidthMHz = 10.0,
+                receiverNoiseFigureDb = 6.0,
+            ),
+        )
+
+        assertEquals(RfCalculator.PROVENANCE, result.provenance)
+        assertEquals("itu-r-p525-fspl", result.provenance.modelId)
+        assertEquals("P.525/FSPL", result.provenance.modelLabel)
+        assertEquals(LinkBudgetExecutionMode.LOCAL, result.provenance.executionMode)
+        assertEquals("No external datasets", result.provenance.dataProvenance)
+    }
+
+    @Test
     fun `invalid physical inputs are rejected instead of coerced`() {
         assertThrows(IllegalArgumentException::class.java) {
             RfCalculator.freeSpacePathLossDb(frequencyMHz = 900.0, distanceKm = 0.0)
