@@ -91,9 +91,9 @@ fun StudiesScreen(
     val currentProvenance = result?.takeIf { resultMatchesCurrentInput }?.provenance
 
     LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
-        contentPadding = PaddingValues(top = 4.dp, bottom = 36.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
+        contentPadding = PaddingValues(top = 2.dp, bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         item {
             ScreenHeader(
@@ -222,8 +222,8 @@ private fun ProvenanceCard(provenance: LinkBudgetProvenance?) {
         shape = RoundedCornerShape(18.dp),
     ) {
         Column(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Outlined.Functions, contentDescription = null)
@@ -268,10 +268,10 @@ private fun executionModeLabel(mode: LinkBudgetExecutionMode): String = when (mo
 
 @Composable
 private fun ParameterSection(title: String, content: @Composable ColumnScope.() -> Unit) {
-    Card(shape = RoundedCornerShape(20.dp)) {
+    Card(shape = RoundedCornerShape(18.dp)) {
         Column(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(title, style = MaterialTheme.typography.titleMedium)
             content()
@@ -283,15 +283,15 @@ private fun ParameterSection(title: String, content: @Composable ColumnScope.() 
 private fun TwoFields(first: @Composable () -> Unit, second: @Composable () -> Unit) {
     val largeText = LocalDensity.current.fontScale >= 1.3f
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-        if (largeText || maxWidth < 420.dp) {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (largeText || maxWidth < 332.dp) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 first()
                 second()
             }
         } else {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Column(modifier = Modifier.weight(1f)) { first() }
                 Column(modifier = Modifier.weight(1f)) { second() }
@@ -329,36 +329,78 @@ private fun NumericField(
 
 @Composable
 private fun ResultSection(result: LinkBudgetResult) {
-    Column(
-        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text("Results", style = MaterialTheme.typography.titleLarge)
-        ResultMetric("Free-space path loss", result.freeSpacePathLossDb, "dB")
-        ResultMetric("EIRP", result.eirpDbm, "dBm")
-        ResultMetric("Received power", result.receivedPowerDbm, "dBm")
-        ResultMetric(
+    val metrics = listOf(
+        ResultMetricData("Free-space path loss", result.freeSpacePathLossDb, "dB"),
+        ResultMetricData("EIRP", result.eirpDbm, "dBm"),
+        ResultMetricData("Received power", result.receivedPowerDbm, "dBm"),
+        ResultMetricData(
             "Margin above sensitivity",
             result.fadeMarginDb,
             "dB",
             positive = result.fadeMarginDb >= 0.0,
-        )
-        ResultMetric("Midpoint Fresnel radius", result.firstFresnelMidpointRadiusM, "m")
-        ResultMetric("Noise floor", result.noiseFloorDbm, "dBm")
-        ResultMetric("Thermal SNR", result.signalToNoiseDb, "dB", positive = result.signalToNoiseDb >= 0.0)
+        ),
+        ResultMetricData("Midpoint Fresnel radius", result.firstFresnelMidpointRadiusM, "m"),
+        ResultMetricData("Noise floor", result.noiseFloorDbm, "dBm"),
+        ResultMetricData(
+            "Thermal SNR",
+            result.signalToNoiseDb,
+            "dB",
+            positive = result.signalToNoiseDb >= 0.0,
+        ),
+    )
+    val largeText = LocalDensity.current.fontScale >= 1.3f
+    BoxWithConstraints(
+        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+    ) {
+        val useCompactGrid = !largeText && maxWidth >= 352.dp
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Results", style = MaterialTheme.typography.titleLarge)
+            if (useCompactGrid) {
+                metrics.chunked(2).forEach { rowMetrics ->
+                    if (rowMetrics.size == 1) {
+                        ResultMetric(
+                            metric = rowMetrics.single(),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    } else {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            rowMetrics.forEach { metric ->
+                                ResultMetric(
+                                    metric = metric,
+                                    stacked = true,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                        }
+                    }
+                }
+            } else {
+                metrics.forEach { metric -> ResultMetric(metric = metric) }
+            }
+        }
     }
 }
 
+private data class ResultMetricData(
+    val label: String,
+    val value: Double,
+    val unit: String,
+    val positive: Boolean? = null,
+)
+
 @Composable
 private fun ResultMetric(
-    label: String,
-    value: Double,
-    unit: String,
-    positive: Boolean? = null,
+    metric: ResultMetricData,
+    modifier: Modifier = Modifier,
+    stacked: Boolean = false,
 ) {
     Card(
+        modifier = modifier,
         colors = CardDefaults.cardColors(
-            containerColor = when (positive) {
+            containerColor = when (metric.positive) {
                 true -> AtxSignal.copy(alpha = 0.12f)
                 false -> MaterialTheme.colorScheme.errorContainer
                 null -> MaterialTheme.colorScheme.surface
@@ -366,17 +408,31 @@ private fun ResultMetric(
         ),
         shape = RoundedCornerShape(16.dp),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(15.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(label, modifier = Modifier.weight(1f))
-            Text(
-                text = String.format(Locale.US, "%.2f %s", value, unit),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-            )
+        if (stacked) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(metric.label, style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    text = String.format(Locale.US, "%.2f %s", metric.value, metric.unit),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(metric.label, modifier = Modifier.weight(1f))
+                Text(
+                    text = String.format(Locale.US, "%.2f %s", metric.value, metric.unit),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
         }
     }
 }
@@ -391,7 +447,7 @@ private fun ErrorCard(message: String) {
             modifier = Modifier
                 .fillMaxWidth()
                 .semantics { liveRegion = LiveRegionMode.Polite }
-                .padding(14.dp),
+                .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
@@ -409,7 +465,7 @@ private fun StaleResultCard() {
     ) {
         Text(
             text = "Inputs changed. The previous result is hidden until you calculate again.",
-            modifier = Modifier.fillMaxWidth().padding(14.dp),
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
             color = MaterialTheme.colorScheme.onSecondaryContainer,
         )
     }

@@ -25,6 +25,7 @@ Sequencing principles:
 | Build and lint | Delivered | Debug/test APKs built; latest lint has 0 errors. | Dependency/toolchain update advisories and no signed release. |
 | CI | Delivered | GitHub Actions runs unit tests, lint, debug APK, and debug test APK builds. | Connected Android test is not in CI. |
 | Compose theme and shell | Delivered | Custom light/dark ATX theme, Material 3, edge-to-edge, compact bottom bar, expanded navigation rail. | Full accessibility, locale enforcement, and device-matrix validation. |
+| Compact phone information density | Delivered baseline | Scalable compact typography and shared components, 12–16 dp feature gutters, responsive metrics/fields/cards/map height, a short-height rail, and explicit 48 dp minimums on changed controls have manual evidence on one physical Android 16 phone: 1280 × 2772 pixels, density 520, portrait at font scales 1.15/1.30 and landscape at 1.15. | This is not a complete OEM/API/aspect-ratio/theme/font-scale/accessibility matrix; the app does not clamp or override system font scale. |
 | Navigation 3 | Foundation | Serializable stable-ID route keys, a saveable typed `NavBackStack`, bounded unknown-route fallback, and the nested RF-path editor have saved-instance-state restoration tests. | Deep links, deleted-ID recovery UX, adaptive list/detail, and true system process-death/rotation testing across the device matrix remain. |
 | UDF/ViewModel | Foundation | Explicit `AppUiAction`/`AppUiEffect`, structured problem/recovery values, injected use cases/dispatchers, serialized catalog mutations, cancellation-aware calculation, and ViewModel transition tests exist. | Feature-level ViewModels, cross-instance catalog observation, the DI/scoping decision, durable jobs, broader observability, accessibility, and system recovery evidence remain. |
 | Project persistence | Delivered baseline | Schema-2 strict UTF-8 JSON uses `AtomicFile`, `fd.sync`, a 5 MiB limit, explicit v1 migration, and a mutex-protected read-transform-write transaction. Tests cover migration, corruption, future schema, malformed UTF-8, failed writes, and concurrency. | Recovery/export UX, multi-process policy, storage-exhaustion evidence against Android storage, asset ownership, backup, and the long-term JSON-versus-Room decision remain. |
@@ -122,6 +123,7 @@ A gate cannot be satisfied by documentation alone. It requires executable artifa
 - API 23 minimum, target 36, compile 36.1;
 - Kotlin/Compose/Material 3 baseline and custom theme;
 - adaptive five-area shell;
+- compact responsive feature information density with bounded physical Android 16 portrait checks at approximately 394 dp and font scales 1.15/1.30 plus a baseline landscape check;
 - Navigation 3 dependency and top-level display;
 - atomic JSON repository and demonstration project;
 - free-space RF calculator;
@@ -163,7 +165,8 @@ A gate cannot be satisfied by documentation alone. It requires executable artifa
 - storage recovery banner, retry action, and one-time notice effect;
 - Navigation 3 `NavDisplay` with five top-level routes plus the nested RF editor;
 - compact/expanded navigation UI;
-- shared screen components and custom design tokens.
+- shared screen components and custom design tokens;
+- compact scalable typography, responsive Dashboard metric density, wrapping Projects cards, and 48 dp minimum targets for controls changed by the density pass.
 
 **Remaining scope:**
 
@@ -172,7 +175,7 @@ A gate cannot be satisfied by documentation alone. It requires executable artifa
 - deep links, deleted-ID recovery, adaptive list/detail, and route ownership contracts;
 - true process-death, rotation, background/foreground, and device-matrix system tests;
 - durable job model, sanitized diagnostics, correlation, and broader observability;
-- accessibility semantics, focus, contrast, and text-scaling validation;
+- accessibility semantics, focus, contrast, and text-scaling validation beyond the single reference device and its bounded orientation/font-scale checks;
 - maintain English-only UI and diagnostics as features are added.
 
 **Delivered component evidence:** serialized saved-instance-state restoration preserves stable top-level and nested RF-editor route IDs and safely handles unknown/malformed routes.
@@ -454,6 +457,7 @@ A gate cannot be satisfied by documentation alone. It requires executable artifa
 | MOB-021 | Compare Kotlin and native compute | Planned | P2 | MOB-020 | Numerical/performance report and ADR. |
 | MOB-022 | Specify optional compute service | Planned | P2 | proven demand | Contract, privacy, authentication, retention, local fallback. |
 | MOB-023 | Add connected test to release lane | Planned | P0 | device infrastructure | Android 16+ smoke result stored with release evidence. |
+| MOB-024 | Validate compact phone information density | Delivered baseline | P0 | MOB-003 | One physical Android 16 phone has portrait evidence at approximately 394 dp, density 520, and font scales 1.15/1.30 plus a baseline landscape check; the full device/accessibility matrix remains F8 work. |
 
 ## 7. Definition of Ready
 

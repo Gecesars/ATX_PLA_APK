@@ -1,11 +1,14 @@
 package com.gecesars.atxplan.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -27,7 +30,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.gecesars.atxplan.ui.AppUiState
 import com.gecesars.atxplan.ui.components.MetricCard
@@ -47,11 +52,10 @@ fun DashboardScreen(
     onOpenStudies: () -> Unit,
 ) {
     LazyColumn(
-        modifier = Modifier.padding(horizontal = 20.dp),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 32.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp),
+        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+        contentPadding = PaddingValues(top = 2.dp, bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        item { Spacer(Modifier.height(4.dp)) }
         item {
             ScreenHeader(
                 title = "Engineering Center",
@@ -71,40 +75,14 @@ fun DashboardScreen(
                 }
             }
         } else {
-            item {
-                val project = uiState.selectedProject
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    MetricCard(
-                        value = uiState.catalog.projects.size.toString(),
-                        label = countLabel(uiState.catalog.projects.size, "local project", "local projects"),
-                        modifier = Modifier.weight(1f),
-                        accent = AtxSignal,
-                    )
-                    MetricCard(
-                        value = (project?.sites?.size ?: 0).toString(),
-                        label = countLabel(project?.sites?.size ?: 0, "active site", "active sites"),
-                        modifier = Modifier.weight(1f),
-                        accent = AtxAmber,
-                    )
-                }
-            }
-            item {
-                MetricCard(
-                    value = (uiState.selectedProject?.studies?.size ?: 0).toString(),
-                    label = countLabel(
-                        uiState.selectedProject?.studies?.size ?: 0,
-                        "configured study",
-                        "configured studies",
-                    ),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
+            item { DashboardMetrics(uiState) }
         }
         item {
-            Text("Quick Actions", style = MaterialTheme.typography.titleLarge)
+            Text(
+                "Quick Actions",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
         }
         item {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -135,6 +113,67 @@ fun DashboardScreen(
 }
 
 @Composable
+private fun DashboardMetrics(uiState: AppUiState) {
+    val projectCount = uiState.catalog.projects.size
+    val siteCount = uiState.selectedProject?.sites?.size ?: 0
+    val studyCount = uiState.selectedProject?.studies?.size ?: 0
+    val fontScale = LocalDensity.current.fontScale
+
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val useSingleRow = maxWidth >= 350.dp && fontScale < 1.3f
+        if (useSingleRow) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                MetricCard(
+                    value = projectCount.toString(),
+                    label = pluralLabel(projectCount, "project", "projects"),
+                    modifier = Modifier.weight(1f),
+                    accent = AtxSignal,
+                )
+                MetricCard(
+                    value = siteCount.toString(),
+                    label = pluralLabel(siteCount, "site", "sites"),
+                    modifier = Modifier.weight(1f),
+                    accent = AtxAmber,
+                )
+                MetricCard(
+                    value = studyCount.toString(),
+                    label = pluralLabel(studyCount, "study", "studies"),
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    MetricCard(
+                        value = projectCount.toString(),
+                        label = pluralLabel(projectCount, "project", "projects"),
+                        modifier = Modifier.weight(1f),
+                        accent = AtxSignal,
+                    )
+                    MetricCard(
+                        value = siteCount.toString(),
+                        label = pluralLabel(siteCount, "site", "sites"),
+                        modifier = Modifier.weight(1f),
+                        accent = AtxAmber,
+                    )
+                }
+                MetricCard(
+                    value = studyCount.toString(),
+                    label = pluralLabel(studyCount, "study", "studies"),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun HeroCard(uiState: AppUiState, onOpenStudies: () -> Unit) {
     val project = uiState.selectedProject
     val title = when {
@@ -156,11 +195,11 @@ private fun HeroCard(uiState: AppUiState, onOpenStudies: () -> Unit) {
     }
     Card(
         colors = CardDefaults.cardColors(containerColor = AtxNavy),
-        shape = RoundedCornerShape(26.dp),
+        shape = RoundedCornerShape(20.dp),
     ) {
         Column(
-            modifier = Modifier.fillMaxWidth().padding(22.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(9.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Outlined.OfflineBolt, contentDescription = null, tint = AtxTealLight)
@@ -175,14 +214,19 @@ private fun HeroCard(uiState: AppUiState, onOpenStudies: () -> Unit) {
             Text(
                 text = title,
                 color = Color.White,
-                style = MaterialTheme.typography.headlineMedium,
+                style = MaterialTheme.typography.titleLarge,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
             )
             Text(
                 text = detail,
                 color = Color.White.copy(alpha = 0.78f),
                 style = MaterialTheme.typography.bodyLarge,
             )
-            Button(onClick = onOpenStudies) {
+            Button(
+                onClick = onOpenStudies,
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) {
                 Text("Run Quick Calculation")
             }
         }
@@ -198,20 +242,21 @@ private fun QuickAction(
 ) {
     OutlinedButton(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
+        modifier = Modifier.fillMaxWidth().heightIn(min = 58.dp),
+        shape = RoundedCornerShape(16.dp),
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             icon()
-            Spacer(Modifier.width(14.dp))
+            Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.Start) {
                 Text(title, style = MaterialTheme.typography.titleMedium)
                 Text(
                     subtitle,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -221,10 +266,10 @@ private fun QuickAction(
 
 @Composable
 private fun FoundationStatusCard() {
-    Card(shape = RoundedCornerShape(20.dp)) {
+    Card(shape = RoundedCornerShape(16.dp)) {
         Column(
-            modifier = Modifier.fillMaxWidth().padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.fillMaxWidth().padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -250,3 +295,6 @@ private fun FoundationStatusCard() {
 
 private fun countLabel(count: Int, singular: String, plural: String): String =
     "$count ${if (count == 1) singular else plural}"
+
+private fun pluralLabel(count: Int, singular: String, plural: String): String =
+    if (count == 1) singular else plural

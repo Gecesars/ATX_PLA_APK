@@ -4,6 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
@@ -34,6 +35,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -53,66 +55,85 @@ import kotlin.math.sin
 
 @Composable
 fun EngineeringMapScreen(project: PlannerProject?) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
-        contentPadding = PaddingValues(top = 4.dp, bottom = 32.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        item {
-            ScreenHeader(
-                title = "Offline Engineering Map",
-                subtitle = "Local geometry for checking positions and azimuths before downloading basemaps and terrain.",
-            )
-        }
-        item {
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                StatusPill("Sites", StatusTone.POSITIVE)
-                StatusPill("Azimuths", StatusTone.INFO)
-                StatusPill("Basemap: Stage 2", StatusTone.WARNING)
-            }
-        }
-        item {
-            TechnicalMapCard(sites = project?.sites.orEmpty())
-        }
-        item {
-            Text("Project Sites", style = MaterialTheme.typography.titleLarge)
-        }
-        if (project?.sites.isNullOrEmpty()) {
+    val sites = project?.sites.orEmpty()
+    val largeText = LocalDensity.current.fontScale >= 1.3f
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val useTwoColumnSiteRows = !largeText && maxWidth >= 600.dp
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
+            contentPadding = PaddingValues(top = 2.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
             item {
-                Card(shape = RoundedCornerShape(20.dp)) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth().padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        Icon(Icons.Outlined.LocationOn, contentDescription = null)
-                        Spacer(Modifier.height(8.dp))
-                        Text("The selected project does not have any sites yet.")
-                    }
+                ScreenHeader(
+                    title = project?.name ?: "No Project Selected",
+                    subtitle = "Offline local geometry for checking positions and azimuths before downloading basemaps and terrain.",
+                )
+            }
+            item {
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    StatusPill(
+                        "${sites.size} ${if (sites.size == 1) "Site" else "Sites"}",
+                        if (sites.isEmpty()) StatusTone.INFO else StatusTone.POSITIVE,
+                    )
+                    StatusPill("Azimuths", StatusTone.INFO)
+                    StatusPill("Basemap: Stage 2", StatusTone.WARNING)
                 }
             }
-        } else {
-            items(project!!.sites, key = RadioSite::id) { site -> SiteMapRow(site) }
-        }
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
-                shape = RoundedCornerShape(18.dp),
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+            item { TechnicalMapCard(sites = sites) }
+            item { Text("Project Sites", style = MaterialTheme.typography.titleLarge) }
+            if (sites.isEmpty()) {
+                item {
+                    Card(shape = RoundedCornerShape(18.dp)) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Icon(Icons.Outlined.LocationOn, contentDescription = null)
+                            Spacer(Modifier.height(6.dp))
+                            Text("The selected project does not have any sites yet.")
+                        }
+                    }
+                }
+            } else if (useTwoColumnSiteRows) {
+                items(sites.chunked(2), key = { row -> row.first().id }) { rowSites ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.Top,
+                    ) {
+                        rowSites.forEach { site ->
+                            SiteMapRow(site = site, modifier = Modifier.weight(1f))
+                        }
+                        if (rowSites.size == 1) Spacer(Modifier.weight(1f))
+                    }
+                }
+            } else {
+                items(sites, key = RadioSite::id) { site -> SiteMapRow(site) }
+            }
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                    ),
+                    shape = RoundedCornerShape(18.dp),
                 ) {
-                    Icon(Icons.Outlined.Layers, contentDescription = null)
-                    Text(
-                        "MapLibre, regional caching, DEM, clutter, and coverage layers are planned with explicit licensing, attribution, and disk budgets.",
-                        modifier = Modifier.weight(1f),
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Outlined.Layers, contentDescription = null)
+                        Text(
+                            "MapLibre, regional caching, DEM, clutter, and coverage layers are planned with explicit licensing, attribution, and disk budgets.",
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
                 }
             }
         }
@@ -121,111 +142,162 @@ fun EngineeringMapScreen(project: PlannerProject?) {
 
 @Composable
 private fun TechnicalMapCard(sites: List<RadioSite>) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(390.dp)
-            .clip(RoundedCornerShape(24.dp))
-            .background(AtxDarkBackground),
-    ) {
-        Canvas(
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val mapHeight = (maxWidth * 0.72f).coerceIn(260.dp, 390.dp)
+        Box(
             modifier = Modifier
-                .fillMaxSize()
-                .semantics {
-                    contentDescription = "Engineering map with ${sites.size} sites and their azimuths"
-                },
+                .fillMaxWidth()
+                .height(mapHeight)
+                .clip(RoundedCornerShape(20.dp))
+                .background(AtxDarkBackground),
         ) {
-            drawRect(AtxDarkBackground)
-            val gridColor = Color.White.copy(alpha = 0.08f)
-            for (index in 1 until 8) {
-                val x = size.width * index / 8f
-                val y = size.height * index / 8f
-                drawLine(gridColor, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1f)
-                drawLine(gridColor, Offset(0f, y), Offset(size.width, y), strokeWidth = 1f)
-            }
-            if (sites.isEmpty()) return@Canvas
-
-            val longitudes = sites.map { it.location.longitude }
-            val latitudes = sites.map { it.location.latitude }
-            val centerLon = (longitudes.min() + longitudes.max()) / 2.0
-            val centerLat = (latitudes.min() + latitudes.max()) / 2.0
-            val lonSpan = (longitudes.max() - longitudes.min()).coerceAtLeast(0.03) * 1.35
-            val latSpan = (latitudes.max() - latitudes.min()).coerceAtLeast(0.03) * 1.35
-            val minLon = centerLon - lonSpan / 2.0
-            val maxLat = centerLat + latSpan / 2.0
-
-            sites.forEachIndexed { index, site ->
-                val x = ((site.location.longitude - minLon) / lonSpan * size.width).toFloat()
-                val y = ((maxLat - site.location.latitude) / latSpan * size.height).toFloat()
-                val point = Offset(x, y)
-                val siteColor = when (index % 3) {
-                    0 -> AtxTealLight
-                    1 -> AtxAmber
-                    else -> AtxSignal
-                }
-                drawCircle(siteColor.copy(alpha = 0.08f), radius = 72f, center = point)
-                drawCircle(siteColor.copy(alpha = 0.28f), radius = 42f, center = point, style = Stroke(2.5f))
-                site.sectors.filter { it.active }.forEach { sector ->
-                    val angle = Math.toRadians(sector.azimuthDegrees)
-                    val end = Offset(
-                        x = point.x + sin(angle).toFloat() * 86f,
-                        y = point.y - cos(angle).toFloat() * 86f,
+            Canvas(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .semantics {
+                        contentDescription =
+                            "Engineering map with ${sites.size} sites and their azimuths"
+                    },
+            ) {
+                drawRect(AtxDarkBackground)
+                val gridColor = Color.White.copy(alpha = 0.08f)
+                val gridStrokeWidth = 0.5.dp.toPx()
+                for (index in 1 until 8) {
+                    val x = size.width * index / 8f
+                    val y = size.height * index / 8f
+                    drawLine(
+                        gridColor,
+                        Offset(x, 0f),
+                        Offset(x, size.height),
+                        strokeWidth = gridStrokeWidth,
                     )
                     drawLine(
-                        color = siteColor,
-                        start = point,
-                        end = end,
-                        strokeWidth = 7f,
-                        cap = StrokeCap.Round,
+                        gridColor,
+                        Offset(0f, y),
+                        Offset(size.width, y),
+                        strokeWidth = gridStrokeWidth,
                     )
                 }
-                drawCircle(Color.White, radius = 12f, center = point)
-                drawCircle(siteColor, radius = 7f, center = point)
+                if (sites.isEmpty()) return@Canvas
+
+                val longitudes = sites.map { it.location.longitude }
+                val latitudes = sites.map { it.location.latitude }
+                val centerLon = (longitudes.min() + longitudes.max()) / 2.0
+                val centerLat = (latitudes.min() + latitudes.max()) / 2.0
+                val lonSpan = (longitudes.max() - longitudes.min()).coerceAtLeast(0.03) * 1.35
+                val latSpan = (latitudes.max() - latitudes.min()).coerceAtLeast(0.03) * 1.35
+                val minLon = centerLon - lonSpan / 2.0
+                val maxLat = centerLat + latSpan / 2.0
+                val plotInsetHorizontal = 24.dp.toPx()
+                val plotInsetVertical = 52.dp.toPx()
+                val plotWidth = (size.width - 2f * plotInsetHorizontal).coerceAtLeast(1f)
+                val plotHeight = (size.height - 2f * plotInsetVertical).coerceAtLeast(1f)
+                val haloRadius = 22.dp.toPx()
+                val ringRadius = 13.dp.toPx()
+                val vectorLength = 28.dp.toPx()
+                val vectorStrokeWidth = 2.dp.toPx()
+                val centerOutlineRadius = 4.dp.toPx()
+                val centerRadius = 2.5.dp.toPx()
+
+                sites.forEachIndexed { index, site ->
+                    val x = plotInsetHorizontal +
+                        ((site.location.longitude - minLon) / lonSpan * plotWidth).toFloat()
+                    val y = plotInsetVertical +
+                        ((maxLat - site.location.latitude) / latSpan * plotHeight).toFloat()
+                    val point = Offset(x, y)
+                    val siteColor = when (index % 3) {
+                        0 -> AtxTealLight
+                        1 -> AtxAmber
+                        else -> AtxSignal
+                    }
+                    drawCircle(siteColor.copy(alpha = 0.08f), radius = haloRadius, center = point)
+                    drawCircle(
+                        siteColor.copy(alpha = 0.28f),
+                        radius = ringRadius,
+                        center = point,
+                        style = Stroke(1.dp.toPx()),
+                    )
+                    site.sectors.filter { it.active }.forEach { sector ->
+                        val angle = Math.toRadians(sector.azimuthDegrees)
+                        val end = Offset(
+                            x = point.x + sin(angle).toFloat() * vectorLength,
+                            y = point.y - cos(angle).toFloat() * vectorLength,
+                        )
+                        drawLine(
+                            color = siteColor,
+                            start = point,
+                            end = end,
+                            strokeWidth = vectorStrokeWidth,
+                            cap = StrokeCap.Round,
+                        )
+                    }
+                    drawCircle(Color.White, radius = centerOutlineRadius, center = point)
+                    drawCircle(siteColor, radius = centerRadius, center = point)
+                }
             }
-        }
-        StatusPill(
-            label = "LOCAL • NO TILES",
-            tone = StatusTone.INFO,
-            modifier = Modifier.align(Alignment.TopStart).padding(14.dp),
-        )
-        Row(
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(14.dp)
-                .background(Color.Black.copy(alpha = 0.48f), RoundedCornerShape(12.dp))
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(Modifier.size(8.dp).background(AtxTealLight, CircleShape))
-            Text(
-                "marker = site  •  line = azimuth",
-                color = Color.White,
-                style = MaterialTheme.typography.bodyMedium,
+            StatusPill(
+                label = "LOCAL • NO TILES",
+                tone = StatusTone.INFO,
+                modifier = Modifier.align(Alignment.TopStart).padding(12.dp),
             )
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(12.dp)
+                    .background(Color.Black.copy(alpha = 0.48f), RoundedCornerShape(12.dp))
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.size(8.dp).background(AtxTealLight, CircleShape))
+                Text(
+                    "marker = site  •  line = azimuth",
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun SiteMapRow(site: RadioSite) {
-    Card(shape = RoundedCornerShape(18.dp)) {
+private fun SiteMapRow(site: RadioSite, modifier: Modifier = Modifier) {
+    val activeSectors = site.sectors.count { it.active }
+    Card(modifier = modifier, shape = RoundedCornerShape(18.dp)) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Icon(
                 Icons.Outlined.LocationOn,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
             )
-            Column(modifier = Modifier.weight(1f)) {
-                Text(site.name, style = MaterialTheme.typography.titleMedium)
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        site.name,
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    Text(
+                        "$activeSectors of ${site.sectors.size} active",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
                 Text(
                     String.format(
                         Locale.US,
-                        "%.5f, %.5f",
+                        "Lat %.5f°  •  Lon %.5f°",
                         site.location.latitude,
                         site.location.longitude,
                     ),
@@ -233,11 +305,6 @@ private fun SiteMapRow(site: RadioSite) {
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
-            Text(
-                "${site.sectors.count { it.active }} TX",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold,
-            )
         }
     }
 }

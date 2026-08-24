@@ -9,6 +9,7 @@ The product, source-facing messages, and project documentation use English as th
 The foundation release delivers:
 
 - a responsive Jetpack Compose and Material 3 shell for phones and tablets;
+- a compact phone information-density pass with scalable typography, responsive feature layouts, denser cards and forms, and explicit 48 dp minimum targets for the controls changed by that pass;
 - Navigation 3 with five areas plus a typed, saveable nested RF-path editor route;
 - a local schema-2, strict UTF-8, size-limited project catalog with explicit v1 migration and transactional atomic mutation;
 - project creation/selection and a combined Add RF Path flow that persists one linked network, transmitter site/sector, and receiver;
@@ -41,6 +42,23 @@ This release does **not** claim to deliver a basemap, DEM, clutter, antenna patt
 | Android | `minSdk 23`, `targetSdk 36`, `compileSdk 36.1` |
 
 The file catalog is the first durable boundary, not the final solution for rasters and datasets. Room/SQLite, Storage Access Framework support, and immutable hash-addressed artifacts are introduced only after their data models stabilize.
+
+## Reference-device layout evidence
+
+The compact information-density implementation has bounded manual portrait and landscape checks on one physical Android 16 phone. The observed configuration was:
+
+| Property | Observed value |
+|---|---|
+| Physical display | 1280 × 2772 pixels |
+| Reported density | 520 dpi |
+| Approximate portrait width | 394 dp |
+| Baseline system font scale | 1.15 |
+| Additional fallback check | 1.30, restored to 1.15 after inspection |
+| Orientation checks | Portrait and landscape at 1.15; portrait at 1.30 |
+
+For the baseline portrait configuration, Dashboard and Projects use 16 dp content gutters while the field-heavy feature screens use compact 12 dp phone gutters. Shared headers, chips, cards, forms, the technical canvas, and vertical rhythm are denser. Dashboard uses one row for three metrics; Studies uses safe two-column input pairs; Map and Data use width-bounded responsive content. At font scale 1.30 on the same device, Dashboard changed to a two-plus-one metric arrangement and Studies changed to single-column fields without clipping labels, values, or units. In baseline landscape, the 720 dp width gate selected a navigation rail and the short-height mode kept all five destinations visible as accessible icons while wide feature content retained its responsive layout. Body text continues to use scalable `sp` units; the application does not replace, clamp, or override the system font scale. Engineering summaries and numerical facts are allowed to wrap, while ellipsis is limited to noncritical project/customer labels.
+
+This is evidence for one reference device, two orientations, and two bounded font-scale observations, not a support matrix. It does not establish coverage for other OEMs, Android versions, aspect ratios, tablets, foldables, extreme font scales, screen readers, switch access, or every light/dark-theme combination. Those checks remain release work.
 
 ## Local build on Windows
 

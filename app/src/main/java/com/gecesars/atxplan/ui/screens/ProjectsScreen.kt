@@ -2,16 +2,15 @@ package com.gecesars.atxplan.ui.screens
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -25,7 +24,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -78,12 +76,14 @@ fun ProjectsScreen(
             observedCreateSave = false
         }
     }
-    Box(modifier = Modifier.fillMaxSize()) {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
-            contentPadding = PaddingValues(top = 4.dp, bottom = 104.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .testTag("projects_list")
+            .padding(horizontal = 16.dp),
+        contentPadding = PaddingValues(top = 2.dp, bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
             item {
                 ScreenHeader(
                     title = "Local Projects",
@@ -91,10 +91,10 @@ fun ProjectsScreen(
                 )
             }
             item {
-                Row(
+                FlowRow(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     Text(
                         projectCountLabel(uiState.catalog.projects.size, "workspace", "workspaces"),
@@ -113,6 +113,24 @@ fun ProjectsScreen(
                             Modifier
                         },
                     )
+                }
+            }
+            if (uiState.isCatalogWritable && !uiState.isSavingCatalog) {
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                    ) {
+                        Button(
+                            onClick = { showCreateDialog = true },
+                            modifier = Modifier
+                                .heightIn(min = 48.dp)
+                                .testTag("new_project_button"),
+                        ) {
+                            Icon(Icons.Outlined.Add, contentDescription = null)
+                            Text("New Project")
+                        }
+                    }
                 }
             }
             if (uiState.isLoading) {
@@ -139,18 +157,6 @@ fun ProjectsScreen(
                     )
                 }
             }
-        }
-        if (uiState.isCatalogWritable && !uiState.isSavingCatalog) {
-            ExtendedFloatingActionButton(
-                onClick = { showCreateDialog = true },
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(20.dp)
-                    .testTag("new_project_button"),
-                icon = { Icon(Icons.Outlined.Add, contentDescription = null) },
-                text = { Text("New Project") },
-            )
-        }
     }
 
     if (showCreateDialog) {
@@ -181,24 +187,26 @@ private fun ProjectCard(
                 MaterialTheme.colorScheme.surface
             },
         ),
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(16.dp),
     ) {
         Column(
-            modifier = Modifier.fillMaxWidth().padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.fillMaxWidth().padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = project.name,
                         style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
                         text = project.customer.ifBlank { "No customer specified" },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
                 if (selected) {
@@ -209,7 +217,10 @@ private fun ProjectCard(
                     )
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
                 StatusPill(
                     projectCountLabel(project.networks.size, "network", "networks"),
                     StatusTone.NEUTRAL,
@@ -224,7 +235,7 @@ private fun ProjectCard(
             }
             Text(
                 "Updated ${formatDate(project.updatedAtEpochMillis)}",
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -233,13 +244,13 @@ private fun ProjectCard(
 
 @Composable
 private fun LoadingProjectsCard() {
-    Card(shape = RoundedCornerShape(20.dp)) {
+    Card(shape = RoundedCornerShape(16.dp)) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(24.dp),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            CircularProgressIndicator()
+            CircularProgressIndicator(modifier = Modifier.size(28.dp))
             Text("Loading local projects")
         }
     }
@@ -251,16 +262,23 @@ private fun SelectedProjectDetails(
     canEdit: Boolean,
     onAddRfPath: () -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Spacer(Modifier.height(4.dp))
-        Text("Selected Project", style = MaterialTheme.typography.titleLarge)
-        Card(shape = RoundedCornerShape(20.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            "Selected Project",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+        )
+        Card(shape = RoundedCornerShape(16.dp)) {
             Column(
-                modifier = Modifier.fillMaxWidth().padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxWidth().padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(9.dp),
             ) {
                 project.notes.takeIf(String::isNotBlank)?.let {
-                    Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
                 Text("Networks", style = MaterialTheme.typography.titleMedium)
                 if (project.networks.isEmpty()) {
@@ -282,7 +300,10 @@ private fun SelectedProjectDetails(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
-                            Text("${network.downlinkFrequencyMHz} MHz")
+                            Text(
+                                "${network.downlinkFrequencyMHz} MHz",
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
                         }
                     }
                 }
@@ -292,12 +313,16 @@ private fun SelectedProjectDetails(
                         "${projectCountLabel(project.receivers.size, "receiver", "receivers")} are linked " +
                         "to this project.",
                     modifier = Modifier.testTag("rf_asset_summary"),
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Button(
                     onClick = onAddRfPath,
                     enabled = canEdit,
-                    modifier = Modifier.fillMaxWidth().testTag("add_rf_path_button"),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .testTag("add_rf_path_button"),
                 ) {
                     Icon(Icons.Outlined.Add, contentDescription = null)
                     Text("Add RF Path")
@@ -306,6 +331,7 @@ private fun SelectedProjectDetails(
                 Text(
                     "${projectCountLabel(project.studies.size, "study", "studies")} in the catalog; " +
                         "large results will become immutable, hash-addressed artifacts in future stages.",
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -315,11 +341,11 @@ private fun SelectedProjectDetails(
 
 @Composable
 private fun EmptyProjectsCard() {
-    Card(shape = RoundedCornerShape(20.dp)) {
+    Card(shape = RoundedCornerShape(16.dp)) {
         Column(
-            modifier = Modifier.fillMaxWidth().padding(24.dp),
+            modifier = Modifier.fillMaxWidth().padding(18.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Icon(Icons.Outlined.CloudOff, contentDescription = null)
             Text("Your Catalog Is Empty", style = MaterialTheme.typography.titleMedium)
@@ -345,7 +371,7 @@ private fun CreateProjectDialog(
         icon = { Icon(Icons.Outlined.Science, contentDescription = null) },
         title = { Text("New Project") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("The workspace will be created in the app's private storage.")
                 OutlinedTextField(
                     value = name,
@@ -367,12 +393,19 @@ private fun CreateProjectDialog(
             Button(
                 onClick = { onConfirm(name, customer) },
                 enabled = valid && !isSubmitting,
-                modifier = Modifier.testTag("create_project_confirm"),
+                modifier = Modifier.heightIn(min = 48.dp).testTag("create_project_confirm"),
             ) {
                 Text(if (isSubmitting) "Saving..." else "Create")
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) {
+                Text("Cancel")
+            }
+        },
     )
 }
 

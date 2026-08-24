@@ -12,7 +12,7 @@ The mobile experience is task-oriented rather than a copy of the desktop window 
 
 The repository now provides a working foundation slice:
 
-1. launch an adaptive Compose shell;
+1. launch an adaptive Compose shell with a compact phone-density implementation for Dashboard and Projects;
 2. navigate among Dashboard, Projects, Engineering Map, Studies, and Data Catalog with Navigation 3;
 3. load or explicitly migrate a schema-versioned project catalog from private storage;
 4. create and select local projects;
@@ -45,7 +45,8 @@ A feature delivered on desktop is not delivered on Android. A screen or enum alo
 | CI | Delivered | GitHub Actions builds unit tests, lint, debug APK, and debug test APK with JDK 21 and SDK 36.1. | Connected instrumented tests are not run by that workflow. |
 | Local build evidence | Delivered | Debug APK and test APK exist; latest lint report has 0 errors, with only dependency and toolchain update advisories. | This is development evidence, not a signed release gate. |
 | Compose shell | Delivered | `MainActivity` hosts `AtxPlanTheme` and `AtxPlanApp`; Material 3 and edge-to-edge are active. | The product still needs complete accessibility, localization enforcement, and process-restoration coverage. |
-| Adaptive UI | Delivered | Bottom navigation is used on compact widths and a navigation rail at 900 dp or wider. | Only the top-level shell is adaptive; feature layouts need broader device testing. |
+| Adaptive UI | Delivered | Bottom navigation is used on compact widths and a navigation rail at 720 dp or wider. Rail labels/header collapse to five accessible icons below 520 dp height. Dashboard metrics, Studies fields/results, RF editor fields, the map canvas/site list, and Data cards use bounded responsive layouts. | The shell and bounded feature density are adaptive; wider device coverage and full adaptive list/detail patterns still need testing. |
+| Compact phone density | Delivered baseline | Scalable typography, 16 dp Dashboard/Projects gutters, 12 dp field-heavy screen gutters, compact shared components, responsive fields/cards/map height, and explicit 48 dp minimums on controls changed by the pass are implemented. Manual checks used one physical Android 16 phone at 1280 × 2772 pixels and 520 dpi: portrait at font scales 1.15 and 1.30, plus landscape at 1.15. | This is one physical reference device, not a device, aspect-ratio, theme, font-scale, or accessibility matrix. No system font-scale override or clamp is used. |
 | Navigation 3 | Foundation | `NavDisplay` uses serializable stable-ID `AtxRoute` keys, a saveable typed back stack, bounded fallback for unknown routes, and a nested RF editor; saved-instance-state restoration is tested. | Deep links, deleted-ID recovery UX, adaptive list/detail, and true process-death/rotation testing across supported devices are not complete. |
 | UDF/ViewModel | Foundation | Explicit actions/effects, structured problem/recovery values, injected use cases/dispatchers, serialized catalog mutation, calculation cancellation, and ViewModel transition tests are implemented. | Feature-level ViewModels, cross-instance catalog observation, DI/scoping policy, durable jobs, diagnostics/observability, accessibility, and system recovery remain. |
 | Project repository | Delivered | `ProjectRepository` is implemented by `FileProjectRepository` in private app storage. | Only one catalog file is supported; there is no Room database or portable project container. |
@@ -53,8 +54,8 @@ A feature delivered on desktop is not delivered on Android. A screen or enum alo
 | Project operations | Foundation | Load, create, select, and transactional mutation are delivered; Add RF Path persists one linked network/site/sector/receiver without exposing partial state. | Rename, delete, duplicate, archive, import, independent RF-entity CRUD, and impact-aware linked deletion are not delivered. |
 | Domain model | Foundation | Kotlin models now include serializable engineering value types, typed coordinate, receiver/CPE, and receiver/sector network references with duplicate/referential validation. | Existing legacy primitive entity fields still need staged migration; scenario snapshots, datasets, artifacts, and full study request/results remain. |
 | Demonstration data | Delivered | Missing storage is seeded with a clearly synthetic São Paulo FM project: one network, three sites, one sector per site, and two study summaries. | It is demonstration data and must not be used as an engineering reference. |
-| Dashboard | Delivered | Shows selected project, local project/site/study counts, foundation status, and shortcuts. | It summarizes catalog data only. |
-| Projects and Add RF Path | Foundation | Projects lists/selects/creates projects and opens a saveable nested editor that validates and transactionally adds one selected-system RF network, transmitter site/sector, and receiver. | This is one combined create slice, not complete independent RF-entity editing or project lifecycle CRUD. |
+| Dashboard | Delivered | Shows selected project, local project/site/study counts, foundation status, and shortcuts; its metric row responds to compact width and accessibility font scale. | It summarizes catalog data only; broader layout and accessibility testing remains. |
+| Projects and Add RF Path | Foundation | Projects lists/selects/creates projects with compact wrapping cards and opens a saveable nested editor that validates and transactionally adds one selected-system RF network, transmitter site/sector, and receiver. | This is one combined create slice, not complete independent RF-entity editing or project lifecycle CRUD; broader device testing remains. |
 | Engineering Map screen | Foundation | Offline Compose Canvas plots local site positions and active-sector azimuth rays with semantic description. | It is not a geographic map: no projection, basemap, pan/zoom, editing, scale, tiles, attribution, or DEM. |
 | Studies screen | Delivered | Validated form executes the local free-space link calculation and renders explicit result terms. | Result remains in ViewModel memory and is not tied to project endpoints or persisted as a study artifact. |
 | Data Catalog screen | Foundation | Shows an honest static capability inventory and planned gates. | It does not install, inspect, download, or remove datasets. |
@@ -68,8 +69,8 @@ A feature delivered on desktop is not delivered on Android. A screen or enum alo
 
 | Screen | Current behavior | Status | Next boundary |
 |---|---|---|---|
-| **Dashboard** | Project metrics, offline message, quick navigation, selected-project summary. | Delivered | Persisted jobs, diagnostics, and real dataset availability. |
-| **Projects** | Catalog list, selection/create dialog, schema/details, and entry to the nested Add RF Path editor. | Foundation | Full project lifecycle and independent network/site/sector/receiver CRUD. |
+| **Dashboard** | Compact responsive project metrics, offline message, quick navigation, and selected-project summary. | Delivered | Persisted jobs, diagnostics, real dataset availability, and broader device/accessibility evidence. |
+| **Projects** | Compact wrapping catalog cards, selection/create dialog, schema/details, and entry to the nested Add RF Path editor. | Foundation | Full project lifecycle, independent network/site/sector/receiver CRUD, and broader device/accessibility evidence. |
 | **Add RF Path** | Validated saveable draft creates one linked selected-system RF network, site/sector, and receiver through one repository transaction. | Delivered bounded slice | Edit/delete, reusable profiles, process-death end-to-end proof, and study endpoint selection. |
 | **Engineering Map** | Local coordinate normalization, site markers, active-sector azimuth strokes, site list. | Foundation | Real map adapter, geographic camera, offline source, editing, attribution, DEM. |
 | **Studies** | Manual RF parameters and deterministic free-space link results. | Delivered | Endpoint selection, terrain profile, LOS, curvature, persisted study request/result. |
@@ -101,7 +102,7 @@ Roadmap phases `F0` through `F8` are defined in `ROADMAP.md`.
 
 | Reference capability | Android status | Priority | Target | Acceptance boundary |
 |---|---:|---:|---:|---|
-| Adaptive project-oriented shell | Delivered | P0 | F0 | Five areas render on compact and expanded layouts. |
+| Adaptive project-oriented shell | Delivered | P0 | F0 | Five areas render on compact and expanded layouts; compact feature density has physical Android 16 portrait checks at approximately 394 dp and font scales 1.15/1.30 plus a baseline landscape check. |
 | Navigation 3 top-level switching | Foundation | P0 | F1 | Typed stable-ID save/restore and nested editor exist; add deep links, deleted-ID UX, true process-death/device flows, and feature ownership. |
 | UDF/ViewModel/repository boundary | Foundation | P0 | F1 | Explicit actions/effects, structured recovery, use cases, injected dispatchers, transactional mutation, and tests exist; split features and define DI/jobs/observability. |
 | Local project catalog | Delivered baseline | P0 | F0/F2 | Schema-2 transactional JSON loads, explicitly migrates v1, creates/selects, and persists catalog mutations. |
@@ -266,7 +267,7 @@ Until that gate, permitted labels are **supported on Android**, **partial import
 | Decision | Status | Required output |
 |---|---|---|
 | Product license and public distribution policy | Blocked | License file, third-party inventory, data policy, and owner approval. |
-| Physical-device support matrix | Planned | Minimum, reference, and high-capability devices across supported Android versions. |
+| Physical-device support matrix | Foundation | One Android 16 device (approximately 394 dp wide in portrait, density 520) has manual portrait evidence at font scales 1.15/1.30 and baseline landscape evidence; minimum, reference, and high-capability devices across supported Android versions, aspect ratios, themes, and accessibility settings remain. |
 | Navigation restoration contract | Foundation | Stable-ID typed save/restore and nested-route tests exist; decide deep links/feature ownership and prove deleted-ID, process-death, rotation, and device flows. |
 | JSON catalog evolution versus Room | Foundation | Schema 2 and explicit v1 migration exist; approve long-term store, asset ownership, recovery/export, backup, multi-process, and future-schema policy. |
 | Android ↔ desktop `.atxp` contract | Blocked | Container/schema contract, read/write matrix, migrations, and fixtures. |

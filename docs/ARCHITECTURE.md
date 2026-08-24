@@ -49,7 +49,7 @@ flowchart TD
 |---|---|---|---|
 | Composition root | Delivered | `MainActivity` applies the theme and hosts `AtxPlanApp`. | Dependency construction still occurs in the ViewModel factory. |
 | UI shell | Delivered | Compose Material 3, edge-to-edge, custom light/dark theme. | Full accessibility/device-matrix validation remains. |
-| Adaptive navigation | Delivered | Bottom navigation on compact width; navigation rail at 900 dp or wider. | Feature contents are not all adaptive list/detail layouts. |
+| Adaptive navigation | Delivered | Bottom navigation on compact width; navigation rail at 720 dp or wider; rail labels/header collapse to accessible icons below 520 dp height. | Feature contents are not all adaptive list/detail layouts. |
 | Navigation 3 | Foundation | Serializable stable-ID `AtxRoute` keys, a saveable typed back stack, safe unknown-route fallback, and nested RF editor have saved-instance-state tests. | Deep links, deleted-ID UX, route ownership, and true process-death/rotation/device-matrix flows remain. |
 | State management | Foundation | Immutable state, explicit actions/effects, structured problems/recovery, injected use cases/dispatchers, serialized catalog mutations, cancellation, and ViewModel tests. | One application ViewModel remains; cross-instance catalog observation, DI/scoping, durable jobs, broader observability, accessibility, and system recovery remain. |
 | Repository boundary | Delivered | `ProjectRepository` interface separates ViewModel from file implementation. | Only the project catalog uses a repository. |
@@ -122,6 +122,21 @@ flowchart TD
 ### UI layer
 
 Renders state, collects actions, manages presentation navigation, accessibility, and adaptive layout. It does not read files/databases or implement RF formulas.
+
+#### Information-density and typography contract
+
+ATX Plan is an information-dense engineering tool, so compact layout is a functional requirement rather than a reason to disable Android accessibility settings. The UI therefore:
+
+- honors the system font scale and never clamps or replaces it;
+- uses compact semantic type roles instead of display-sized text for routine screen headings;
+- keeps interactive targets at least 48 dp even when visual padding is reduced;
+- reduces redundant outer, card, and section spacing before reducing readable type;
+- uses multi-column fields only when measured width and font scale leave every label, value, and unit readable;
+- never truncates engineering values, units, provenance, warnings, or limitations to gain space;
+- may constrain noncritical navigation labels and decorative summaries when their full meaning remains available through semantics;
+- validates compact phones and larger windows separately instead of applying one fixed-density layout everywhere.
+
+The current compact pass is measured on a physical Android 16 phone at approximately 394 dp portrait width and `fontScale = 1.15`. Responsive fallbacks were also inspected in portrait at `fontScale = 1.30`, after which the original setting was restored. A baseline landscape check verified the short-height navigation rail and wide feature layouts before rotation was restored. This is evidence for one reference device, not a complete accessibility or device matrix.
 
 ### Domain/application layer
 

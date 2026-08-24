@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -38,7 +39,7 @@ fun ScreenHeader(
 ) {
     Column(
         modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
         Text(
             text = title,
@@ -47,7 +48,7 @@ fun ScreenHeader(
         )
         Text(
             text = subtitle,
-            style = MaterialTheme.typography.bodyLarge,
+            style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
@@ -79,12 +80,12 @@ fun StatusPill(
     Box(
         modifier = modifier
             .background(background, RoundedCornerShape(100.dp))
-            .padding(horizontal = 10.dp, vertical = 5.dp),
+            .padding(horizontal = 8.dp, vertical = 3.dp),
     ) {
         Text(
             text = label,
             color = foreground,
-            style = MaterialTheme.typography.labelLarge,
+            style = MaterialTheme.typography.labelMedium,
         )
     }
 }
@@ -99,19 +100,22 @@ fun MetricCard(
     Card(
         modifier = modifier.semantics(mergeDescendants = true) {},
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(16.dp),
     ) {
         Row(
-            modifier = Modifier.padding(16.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.padding(horizontal = 11.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
                 modifier = Modifier
-                    .size(width = 5.dp, height = 42.dp)
+                    .size(width = 4.dp, height = 34.dp)
                     .background(accent, RoundedCornerShape(100.dp)),
             )
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(1.dp),
+            ) {
                 Text(
                     text = value,
                     style = MaterialTheme.typography.titleLarge,
@@ -119,7 +123,7 @@ fun MetricCard(
                 )
                 Text(
                     text = label,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -143,7 +147,7 @@ fun StorageErrorBanner(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 8.dp),
+                .padding(horizontal = 16.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
@@ -153,7 +157,12 @@ fun StorageErrorBanner(
                 style = MaterialTheme.typography.bodyMedium,
             )
             onRetry?.let { retry ->
-                TextButton(onClick = retry) { Text("Retry") }
+                TextButton(
+                    onClick = retry,
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) {
+                    Text("Retry")
+                }
             }
         }
     }

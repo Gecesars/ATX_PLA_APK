@@ -12,6 +12,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.SemanticsMatcher
@@ -48,16 +49,13 @@ class MainActivityTest {
     @Test
     fun nestedRfEditorAndDraftSurviveActivityRecreation() {
         composeRule.onNodeWithText("Projects").performClick()
-        composeRule.waitUntil(timeoutMillis = 5_000L) {
-            composeRule.onAllNodes(hasTestTag("add_rf_path_button"))
-                .fetchSemanticsNodes().isNotEmpty()
-        }
+        scrollToAddRfPathButton()
         composeRule.onNodeWithTag("add_rf_path_button").performDirectClick()
         composeRule.waitUntil(timeoutMillis = 5_000L) {
             composeRule.onAllNodes(hasTestTag("rf_path_editor_list"))
                 .fetchSemanticsNodes().isNotEmpty()
         }
-        composeRule.onNodeWithTag("rf_path_editor_list").performScrollToIndex(2)
+        composeRule.onNodeWithTag("rf_path_editor_list").performScrollToIndex(1)
         composeRule.onNodeWithTag("network_name_field").performTextReplacement("Restored Network")
 
         composeRule.activityRule.scenario.recreate()
@@ -72,16 +70,13 @@ class MainActivityTest {
     @Test
     fun dirtyRfDraftProtectsAppBarDestinationAndSystemBackNavigation() {
         composeRule.onNodeWithText("Projects").performClick()
-        composeRule.waitUntil(timeoutMillis = 5_000L) {
-            composeRule.onAllNodes(hasTestTag("add_rf_path_button"))
-                .fetchSemanticsNodes().isNotEmpty()
-        }
+        scrollToAddRfPathButton()
         composeRule.onNodeWithTag("add_rf_path_button").performDirectClick()
         composeRule.waitUntil(timeoutMillis = 5_000L) {
             composeRule.onAllNodes(hasTestTag("rf_path_editor_list"))
                 .fetchSemanticsNodes().isNotEmpty()
         }
-        composeRule.onNodeWithTag("rf_path_editor_list").performScrollToIndex(2)
+        composeRule.onNodeWithTag("rf_path_editor_list").performScrollToIndex(1)
         composeRule.onNodeWithTag("network_name_field").performTextReplacement("Protected Draft")
 
         composeRule.onNodeWithContentDescription("Back to Projects").performClick()
@@ -98,19 +93,13 @@ class MainActivityTest {
         }
         composeRule.onNodeWithText("Discard unsaved RF path?").assertIsDisplayed()
         composeRule.onNodeWithText("Discard Draft").performClick()
-        composeRule.waitUntil(timeoutMillis = 5_000L) {
-            composeRule.onAllNodes(hasTestTag("add_rf_path_button"))
-                .fetchSemanticsNodes().isNotEmpty()
-        }
+        scrollToAddRfPathButton()
     }
 
     @Test
     fun rfEditorExposesLabeledSwitchAndPoliteValidationError() {
         composeRule.onNodeWithText("Projects").performClick()
-        composeRule.waitUntil(timeoutMillis = 5_000L) {
-            composeRule.onAllNodes(hasTestTag("add_rf_path_button"))
-                .fetchSemanticsNodes().isNotEmpty()
-        }
+        scrollToAddRfPathButton()
         composeRule.onNodeWithTag("add_rf_path_button").performDirectClick()
         composeRule.waitUntil(timeoutMillis = 5_000L) {
             composeRule.onAllNodes(hasTestTag("rf_path_editor_list"))
@@ -119,9 +108,9 @@ class MainActivityTest {
         composeRule.onNodeWithTag("rf_path_editor_list").performScrollToIndex(3)
         composeRule.onNodeWithText("Active sector").assertHasClickAction()
 
-        composeRule.onNodeWithTag("rf_path_editor_list").performScrollToIndex(2)
+        composeRule.onNodeWithTag("rf_path_editor_list").performScrollToIndex(1)
         composeRule.onNodeWithTag("network_name_field").performTextReplacement("")
-        composeRule.onNodeWithTag("rf_path_editor_list").performScrollToIndex(6)
+        composeRule.onNodeWithTag("rf_path_editor_list").performScrollToIndex(5)
         composeRule.onNodeWithTag("save_rf_path_button").performDirectClick()
         composeRule.onNodeWithText("Network name must contain between 2 and 80 characters.")
             .assert(
@@ -150,17 +139,14 @@ class MainActivityTest {
         composeRule.waitUntil(timeoutMillis = 5_000L) {
             composeRule.onAllNodesWithText(createdNotice).fetchSemanticsNodes().isNotEmpty()
         }
-        composeRule.waitUntil(timeoutMillis = 5_000L) {
-            composeRule.onAllNodes(hasTestTag("add_rf_path_button"))
-                .fetchSemanticsNodes().isNotEmpty()
-        }
+        scrollToAddRfPathButton()
 
         composeRule.onNodeWithTag("add_rf_path_button").performDirectClick()
         composeRule.waitUntil(timeoutMillis = 5_000L) {
             composeRule.onAllNodes(hasTestTag("rf_path_editor_list"))
                 .fetchSemanticsNodes().isNotEmpty()
         }
-        composeRule.onNodeWithTag("rf_path_editor_list").performScrollToIndex(6)
+        composeRule.onNodeWithTag("rf_path_editor_list").performScrollToIndex(5)
         composeRule.onNodeWithTag("save_rf_path_button").performDirectClick()
         composeRule.waitUntil(timeoutMillis = 10_000L) {
             composeRule.onAllNodesWithText(
@@ -176,6 +162,16 @@ class MainActivityTest {
                 .fetchSemanticsNodes().isNotEmpty()
         }
         composeRule.onNodeWithTag("rf_asset_summary").performScrollTo().assertIsDisplayed()
+    }
+
+    private fun scrollToAddRfPathButton() {
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            composeRule.onAllNodes(hasTestTag("projects_list"))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("projects_list")
+            .performScrollToNode(hasTestTag("add_rf_path_button"))
+        composeRule.onNodeWithTag("add_rf_path_button").assertIsDisplayed()
     }
 }
 

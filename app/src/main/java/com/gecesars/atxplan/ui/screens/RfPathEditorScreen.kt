@@ -1,12 +1,14 @@
 package com.gecesars.atxplan.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.selection.toggleable
@@ -41,6 +43,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -118,36 +121,19 @@ fun RfPathEditorScreen(
         }
     }
 
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .testTag("rf_path_editor_list")
-            .padding(horizontal = 20.dp),
-        contentPadding = PaddingValues(top = 4.dp, bottom = 36.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        item {
-            ScreenHeader(
-                title = "Add RF Path",
-                subtitle = "Create a linked network, transmitter site, sector, and receiver in " +
-                    "${project.name}.",
-            )
-        }
-        item {
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                ),
-                shape = RoundedCornerShape(18.dp),
-            ) {
-                Text(
-                    text = "All values below are explicit inputs. Saving performs one durable " +
-                        "catalog change; no terrain or propagation result is inferred.",
-                    modifier = Modifier.fillMaxWidth().padding(16.dp),
-                    color = MaterialTheme.colorScheme.onSecondaryContainer,
-                )
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val horizontalPadding = if (maxWidth < 400.dp) 12.dp else 16.dp
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .testTag("rf_path_editor_list")
+                .padding(horizontal = horizontalPadding),
+            contentPadding = PaddingValues(top = 4.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item {
+                CompactEditorHeader(project.name)
             }
-        }
         item {
             EditorSection("Network") {
                 TextField(
@@ -160,17 +146,25 @@ fun RfPathEditorScreen(
                     value = draft.radioSystem,
                     onValueChange = { draft = draft.copy(radioSystem = it) },
                 )
-                NumericField(
-                    label = "Downlink frequency",
-                    unit = "MHz",
-                    value = draft.frequencyMHz,
-                    onValueChange = { draft = draft.copy(frequencyMHz = it) },
-                )
-                NumericField(
-                    label = "Bandwidth",
-                    unit = "MHz",
-                    value = draft.bandwidthMHz,
-                    onValueChange = { draft = draft.copy(bandwidthMHz = it) },
+                ResponsiveFieldPair(
+                    first = { modifier ->
+                        NumericField(
+                            label = "Downlink frequency",
+                            unit = "MHz",
+                            value = draft.frequencyMHz,
+                            onValueChange = { draft = draft.copy(frequencyMHz = it) },
+                            modifier = modifier,
+                        )
+                    },
+                    second = { modifier ->
+                        NumericField(
+                            label = "Bandwidth",
+                            unit = "MHz",
+                            value = draft.bandwidthMHz,
+                            onValueChange = { draft = draft.copy(bandwidthMHz = it) },
+                            modifier = modifier,
+                        )
+                    },
                 )
             }
         }
@@ -181,19 +175,27 @@ fun RfPathEditorScreen(
                     value = draft.siteName,
                     onValueChange = { draft = draft.copy(siteName = it.take(80)) },
                 )
-                NumericField(
-                    label = "Site latitude",
-                    unit = "degrees",
-                    value = draft.siteLatitude,
-                    signed = true,
-                    onValueChange = { draft = draft.copy(siteLatitude = it) },
-                )
-                NumericField(
-                    label = "Site longitude",
-                    unit = "degrees",
-                    value = draft.siteLongitude,
-                    signed = true,
-                    onValueChange = { draft = draft.copy(siteLongitude = it) },
+                ResponsiveFieldPair(
+                    first = { modifier ->
+                        NumericField(
+                            label = "Site latitude",
+                            unit = "degrees",
+                            value = draft.siteLatitude,
+                            signed = true,
+                            onValueChange = { draft = draft.copy(siteLatitude = it) },
+                            modifier = modifier,
+                        )
+                    },
+                    second = { modifier ->
+                        NumericField(
+                            label = "Site longitude",
+                            unit = "degrees",
+                            value = draft.siteLongitude,
+                            signed = true,
+                            onValueChange = { draft = draft.copy(siteLongitude = it) },
+                            modifier = modifier,
+                        )
+                    },
                 )
                 NotesField(
                     label = "Site notes (optional)",
@@ -212,6 +214,7 @@ fun RfPathEditorScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .heightIn(min = 48.dp)
                         .toggleable(
                             value = draft.sectorActive,
                             role = Role.Switch,
@@ -236,44 +239,68 @@ fun RfPathEditorScreen(
                         modifier = Modifier.clearAndSetSemantics { },
                     )
                 }
-                NumericField(
-                    label = "Azimuth",
-                    unit = "degrees true",
-                    value = draft.sectorAzimuthDegrees,
-                    onValueChange = { draft = draft.copy(sectorAzimuthDegrees = it) },
+                ResponsiveFieldPair(
+                    first = { modifier ->
+                        NumericField(
+                            label = "Azimuth",
+                            unit = "degrees true",
+                            value = draft.sectorAzimuthDegrees,
+                            onValueChange = { draft = draft.copy(sectorAzimuthDegrees = it) },
+                            modifier = modifier,
+                        )
+                    },
+                    second = { modifier ->
+                        NumericField(
+                            label = "Electrical tilt",
+                            unit = "degrees",
+                            value = draft.sectorTiltDegrees,
+                            signed = true,
+                            onValueChange = { draft = draft.copy(sectorTiltDegrees = it) },
+                            modifier = modifier,
+                        )
+                    },
                 )
-                NumericField(
-                    label = "Electrical tilt",
-                    unit = "degrees",
-                    value = draft.sectorTiltDegrees,
-                    signed = true,
-                    onValueChange = { draft = draft.copy(sectorTiltDegrees = it) },
+                ResponsiveFieldPair(
+                    first = { modifier ->
+                        NumericField(
+                            label = "Antenna height",
+                            unit = "m",
+                            value = draft.sectorHeightM,
+                            onValueChange = { draft = draft.copy(sectorHeightM = it) },
+                            modifier = modifier,
+                        )
+                    },
+                    second = { modifier ->
+                        NumericField(
+                            label = "Transmit power",
+                            unit = "dBm",
+                            value = draft.transmitPowerDbm,
+                            signed = true,
+                            onValueChange = { draft = draft.copy(transmitPowerDbm = it) },
+                            modifier = modifier,
+                        )
+                    },
                 )
-                NumericField(
-                    label = "Antenna height",
-                    unit = "m",
-                    value = draft.sectorHeightM,
-                    onValueChange = { draft = draft.copy(sectorHeightM = it) },
-                )
-                NumericField(
-                    label = "Transmit power",
-                    unit = "dBm",
-                    value = draft.transmitPowerDbm,
-                    signed = true,
-                    onValueChange = { draft = draft.copy(transmitPowerDbm = it) },
-                )
-                NumericField(
-                    label = "Antenna gain",
-                    unit = "dBi",
-                    value = draft.transmitGainDbi,
-                    signed = true,
-                    onValueChange = { draft = draft.copy(transmitGainDbi = it) },
-                )
-                NumericField(
-                    label = "Feeder loss",
-                    unit = "dB",
-                    value = draft.feederLossDb,
-                    onValueChange = { draft = draft.copy(feederLossDb = it) },
+                ResponsiveFieldPair(
+                    first = { modifier ->
+                        NumericField(
+                            label = "Antenna gain",
+                            unit = "dBi",
+                            value = draft.transmitGainDbi,
+                            signed = true,
+                            onValueChange = { draft = draft.copy(transmitGainDbi = it) },
+                            modifier = modifier,
+                        )
+                    },
+                    second = { modifier ->
+                        NumericField(
+                            label = "Feeder loss",
+                            unit = "dB",
+                            value = draft.feederLossDb,
+                            onValueChange = { draft = draft.copy(feederLossDb = it) },
+                            modifier = modifier,
+                        )
+                    },
                 )
             }
         }
@@ -284,57 +311,89 @@ fun RfPathEditorScreen(
                     value = draft.receiverName,
                     onValueChange = { draft = draft.copy(receiverName = it.take(80)) },
                 )
-                NumericField(
-                    label = "Receiver latitude",
-                    unit = "degrees",
-                    value = draft.receiverLatitude,
-                    signed = true,
-                    onValueChange = { draft = draft.copy(receiverLatitude = it) },
+                ResponsiveFieldPair(
+                    first = { modifier ->
+                        NumericField(
+                            label = "Receiver latitude",
+                            unit = "degrees",
+                            value = draft.receiverLatitude,
+                            signed = true,
+                            onValueChange = { draft = draft.copy(receiverLatitude = it) },
+                            modifier = modifier,
+                        )
+                    },
+                    second = { modifier ->
+                        NumericField(
+                            label = "Receiver longitude",
+                            unit = "degrees",
+                            value = draft.receiverLongitude,
+                            signed = true,
+                            onValueChange = { draft = draft.copy(receiverLongitude = it) },
+                            modifier = modifier,
+                        )
+                    },
                 )
-                NumericField(
-                    label = "Receiver longitude",
-                    unit = "degrees",
-                    value = draft.receiverLongitude,
-                    signed = true,
-                    onValueChange = { draft = draft.copy(receiverLongitude = it) },
+                ResponsiveFieldPair(
+                    first = { modifier ->
+                        NumericField(
+                            label = "Antenna height",
+                            unit = "m",
+                            value = draft.receiverHeightM,
+                            onValueChange = { draft = draft.copy(receiverHeightM = it) },
+                            modifier = modifier,
+                        )
+                    },
+                    second = { modifier ->
+                        NumericField(
+                            label = "Antenna gain",
+                            unit = "dBi",
+                            value = draft.receiverGainDbi,
+                            signed = true,
+                            onValueChange = { draft = draft.copy(receiverGainDbi = it) },
+                            modifier = modifier,
+                        )
+                    },
                 )
-                NumericField(
-                    label = "Antenna height",
-                    unit = "m",
-                    value = draft.receiverHeightM,
-                    onValueChange = { draft = draft.copy(receiverHeightM = it) },
+                ResponsiveFieldPair(
+                    first = { modifier ->
+                        NumericField(
+                            label = "System loss",
+                            unit = "dB",
+                            value = draft.receiverSystemLossDb,
+                            onValueChange = { draft = draft.copy(receiverSystemLossDb = it) },
+                            modifier = modifier,
+                        )
+                    },
+                    second = { modifier ->
+                        NumericField(
+                            label = "Sensitivity",
+                            unit = "dBm",
+                            value = draft.receiverSensitivityDbm,
+                            signed = true,
+                            onValueChange = { draft = draft.copy(receiverSensitivityDbm = it) },
+                            modifier = modifier,
+                        )
+                    },
                 )
-                NumericField(
-                    label = "Antenna gain",
-                    unit = "dBi",
-                    value = draft.receiverGainDbi,
-                    signed = true,
-                    onValueChange = { draft = draft.copy(receiverGainDbi = it) },
-                )
-                NumericField(
-                    label = "System loss",
-                    unit = "dB",
-                    value = draft.receiverSystemLossDb,
-                    onValueChange = { draft = draft.copy(receiverSystemLossDb = it) },
-                )
-                NumericField(
-                    label = "Sensitivity",
-                    unit = "dBm",
-                    value = draft.receiverSensitivityDbm,
-                    signed = true,
-                    onValueChange = { draft = draft.copy(receiverSensitivityDbm = it) },
-                )
-                NumericField(
-                    label = "Noise figure",
-                    unit = "dB",
-                    value = draft.receiverNoiseFigureDb,
-                    onValueChange = { draft = draft.copy(receiverNoiseFigureDb = it) },
-                )
-                NumericField(
-                    label = "Azimuth",
-                    unit = "degrees true",
-                    value = draft.receiverAzimuthDegrees,
-                    onValueChange = { draft = draft.copy(receiverAzimuthDegrees = it) },
+                ResponsiveFieldPair(
+                    first = { modifier ->
+                        NumericField(
+                            label = "Noise figure",
+                            unit = "dB",
+                            value = draft.receiverNoiseFigureDb,
+                            onValueChange = { draft = draft.copy(receiverNoiseFigureDb = it) },
+                            modifier = modifier,
+                        )
+                    },
+                    second = { modifier ->
+                        NumericField(
+                            label = "Azimuth",
+                            unit = "degrees true",
+                            value = draft.receiverAzimuthDegrees,
+                            onValueChange = { draft = draft.copy(receiverAzimuthDegrees = it) },
+                            modifier = modifier,
+                        )
+                    },
                 )
                 NumericField(
                     label = "Electrical tilt",
@@ -369,9 +428,12 @@ fun RfPathEditorScreen(
                         }
                 },
                 enabled = !isSaving && pendingSaveRevision == null,
-                modifier = Modifier.fillMaxWidth().testTag("save_rf_path_button"),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .testTag("save_rf_path_button"),
                 shape = RoundedCornerShape(16.dp),
-                contentPadding = PaddingValues(vertical = 15.dp),
+                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
             ) {
                 Icon(Icons.Outlined.Save, contentDescription = null)
                 Text(
@@ -385,23 +447,71 @@ fun RfPathEditorScreen(
         }
     }
 }
+}
+
+@Composable
+private fun CompactEditorHeader(projectName: String) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            text = projectName,
+            modifier = Modifier.semantics { heading() },
+            style = MaterialTheme.typography.titleLarge,
+        )
+        Text(
+            text = "Create a linked network, transmitter site/sector, and receiver. Saving " +
+                "changes the local catalog only; no terrain or propagation result is inferred.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
 
 @Composable
 private fun EditorSection(
     title: String,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    Card(shape = RoundedCornerShape(20.dp)) {
+    Card(shape = RoundedCornerShape(16.dp)) {
         Column(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Text(
                 title,
                 modifier = Modifier.semantics { heading() },
-                style = MaterialTheme.typography.titleLarge,
+                style = MaterialTheme.typography.titleMedium,
             )
             content()
+        }
+    }
+}
+
+@Composable
+private fun ResponsiveFieldPair(
+    first: @Composable (Modifier) -> Unit,
+    second: @Composable (Modifier) -> Unit,
+) {
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val useTwoColumns = maxWidth >= 600.dp && LocalDensity.current.fontScale <= 1.3f
+        if (useTwoColumns) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                first(Modifier.weight(1f))
+                second(Modifier.weight(1f))
+            }
+        } else {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                first(Modifier.fillMaxWidth())
+                second(Modifier.fillMaxWidth())
+            }
         }
     }
 }
@@ -443,8 +553,9 @@ private fun NumericField(
     label: String,
     unit: String,
     value: String,
-    signed: Boolean = false,
     onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    signed: Boolean = false,
 ) {
     OutlinedTextField(
         value = value,
@@ -460,7 +571,7 @@ private fun NumericField(
         suffix = { Text(unit) },
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
     )
 }
 

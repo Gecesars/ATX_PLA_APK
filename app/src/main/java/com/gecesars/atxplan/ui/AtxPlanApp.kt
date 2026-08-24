@@ -14,8 +14,8 @@ import androidx.compose.material.icons.outlined.Dashboard
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Map
 import androidx.compose.material.icons.outlined.Storage
-import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -41,7 +41,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -86,7 +89,7 @@ private val destinations = listOf(
     TopLevelDestination(ProjectsRoute, "Projects", icon = Icons.Outlined.FolderOpen),
     TopLevelDestination(MapRoute, "Engineering Map", "Map", Icons.Outlined.Map),
     TopLevelDestination(StudiesRoute, "Studies", icon = Icons.Outlined.Calculate),
-    TopLevelDestination(CatalogRoute, "Data & Capabilities", "Data", Icons.Outlined.Storage),
+    TopLevelDestination(CatalogRoute, "Data", "Data", Icons.Outlined.Storage),
 )
 
 @Composable
@@ -180,13 +183,15 @@ private fun AtxPlanShell(
     }
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val expanded = maxWidth >= 900.dp
+        val expanded = maxWidth >= 720.dp
+        val compactRail = maxHeight < 520.dp
         Row(modifier = Modifier.fillMaxSize()) {
             if (expanded) {
                 AtxNavigationRail(
                     activeRoute = activeTopLevelRoute,
                     onNavigate = navigate,
                     enabled = canLeaveEditor,
+                    compact = compactRail,
                     modifier = Modifier.fillMaxHeight(),
                 )
             }
@@ -208,26 +213,19 @@ private fun AtxPlanShell(
                             }
                         },
                         title = {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(
-                                    text = if (activeRoute is RfPathEditorRoute) {
-                                        "Add RF Path"
-                                    } else {
-                                        destinations.firstOrNull { it.route == activeRoute }
-                                            ?.label
-                                            ?: destinations.first().label
-                                    },
-                                    style = MaterialTheme.typography.titleMedium,
-                                )
-                                uiState.selectedProject?.let { project ->
-                                    Text(
-                                        text = project.name,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                    )
-                                }
-                            }
+                            Text(
+                                text = if (activeRoute is RfPathEditorRoute) {
+                                    "Add RF Path"
+                                } else {
+                                    destinations.firstOrNull { it.route == activeRoute }
+                                        ?.label
+                                        ?: destinations.first().label
+                                },
+                                modifier = Modifier.semantics { heading() },
+                                style = MaterialTheme.typography.titleMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                         },
                     )
                 },
@@ -364,21 +362,26 @@ private fun AtxNavigationRail(
     activeRoute: AtxRoute,
     onNavigate: (AtxRoute) -> Unit,
     enabled: Boolean,
+    compact: Boolean,
     modifier: Modifier = Modifier,
 ) {
     NavigationRail(
         modifier = modifier,
-        header = {
-            Box(
-                modifier = Modifier.padding(vertical = 20.dp, horizontal = 12.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = "ATX",
-                    color = AtxTeal,
-                    fontWeight = FontWeight.Black,
-                    style = MaterialTheme.typography.titleLarge,
-                )
+        header = if (compact) {
+            null
+        } else {
+            {
+                Box(
+                    modifier = Modifier.padding(vertical = 20.dp, horizontal = 12.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "ATX",
+                        color = AtxTeal,
+                        fontWeight = FontWeight.Black,
+                        style = MaterialTheme.typography.titleLarge,
+                    )
+                }
             }
         },
     ) {
@@ -388,7 +391,9 @@ private fun AtxNavigationRail(
                 enabled = enabled,
                 onClick = { onNavigate(destination.route) },
                 icon = { Icon(destination.icon, contentDescription = destination.label) },
-                label = { Text(destination.compactLabel) },
+                label = if (compact) null else {
+                    { Text(destination.compactLabel) }
+                },
             )
         }
     }
