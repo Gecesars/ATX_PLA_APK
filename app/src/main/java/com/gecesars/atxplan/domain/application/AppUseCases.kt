@@ -92,6 +92,7 @@ data class AppUseCases(
     val createProject: CreateProjectUseCase,
     val renameProject: RenameProjectUseCase,
     val duplicateProject: DuplicateProjectUseCase,
+    val deleteProject: DeleteProjectUseCase,
     val selectProject: SelectProjectUseCase,
     val addRfPath: AddRfPathUseCase,
     val calculateLinkBudget: CalculateLinkBudgetUseCase,
@@ -118,6 +119,7 @@ data class AppUseCases(
             createProject = CreateProjectUseCase(projectCreator),
             renameProject = RenameProjectUseCase(clock),
             duplicateProject = DuplicateProjectUseCase(projectDuplicationIdGenerator, clock),
+            deleteProject = DeleteProjectUseCase(),
             selectProject = SelectProjectUseCase(),
             addRfPath = AddRfPathUseCase(rfEntityIdGenerator, clock),
             calculateLinkBudget = CalculateLinkBudgetUseCase(

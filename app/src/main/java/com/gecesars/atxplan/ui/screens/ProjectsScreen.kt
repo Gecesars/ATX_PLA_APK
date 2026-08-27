@@ -2,6 +2,7 @@ package com.gecesars.atxplan.ui.screens
 
 import android.content.res.Configuration
 import android.view.WindowManager
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -28,11 +30,13 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.DeleteForever
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Science
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -57,16 +61,20 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogWindowProvider
+import com.gecesars.atxplan.domain.application.DeleteProjectCommand
 import com.gecesars.atxplan.domain.application.DuplicateProjectCommand
 import com.gecesars.atxplan.domain.model.PlannerProject
 import com.gecesars.atxplan.domain.model.RadioSystem
@@ -74,11 +82,19 @@ import com.gecesars.atxplan.ui.AppUiState
 import com.gecesars.atxplan.ui.components.ScreenHeader
 import com.gecesars.atxplan.ui.components.StatusPill
 import com.gecesars.atxplan.ui.components.StatusTone
+import kotlinx.serialization.json.Json
+import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 private const val PROJECT_NAME_LIMIT = 80
+private const val PROJECT_NAME_DISPLAY_LIMIT = 160
+private const val DELETE_CONFIRMATION_KEYWORD = "DELETE"
+private val deleteFingerprintJson = Json {
+    encodeDefaults = true
+    explicitNulls = true
+}
 
 @Composable
 fun ProjectsScreen(
@@ -88,6 +104,7 @@ fun ProjectsScreen(
     onAddRfPath: (String) -> Unit,
     onRenameProject: (String) -> Unit,
     onDuplicateProject: (DuplicateProjectCommand) -> Unit,
+    onDeleteProject: (DeleteProjectCommand) -> Unit,
 ) {
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
     var projectCountBeforeCreate by rememberSaveable { mutableStateOf<Int?>(null) }
@@ -99,6 +116,12 @@ fun ProjectsScreen(
     }
     var duplicateBaselineCompletionCount by rememberSaveable { mutableLongStateOf(0L) }
     var pendingDuplicateCompletionCount by remember { mutableStateOf<Long?>(null) }
+    var deleteSourceProjectKey by rememberSaveable { mutableStateOf<String?>(null) }
+    var deleteReviewedProjectFingerprint by rememberSaveable { mutableStateOf<String?>(null) }
+    var deleteConfirmationDraft by rememberSaveable { mutableStateOf("") }
+    var deleteExpectedProject by remember { mutableStateOf<PlannerProject?>(null) }
+    var deleteReviewResetCount by remember { mutableLongStateOf(0L) }
+    var pendingDeleteCompletionCount by remember { mutableStateOf<Long?>(null) }
 
     fun dismissDuplicateDialog() {
         duplicateSourceProjectId = null
@@ -106,6 +129,29 @@ fun ProjectsScreen(
         duplicateBaselineProjectIds = emptyList()
         duplicateBaselineCompletionCount = 0L
         pendingDuplicateCompletionCount = null
+    }
+
+    fun refreshDeleteSnapshot(
+        project: PlannerProject,
+        clearConfirmation: Boolean = false,
+        reviewedFingerprint: String? = null,
+    ) {
+        if (clearConfirmation) {
+            deleteConfirmationDraft = ""
+            deleteReviewResetCount += 1L
+        }
+        deleteExpectedProject = project
+        deleteReviewedProjectFingerprint =
+            reviewedFingerprint ?: projectSavedStateFingerprint(project)
+    }
+
+    fun dismissDeleteDialog() {
+        deleteSourceProjectKey = null
+        deleteReviewedProjectFingerprint = null
+        deleteConfirmationDraft = ""
+        deleteExpectedProject = null
+        deleteReviewResetCount = 0L
+        pendingDeleteCompletionCount = null
     }
 
     val duplicateSourceProject = duplicateSourceProjectId?.let { sourceId ->
@@ -123,6 +169,19 @@ fun ProjectsScreen(
         duplicateSourceProjectId in duplicateBaselineProjectIds &&
         uiState.catalogMutationCompletionCount != duplicateBaselineCompletionCount &&
         selectedNewDuplicate != null
+    val currentDeleteProject = deleteSourceProjectKey?.let { sourceKey ->
+        deleteExpectedProject?.let { expectedProject ->
+            uiState.catalog.projects.firstOrNull { project ->
+                project.id == expectedProject.id
+            }
+        } ?: uiState.catalog.projects.firstOrNull { project ->
+            projectSavedStateKey(project.id) == sourceKey
+        }
+    }
+    val durableDeleteIsObservable = deleteSourceProjectKey != null &&
+        uiState.isCatalogWritable &&
+        !uiState.isLoading &&
+        currentDeleteProject == null
 
     LaunchedEffect(
         durableDuplicateIsObservable,
@@ -148,6 +207,58 @@ fun ProjectsScreen(
             !uiState.isLoading
         ) {
             dismissDuplicateDialog()
+        }
+    }
+    LaunchedEffect(durableDeleteIsObservable) {
+        if (durableDeleteIsObservable) dismissDeleteDialog()
+    }
+    LaunchedEffect(
+        deleteSourceProjectKey,
+        currentDeleteProject,
+        uiState.isSavingCatalog,
+        pendingDeleteCompletionCount,
+    ) {
+        val currentProject = currentDeleteProject ?: return@LaunchedEffect
+        if (
+            deleteSourceProjectKey == null ||
+            uiState.isSavingCatalog ||
+            pendingDeleteCompletionCount != null
+        ) {
+            return@LaunchedEffect
+        }
+        when {
+            deleteExpectedProject == null -> {
+                val currentFingerprint = projectSavedStateFingerprint(currentProject)
+                refreshDeleteSnapshot(
+                    project = currentProject,
+                    clearConfirmation = deleteReviewedProjectFingerprint != currentFingerprint,
+                    reviewedFingerprint = currentFingerprint,
+                )
+            }
+
+            deleteExpectedProject != currentProject -> refreshDeleteSnapshot(
+                project = currentProject,
+                clearConfirmation = true,
+            )
+        }
+    }
+    LaunchedEffect(
+        uiState.catalogMutationCompletionCount,
+        pendingDeleteCompletionCount,
+        currentDeleteProject,
+    ) {
+        val pendingCompletionCount = pendingDeleteCompletionCount
+        if (
+            pendingCompletionCount != null &&
+            uiState.catalogMutationCompletionCount != pendingCompletionCount
+        ) {
+            pendingDeleteCompletionCount = null
+            currentDeleteProject?.let { currentProject ->
+                refreshDeleteSnapshot(
+                    project = currentProject,
+                    clearConfirmation = deleteExpectedProject != currentProject,
+                )
+            }
         }
     }
 
@@ -252,6 +363,12 @@ fun ProjectsScreen(
                                 uiState.catalogMutationCompletionCount
                             pendingDuplicateCompletionCount = null
                         },
+                        onDeleteProject = {
+                            deleteSourceProjectKey = projectSavedStateKey(selected.id)
+                            deleteConfirmationDraft = ""
+                            pendingDeleteCompletionCount = null
+                            refreshDeleteSnapshot(selected)
+                        },
                     )
                 }
             }
@@ -290,6 +407,38 @@ fun ProjectsScreen(
                             newName = normalizedDuplicateName,
                         ),
                     )
+                }
+            },
+        )
+    }
+
+    if (deleteSourceProjectKey != null) {
+        DeleteProjectDialog(
+            sourceProject = deleteExpectedProject ?: currentDeleteProject,
+            confirmationDraft = deleteConfirmationDraft,
+            reviewResetCount = deleteReviewResetCount,
+            sourceProjectExists = currentDeleteProject != null,
+            sourceProjectIsAvailable = currentDeleteProject != null &&
+                deleteExpectedProject != null,
+            isCatalogLoading = uiState.isLoading,
+            isCatalogWritable = uiState.isCatalogWritable,
+            isSubmitting = pendingDeleteCompletionCount != null || uiState.isSavingCatalog,
+            onConfirmationChange = {
+                deleteConfirmationDraft = it.take(DELETE_CONFIRMATION_KEYWORD.length)
+            },
+            onDismiss = ::dismissDeleteDialog,
+            onConfirm = {
+                val expectedProject = deleteExpectedProject
+                if (
+                    expectedProject != null &&
+                    projectSavedStateKey(expectedProject.id) == deleteSourceProjectKey &&
+                    pendingDeleteCompletionCount == null &&
+                    !uiState.isSavingCatalog &&
+                    uiState.isCatalogWritable &&
+                    projectDeleteConfirmationMatches(deleteConfirmationDraft)
+                ) {
+                    pendingDeleteCompletionCount = uiState.catalogMutationCompletionCount
+                    onDeleteProject(DeleteProjectCommand(expectedProject = expectedProject))
                 }
             },
         )
@@ -391,6 +540,7 @@ private fun SelectedProjectDetails(
     onAddRfPath: () -> Unit,
     onRenameProject: () -> Unit,
     onDuplicateProject: () -> Unit,
+    onDeleteProject: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
@@ -447,8 +597,14 @@ private fun SelectedProjectDetails(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                    val useActionRow = maxWidth >= 330.dp && LocalDensity.current.fontScale <= 1.2f
-                    if (useActionRow) {
+                    val fontScale = LocalDensity.current.fontScale
+                    val useSingleActionRow = maxWidth >= if (fontScale <= 1.2f) {
+                        500.dp
+                    } else {
+                        650.dp
+                    }
+                    val useTwoActionRows = maxWidth >= 330.dp && fontScale <= 1.2f
+                    if (useSingleActionRow) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -462,6 +618,37 @@ private fun SelectedProjectDetails(
                                 enabled = canEdit,
                                 onClick = onDuplicateProject,
                                 modifier = Modifier.weight(1f),
+                            )
+                            DeleteProjectButton(
+                                enabled = canEdit,
+                                onClick = onDeleteProject,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    } else if (useTwoActionRows) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                RenameProjectButton(
+                                    enabled = canEdit,
+                                    onClick = onRenameProject,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                DuplicateProjectButton(
+                                    enabled = canEdit,
+                                    onClick = onDuplicateProject,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                            DeleteProjectButton(
+                                enabled = canEdit,
+                                onClick = onDeleteProject,
+                                modifier = Modifier.fillMaxWidth(),
                             )
                         }
                     } else {
@@ -477,6 +664,11 @@ private fun SelectedProjectDetails(
                             DuplicateProjectButton(
                                 enabled = canEdit,
                                 onClick = onDuplicateProject,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            DeleteProjectButton(
+                                enabled = canEdit,
+                                onClick = onDeleteProject,
                                 modifier = Modifier.fillMaxWidth(),
                             )
                         }
@@ -542,6 +734,27 @@ private fun DuplicateProjectButton(
 }
 
 @Composable
+private fun DeleteProjectButton(
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val errorColor = MaterialTheme.colorScheme.error
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        colors = ButtonDefaults.outlinedButtonColors(contentColor = errorColor),
+        border = BorderStroke(1.dp, errorColor),
+        modifier = modifier
+            .heightIn(min = 48.dp)
+            .testTag("delete_project_button"),
+    ) {
+        Icon(Icons.Outlined.DeleteForever, contentDescription = null)
+        Text("Delete")
+    }
+}
+
+@Composable
 private fun EmptyProjectsCard() {
     Card(shape = RoundedCornerShape(16.dp)) {
         Column(
@@ -561,6 +774,306 @@ private fun EmptyProjectsCard() {
 
 @Composable
 @OptIn(ExperimentalLayoutApi::class)
+private fun DeleteProjectDialog(
+    sourceProject: PlannerProject?,
+    confirmationDraft: String,
+    reviewResetCount: Long,
+    sourceProjectExists: Boolean,
+    sourceProjectIsAvailable: Boolean,
+    isCatalogLoading: Boolean,
+    isCatalogWritable: Boolean,
+    isSubmitting: Boolean,
+    onConfirmationChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val isImeVisible = WindowInsets.isImeVisible
+    val configuration = LocalConfiguration.current
+    val useShortLandscapeLayout =
+        configuration.orientation == Configuration.ORIENTATION_LANDSCAPE &&
+            with(LocalDensity.current) {
+                LocalWindowInfo.current.containerSize.height.toDp() <= 480.dp
+            }
+    val useCompactImeLayout = isImeVisible &&
+        configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val dialogContentState = rememberLazyListState()
+    var compactImeWasUsed by remember { mutableStateOf(false) }
+    val confirmationMatches = projectDeleteConfirmationMatches(confirmationDraft)
+    val showMismatch = confirmationDraft.isNotEmpty() && !confirmationMatches
+    LaunchedEffect(useCompactImeLayout) {
+        if (useCompactImeLayout) compactImeWasUsed = true
+        if (useCompactImeLayout || compactImeWasUsed) {
+            dialogContentState.scrollToItem(index = 2)
+        }
+    }
+    LaunchedEffect(reviewResetCount) {
+        if (reviewResetCount > 0L) {
+            keyboardController?.hide()
+            compactImeWasUsed = false
+            dialogContentState.scrollToItem(index = 0)
+        }
+    }
+    AlertDialog(
+        onDismissRequest = { if (!isSubmitting) onDismiss() },
+        icon = if (useCompactImeLayout || useShortLandscapeLayout) {
+            null
+        } else {
+            {
+                Icon(
+                    Icons.Outlined.DeleteForever,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error,
+                )
+            }
+        },
+        title = if (useCompactImeLayout) {
+            null
+        } else {
+            {
+                Text(
+                    text = "Delete Project",
+                    modifier = Modifier.semantics { heading() },
+                    style = if (useShortLandscapeLayout) {
+                        MaterialTheme.typography.titleMedium
+                    } else {
+                        MaterialTheme.typography.titleLarge
+                    },
+                )
+            }
+        },
+        text = {
+            DialogImeResizeEffect()
+            LazyColumn(
+                state = dialogContentState,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(if (useCompactImeLayout) Modifier else Modifier.imePadding())
+                    .testTag("project_delete_dialog_content"),
+                contentPadding = PaddingValues(bottom = if (useShortLandscapeLayout) 2.dp else 4.dp),
+                verticalArrangement = Arrangement.spacedBy(
+                    if (useShortLandscapeLayout) 6.dp else 10.dp,
+                ),
+            ) {
+                item(key = "delete_source") {
+                    if (!useCompactImeLayout) {
+                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            if (!useShortLandscapeLayout) {
+                                Text(
+                                    text = "Project to Delete",
+                                    modifier = Modifier.semantics { heading() },
+                                    style = MaterialTheme.typography.titleSmall,
+                                )
+                            }
+                            Text(
+                                text = sourceProject?.name?.let(::boundedProjectNameForDisplay)
+                                    ?: "Project snapshot unavailable",
+                                modifier = Modifier.testTag("delete_project_source_name"),
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = sourceProject?.let(::projectDeletionImpactSummary)
+                                    ?: "Impact counts are unavailable while the catalog snapshot is refreshed.",
+                                modifier = Modifier.testTag("delete_project_impact_summary"),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+                item(key = "delete_warning") {
+                    if (!useCompactImeLayout) {
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.errorContainer,
+                            ),
+                            shape = RoundedCornerShape(14.dp),
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(10.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.Top,
+                            ) {
+                                Icon(
+                                    Icons.Outlined.DeleteForever,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp),
+                                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                                )
+                                Text(
+                                    text = if (useShortLandscapeLayout) {
+                                        "Permanently removes this project and its project-scoped RF data " +
+                                            "from the local catalog. No in-app backup or undo."
+                                    } else {
+                                        "This permanently removes the project and its project-scoped " +
+                                            "RF data from this app's local catalog. No in-app backup is " +
+                                            "created, and there is no undo."
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                )
+                            }
+                        }
+                    }
+                }
+                item(key = "delete_confirmation") {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        if (useCompactImeLayout) {
+                            Text(
+                                text = if (showMismatch) {
+                                    "Enter DELETE exactly (case-sensitive)."
+                                } else {
+                                    "Type DELETE exactly (case-sensitive)."
+                                },
+                                modifier = if (showMismatch) {
+                                    Modifier.semantics { liveRegion = LiveRegionMode.Polite }
+                                } else {
+                                    Modifier
+                                },
+                                color = if (showMismatch) {
+                                    MaterialTheme.colorScheme.error
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        OutlinedTextField(
+                            value = confirmationDraft,
+                            onValueChange = onConfirmationChange,
+                            enabled = !isSubmitting && sourceProjectIsAvailable,
+                            label = if (useCompactImeLayout) {
+                                null
+                            } else {
+                                { Text("Type DELETE to confirm") }
+                            },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(
+                                capitalization = KeyboardCapitalization.Characters,
+                                imeAction = ImeAction.Done,
+                            ),
+                            keyboardActions = KeyboardActions(
+                                onDone = { keyboardController?.hide() },
+                            ),
+                            isError = showMismatch,
+                            supportingText = if (useCompactImeLayout) {
+                                null
+                            } else {
+                                {
+                                    Text(
+                                        text = if (showMismatch) {
+                                            "Type DELETE exactly to confirm permanent deletion."
+                                        } else {
+                                            "Confirmation is case-sensitive."
+                                        },
+                                        modifier = if (showMismatch) {
+                                            Modifier.semantics {
+                                                liveRegion = LiveRegionMode.Polite
+                                            }
+                                        } else {
+                                            Modifier
+                                        },
+                                        color = if (showMismatch) {
+                                            MaterialTheme.colorScheme.error
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        },
+                                    )
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .semantics {
+                                    contentDescription =
+                                        "Deletion confirmation. Type DELETE exactly, case-sensitive."
+                                }
+                                .testTag("delete_project_name_field"),
+                        )
+                    }
+                }
+                if (!sourceProjectIsAvailable) {
+                    item(key = "delete_source_unavailable") {
+                        Text(
+                            text = when {
+                                sourceProjectExists ->
+                                    "Preparing the latest project snapshot."
+                                isCatalogLoading ->
+                                    "The local catalog is still loading."
+                                else ->
+                                    "The project cannot be verified in the current local catalog."
+                            },
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                } else if (!isCatalogWritable) {
+                    item(key = "delete_catalog_write_error") {
+                        Text(
+                            text = "The local catalog must be writable before this project can be deleted.",
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (!useCompactImeLayout) {
+                Button(
+                    onClick = onConfirm,
+                    enabled = sourceProjectIsAvailable &&
+                        isCatalogWritable &&
+                        confirmationMatches &&
+                        !isSubmitting,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError,
+                    ),
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("delete_project_confirm"),
+                ) {
+                    Text(
+                        text = when {
+                            isSubmitting -> "Deleting..."
+                            useShortLandscapeLayout -> "Delete"
+                            else -> "Delete Permanently"
+                        },
+                        modifier = if (isSubmitting) {
+                            Modifier.semantics { liveRegion = LiveRegionMode.Polite }
+                        } else {
+                            Modifier
+                        },
+                    )
+                }
+            }
+        },
+        dismissButton = {
+            if (!useCompactImeLayout) {
+                TextButton(
+                    onClick = onDismiss,
+                    enabled = !isSubmitting,
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("delete_project_cancel"),
+                ) {
+                    Text("Cancel")
+                }
+            }
+        },
+    )
+}
+
+@Composable
+@OptIn(ExperimentalLayoutApi::class)
 private fun DuplicateProjectDialog(
     sourceProject: PlannerProject,
     draftName: String,
@@ -576,6 +1089,14 @@ private fun DuplicateProjectDialog(
     val configuration = LocalConfiguration.current
     val useCompactImeLayout = isImeVisible &&
         configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val dialogContentState = rememberLazyListState()
+    var compactImeWasUsed by remember { mutableStateOf(false) }
+    LaunchedEffect(useCompactImeLayout) {
+        if (useCompactImeLayout) compactImeWasUsed = true
+        if (useCompactImeLayout || compactImeWasUsed) {
+            dialogContentState.scrollToItem(index = 1)
+        }
+    }
     val validationError = if (cleanName.length !in 2..PROJECT_NAME_LIMIT) {
         "Use a project name between 2 and 80 characters."
     } else {
@@ -602,9 +1123,10 @@ private fun DuplicateProjectDialog(
         text = {
             DialogImeResizeEffect()
             LazyColumn(
+                state = dialogContentState,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .imePadding()
+                    .then(if (useCompactImeLayout) Modifier else Modifier.imePadding())
                     .testTag("project_duplicate_dialog_content"),
                 contentPadding = PaddingValues(bottom = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -812,6 +1334,42 @@ private fun CreateProjectDialog(
             }
         },
     )
+}
+
+internal fun projectDeleteConfirmationMatches(typedValue: String): Boolean =
+    typedValue == DELETE_CONFIRMATION_KEYWORD
+
+internal fun projectSavedStateKey(projectId: String): String =
+    sha256Hex(projectId.toByteArray(Charsets.UTF_8))
+
+internal fun projectSavedStateFingerprint(project: PlannerProject): String =
+    sha256Hex(
+        deleteFingerprintJson
+            .encodeToString(PlannerProject.serializer(), project)
+            .toByteArray(Charsets.UTF_8),
+    )
+
+private fun sha256Hex(bytes: ByteArray): String =
+    MessageDigest.getInstance("SHA-256")
+        .digest(bytes)
+        .joinToString(separator = "") { byte -> "%02x".format(Locale.ROOT, byte) }
+
+internal fun boundedProjectNameForDisplay(name: String): String =
+    if (name.length <= PROJECT_NAME_DISPLAY_LIMIT) {
+        name
+    } else {
+        "${name.take(PROJECT_NAME_DISPLAY_LIMIT - 1).trimEnd()}…"
+    }
+
+internal fun projectDeletionImpactSummary(project: PlannerProject): String {
+    val sectorCount = project.sites.sumOf { site -> site.sectors.size }
+    return "Deleting this project removes " +
+        "${projectCountLabel(project.networks.size, "network", "networks")}, " +
+        "${projectCountLabel(project.sites.size, "site", "sites")}, " +
+        "${projectCountLabel(sectorCount, "sector", "sectors")}, " +
+        "${projectCountLabel(project.receivers.size, "receiver", "receivers")}, and " +
+        "${projectCountLabel(project.studies.size, "study summary", "study summaries")} " +
+        "from local storage."
 }
 
 internal fun suggestedDuplicateProjectName(

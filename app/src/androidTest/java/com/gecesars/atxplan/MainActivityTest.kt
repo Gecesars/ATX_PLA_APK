@@ -1,6 +1,7 @@
 package com.gecesars.atxplan
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assert
@@ -270,6 +271,74 @@ class MainActivityTest {
     }
 
     @Test
+    fun deleteProjectDialogDraftSurvivesActivityRecreation() {
+        val suffix = System.nanoTime().toString()
+        createSelectedProject("Delete Draft $suffix")
+        openProjectDelete()
+        val restoredDraft = "DELE"
+        composeRule.onNodeWithTag("delete_project_name_field")
+            .performTextReplacement(restoredDraft)
+
+        composeRule.activityRule.scenario.recreate()
+
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            composeRule.onAllNodes(hasTestTag("delete_project_name_field"))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("delete_project_name_field")
+            .assert(hasText(restoredDraft))
+        composeRule.onNodeWithTag("delete_project_confirm")
+            .assertHeightIsAtLeast(48.dp)
+            .assertIsNotEnabled()
+        composeRule.onNodeWithTag("delete_project_cancel")
+            .assertHeightIsAtLeast(48.dp)
+            .performClick()
+        composeRule.onNodeWithTag("delete_project_name_field").assertDoesNotExist()
+    }
+
+    @Test
+    fun deletedProjectRemainsAbsentAfterActivityRecreation() {
+        val suffix = System.nanoTime()
+        val fallbackProjectName = "Delete Fallback $suffix"
+        val deletedProjectName = "Durable Delete $suffix"
+        createSelectedProject(fallbackProjectName)
+        createSelectedProject(deletedProjectName)
+        openProjectDelete()
+        composeRule.onNodeWithTag("delete_project_impact_summary").assertIsDisplayed()
+        composeRule.onNodeWithTag("delete_project_name_field")
+            .performTextReplacement("DELETE")
+        composeRule.onNodeWithTag("delete_project_confirm")
+            .assertHeightIsAtLeast(48.dp)
+            .performDirectClick()
+
+        composeRule.waitUntil(timeoutMillis = 10_000L) {
+            composeRule.onAllNodes(hasTestTag("delete_project_name_field"))
+                .fetchSemanticsNodes().isEmpty()
+        }
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            composeRule.onAllNodesWithText(deletedProjectName).fetchSemanticsNodes().isEmpty()
+        }
+        composeRule.onNodeWithTag("projects_list")
+            .performScrollToNode(hasTestTag("selected_project_card"))
+        composeRule.onNodeWithTag("selected_project_card")
+            .assert(hasText(fallbackProjectName))
+            .assertIsDisplayed()
+
+        composeRule.activityRule.scenario.recreate()
+
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            composeRule.onAllNodes(hasTestTag("projects_list"))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("projects_list")
+            .performScrollToNode(hasTestTag("selected_project_card"))
+        composeRule.onNodeWithTag("selected_project_card")
+            .assert(hasText(fallbackProjectName))
+            .assertIsDisplayed()
+        composeRule.onNodeWithText(deletedProjectName).assertDoesNotExist()
+    }
+
+    @Test
     fun completeRfPathIsPersistedAndVisibleAfterActivityRecreation() {
         composeRule.onNodeWithText("Projects").performClick()
         composeRule.waitUntil(timeoutMillis = 5_000L) {
@@ -323,7 +392,10 @@ class MainActivityTest {
     }
 
     private fun createSelectedProject(name: String) {
-        composeRule.onNodeWithText("Projects").performClick()
+        composeRule.onNode(
+            hasText("Projects") and
+                SemanticsMatcher.keyIsDefined(SemanticsActions.OnClick),
+        ).performClick()
         composeRule.waitUntil(timeoutMillis = 5_000L) {
             composeRule.onAllNodes(hasTestTag("projects_list"))
                 .fetchSemanticsNodes().isNotEmpty()
@@ -364,6 +436,23 @@ class MainActivityTest {
             .performDirectClick()
         composeRule.waitUntil(timeoutMillis = 5_000L) {
             composeRule.onAllNodes(hasTestTag("duplicate_project_name_field"))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+    }
+
+    private fun openProjectDelete() {
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            composeRule.onAllNodes(hasTestTag("projects_list"))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("projects_list")
+            .performScrollToNode(hasTestTag("delete_project_button"))
+        composeRule.onNodeWithTag("delete_project_button")
+            .assertIsDisplayed()
+            .assertHeightIsAtLeast(48.dp)
+            .performDirectClick()
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            composeRule.onAllNodes(hasTestTag("delete_project_name_field"))
                 .fetchSemanticsNodes().isNotEmpty()
         }
     }

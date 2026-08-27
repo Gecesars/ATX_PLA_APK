@@ -114,6 +114,7 @@ fun AtxPlanApp() {
         onCreateProject = viewModel::createProject,
         onRenameProject = viewModel::renameProject,
         onDuplicateProject = viewModel::duplicateProject,
+        onDeleteProject = viewModel::deleteProject,
         onSelectProject = viewModel::selectProject,
         onCalculateLink = viewModel::calculateLinkBudget,
         onSaveRfPath = viewModel::addRfPath,
@@ -129,6 +130,7 @@ private fun AtxPlanShell(
     onCreateProject: (String, String) -> Unit,
     onRenameProject: (com.gecesars.atxplan.domain.application.RenameProjectCommand) -> Unit,
     onDuplicateProject: (com.gecesars.atxplan.domain.application.DuplicateProjectCommand) -> Unit,
+    onDeleteProject: (com.gecesars.atxplan.domain.application.DeleteProjectCommand) -> Unit,
     onSelectProject: (String) -> Unit,
     onCalculateLink: (com.gecesars.atxplan.domain.rf.LinkBudgetInput) -> Unit,
     onSaveRfPath: (com.gecesars.atxplan.domain.application.AddRfPathCommand) -> Unit,
@@ -279,6 +281,7 @@ private fun AtxPlanShell(
                                         onCreateProject = onCreateProject,
                                         onSelectProject = onSelectProject,
                                         onDuplicateProject = onDuplicateProject,
+                                        onDeleteProject = onDeleteProject,
                                         onRenameProject = { projectId ->
                                             val route = AtxRoute.projectRename(projectId)
                                             if (

@@ -9,6 +9,8 @@ import com.gecesars.atxplan.data.project.ProjectRepository
 import com.gecesars.atxplan.data.project.ProjectStorageException
 import com.gecesars.atxplan.domain.application.AppUseCases
 import com.gecesars.atxplan.domain.application.AddRfPathCommand
+import com.gecesars.atxplan.domain.application.DeleteProjectCommand
+import com.gecesars.atxplan.domain.application.DeleteProjectStatus
 import com.gecesars.atxplan.domain.application.DuplicateProjectCommand
 import com.gecesars.atxplan.domain.application.RenameProjectCommand
 import com.gecesars.atxplan.domain.application.RenameProjectStatus
@@ -33,6 +35,8 @@ sealed interface AppUiAction {
     data class RenameProject(val command: RenameProjectCommand) : AppUiAction
 
     data class DuplicateProject(val command: DuplicateProjectCommand) : AppUiAction
+
+    data class DeleteProject(val command: DeleteProjectCommand) : AppUiAction
 
     data class SelectProject(val projectId: String) : AppUiAction
 
@@ -114,6 +118,7 @@ class AppViewModel(
             is AppUiAction.CreateProject -> handleCreateProject(action.name, action.customer)
             is AppUiAction.RenameProject -> handleRenameProject(action.command)
             is AppUiAction.DuplicateProject -> handleDuplicateProject(action.command)
+            is AppUiAction.DeleteProject -> handleDeleteProject(action.command)
             is AppUiAction.SelectProject -> handleSelectProject(action.projectId)
             is AppUiAction.CalculateLinkBudget -> handleCalculateLinkBudget(action.input)
             is AppUiAction.AddRfPath -> handleAddRfPath(action.command)
@@ -132,6 +137,10 @@ class AppViewModel(
 
     fun duplicateProject(command: DuplicateProjectCommand) {
         onAction(AppUiAction.DuplicateProject(command))
+    }
+
+    fun deleteProject(command: DeleteProjectCommand) {
+        onAction(AppUiAction.DeleteProject(command))
     }
 
     fun selectProject(projectId: String) {
@@ -244,6 +253,33 @@ class AppViewModel(
                         "\"${result.duplicatedProject.name}\" in local storage.",
                 ),
             )
+        }
+    }
+
+    private fun handleDeleteProject(command: DeleteProjectCommand) {
+        persistCatalogMutation { current ->
+            val result = useCases.deleteProject(current, command)
+            when (result.status) {
+                DeleteProjectStatus.DELETED -> CatalogMutation(
+                    updatedCatalog = result.catalog,
+                    successEffect = AppUiEffect.ShowNotice(
+                        "Project and its catalog data were deleted from local storage.",
+                    ),
+                )
+                DeleteProjectStatus.STALE_PROJECT -> CatalogMutation(
+                    updatedCatalog = result.catalog,
+                    noChangeEffect = AppUiEffect.ShowNotice(
+                        "The project changed in local storage. Review its latest details and " +
+                            "confirm deletion again.",
+                    ),
+                )
+                DeleteProjectStatus.NOT_FOUND -> CatalogMutation(
+                    updatedCatalog = result.catalog,
+                    noChangeEffect = AppUiEffect.ShowNotice(
+                        "The project no longer exists in local storage.",
+                    ),
+                )
+            }
         }
     }
 

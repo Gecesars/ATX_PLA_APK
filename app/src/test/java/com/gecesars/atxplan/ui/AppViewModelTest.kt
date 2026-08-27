@@ -4,6 +4,7 @@ import com.gecesars.atxplan.data.project.ProjectRepository
 import com.gecesars.atxplan.data.project.ProjectStorageException
 import com.gecesars.atxplan.domain.application.AppCoroutineDispatchers
 import com.gecesars.atxplan.domain.application.AppUseCases
+import com.gecesars.atxplan.domain.application.DeleteProjectCommand
 import com.gecesars.atxplan.domain.application.DuplicateProjectCommand
 import com.gecesars.atxplan.domain.application.EpochMillisClock
 import com.gecesars.atxplan.domain.application.LinkBudgetCalculator
@@ -279,6 +280,131 @@ class AppViewModelTest {
             assertEquals(3, durable.projects.map { it.id }.distinct().size)
             assertEquals("Second Copy", durable.selectedProject?.name)
             assertEquals(2, repository.savedCatalogs.size)
+        }
+
+    @Test
+    fun `delete action persists before publishing and selects the next project`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val initial = catalogWithProjects("Delete Me", "Next Project", "Last Project")
+            val repository = FakeProjectRepository(initial).apply {
+                saveDelayMillis = 50L
+            }
+            val viewModel = createViewModel(repository)
+            advanceUntilIdle()
+
+            viewModel.deleteProject(DeleteProjectCommand(initial.projects.first()))
+            runCurrent()
+
+            assertTrue(viewModel.state.value.isSavingCatalog)
+            assertEquals(initial, viewModel.state.value.catalog)
+            assertTrue(repository.savedCatalogs.isEmpty())
+
+            advanceUntilIdle()
+
+            val state = viewModel.state.value
+            assertFalse(state.isSavingCatalog)
+            assertEquals(listOf("Next Project", "Last Project"), state.catalog.projects.map { it.name })
+            assertEquals("Next Project", state.selectedProject?.name)
+            assertSame(initial.projects[1], state.catalog.projects[0])
+            assertSame(initial.projects[2], state.catalog.projects[1])
+            assertEquals(state.catalog, repository.savedCatalogs.single())
+            assertEquals(1L, state.catalogMutationCompletionCount)
+            assertEquals(
+                AppUiEffect.ShowNotice(
+                    "Project and its catalog data were deleted from local storage.",
+                ),
+                state.pendingEffect,
+            )
+        }
+
+    @Test
+    fun `delete save failure retains the complete prior catalog and completes exactly once`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val initial = catalogWithProjects("Durable Project", "Fallback Project")
+            val repository = FakeProjectRepository(initial).apply {
+                saveError = ProjectStorageException("Deletion could not be written.")
+            }
+            val viewModel = createViewModel(repository)
+            advanceUntilIdle()
+
+            viewModel.deleteProject(DeleteProjectCommand(initial.projects.first()))
+            advanceUntilIdle()
+
+            val state = viewModel.state.value
+            assertEquals(initial, state.catalog)
+            assertEquals(initial.selectedProjectId, state.catalog.selectedProjectId)
+            assertEquals(1L, state.catalogMutationCompletionCount)
+            assertEquals("Deletion could not be written.", state.storageError)
+            assertFalse(state.isSavingCatalog)
+            assertTrue(repository.savedCatalogs.isEmpty())
+        }
+
+    @Test
+    fun `stale delete cannot remove a project whose durable RF graph changed`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val initial = catalogWithProjects("Shared RF Project")
+            val repository = FakeProjectRepository(initial)
+            val staleDeleteViewModel = createViewModel(repository)
+            val peerRfViewModel = createViewModel(repository)
+            advanceUntilIdle()
+            val expectedSnapshot = initial.projects.single()
+
+            peerRfViewModel.addRfPath(
+                RfPathDraft().toCommand(expectedSnapshot.id).getOrThrow(),
+            )
+            advanceUntilIdle()
+            val latestProject = repository.catalogToLoad.projects.single()
+            assertEquals(1, latestProject.networks.size)
+            repository.saveError = ProjectStorageException(
+                "A rejected no-op deletion must not attempt a catalog write.",
+            )
+
+            staleDeleteViewModel.deleteProject(DeleteProjectCommand(expectedSnapshot))
+            advanceUntilIdle()
+
+            val state = staleDeleteViewModel.state.value
+            assertEquals(listOf(latestProject), state.catalog.projects)
+            assertEquals(latestProject.id, state.catalog.selectedProjectId)
+            assertEquals(1, repository.savedCatalogs.size)
+            assertEquals(1L, state.catalogMutationCompletionCount)
+            assertNull(state.storageError)
+            assertEquals(
+                "The project changed in local storage. Review its latest details and " +
+                    "confirm deletion again.",
+                state.notice,
+            )
+        }
+
+    @Test
+    fun `concurrent delete attempts commit once and both observe the durable absence`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val initial = catalogWithProjects("Shared Delete Target", "Surviving Project")
+            val repository = FakeProjectRepository(initial)
+            val firstViewModel = createViewModel(repository)
+            val secondViewModel = createViewModel(repository)
+            advanceUntilIdle()
+            val command = DeleteProjectCommand(initial.projects.first())
+
+            firstViewModel.deleteProject(command)
+            secondViewModel.deleteProject(command)
+            advanceUntilIdle()
+
+            val survivingProject = initial.projects.last()
+            assertEquals(listOf(survivingProject), repository.catalogToLoad.projects)
+            assertEquals(survivingProject.id, repository.catalogToLoad.selectedProjectId)
+            assertEquals(1, repository.savedCatalogs.size)
+            assertEquals(repository.catalogToLoad, firstViewModel.state.value.catalog)
+            assertEquals(repository.catalogToLoad, secondViewModel.state.value.catalog)
+            assertEquals(1L, firstViewModel.state.value.catalogMutationCompletionCount)
+            assertEquals(1L, secondViewModel.state.value.catalogMutationCompletionCount)
+            assertEquals(
+                "Project and its catalog data were deleted from local storage.",
+                firstViewModel.state.value.notice,
+            )
+            assertEquals(
+                "The project no longer exists in local storage.",
+                secondViewModel.state.value.notice,
+            )
         }
 
     @Test
@@ -941,9 +1067,9 @@ class AppViewModelTest {
             transform: (ProjectCatalog) -> ProjectCatalog,
         ): ProjectCatalog = updateMutex.withLock {
             val updatedCatalog = transform(catalogToLoad)
-            if (saveDelayMillis > 0L) delay(saveDelayMillis)
-            saveError?.let { throw it }
             if (updatedCatalog != catalogToLoad) {
+                if (saveDelayMillis > 0L) delay(saveDelayMillis)
+                saveError?.let { throw it }
                 savedCatalogs += updatedCatalog
                 catalogToLoad = updatedCatalog
             }

@@ -1,6 +1,7 @@
 package com.gecesars.atxplan
 
 import androidx.compose.material3.Text
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsEnabled
@@ -10,6 +11,7 @@ import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -317,6 +319,7 @@ class AtxNavigationStateTest {
                 onAddRfPath = {},
                 onRenameProject = {},
                 onDuplicateProject = { duplicateRequests += 1 },
+                onDeleteProject = {},
             )
         }
         composeRule.onNodeWithTag("projects_list")
@@ -351,6 +354,7 @@ class AtxNavigationStateTest {
                 onAddRfPath = {},
                 onRenameProject = {},
                 onDuplicateProject = { command -> requestedName = command.newName },
+                onDeleteProject = {},
             )
         }
         composeRule.onNodeWithTag("projects_list")
@@ -390,6 +394,7 @@ class AtxNavigationStateTest {
                 onAddRfPath = {},
                 onRenameProject = {},
                 onDuplicateProject = {},
+                onDeleteProject = {},
             )
         }
         composeRule.onNodeWithTag("projects_list")
@@ -409,6 +414,211 @@ class AtxNavigationStateTest {
         composeRule.onNodeWithTag("duplicate_project_confirm")
             .assertIsEnabled()
             .assert(hasText("Duplicate"))
+    }
+
+    @Test
+    fun deleteDialogRequiresTheExactKeywordAndShowsItsLocalImpact() {
+        composeRule.setContent {
+            ProjectsScreen(
+                uiState = duplicateUiState(),
+                onCreateProject = { _, _ -> },
+                onSelectProject = {},
+                onAddRfPath = {},
+                onRenameProject = {},
+                onDuplicateProject = {},
+                onDeleteProject = {},
+            )
+        }
+        openDeleteDialog()
+        composeRule.onNodeWithContentDescription(
+            "Deletion confirmation. Type DELETE exactly, case-sensitive.",
+        ).assertIsDisplayed()
+
+        composeRule.onNodeWithTag("delete_project_impact_summary").assert(
+            hasText(
+                "Deleting this project removes 0 networks, 0 sites, 0 sectors, " +
+                    "0 receivers, and 0 study summaries from local storage.",
+            ),
+        )
+        composeRule.onNodeWithTag("delete_project_name_field")
+            .performTextReplacement("delete")
+        composeRule.onNodeWithText("Type DELETE exactly to confirm permanent deletion.")
+            .assertIsDisplayed()
+        composeRule.onNodeWithTag("delete_project_confirm").assertIsNotEnabled()
+
+        composeRule.onNodeWithTag("delete_project_name_field")
+            .performTextReplacement("DELETE")
+        composeRule.onNodeWithTag("delete_project_confirm").assertIsEnabled()
+    }
+
+    @Test
+    fun deleteDialogRestoresItsDraftButNotTransientPendingState() {
+        val restorationTester = StateRestorationTester(composeRule)
+        var deleteRequests = 0
+        restorationTester.setContent {
+            ProjectsScreen(
+                uiState = duplicateUiState(),
+                onCreateProject = { _, _ -> },
+                onSelectProject = {},
+                onAddRfPath = {},
+                onRenameProject = {},
+                onDuplicateProject = {},
+                onDeleteProject = { deleteRequests += 1 },
+            )
+        }
+        openDeleteDialog()
+        composeRule.onNodeWithTag("delete_project_name_field")
+            .performTextReplacement("DELETE")
+        composeRule.onNodeWithTag("delete_project_confirm").performClick()
+        composeRule.onNodeWithText("Deleting...").assertIsDisplayed()
+        composeRule.runOnIdle { assertEquals(1, deleteRequests) }
+
+        restorationTester.emulateSavedInstanceStateRestore()
+
+        composeRule.onNodeWithTag("delete_project_name_field")
+            .assert(hasText("DELETE"))
+        composeRule.onNodeWithTag("delete_project_confirm")
+            .assertIsEnabled()
+    }
+
+    @Test
+    fun restoredDeleteDialogClearsConfirmationWhenTheReviewedSnapshotChanged() {
+        val restorationTester = StateRestorationTester(composeRule)
+        val changedProject = restorationProject.copy(
+            name = "Changed Restored Project",
+            notes = "Changed before the restored composition.",
+            updatedAtEpochMillis = 2L,
+        )
+        var useChangedProject = false
+        restorationTester.setContent {
+            DisposableEffect(Unit) {
+                onDispose { useChangedProject = true }
+            }
+            ProjectsScreen(
+                uiState = duplicateUiState(
+                    projects = listOf(
+                        if (useChangedProject) changedProject else restorationProject,
+                    ),
+                ),
+                onCreateProject = { _, _ -> },
+                onSelectProject = {},
+                onAddRfPath = {},
+                onRenameProject = {},
+                onDuplicateProject = {},
+                onDeleteProject = {},
+            )
+        }
+        openDeleteDialog()
+        composeRule.onNodeWithTag("delete_project_name_field")
+            .performTextReplacement("DELETE")
+        composeRule.onNodeWithTag("delete_project_confirm").assertIsEnabled()
+
+        restorationTester.emulateSavedInstanceStateRestore()
+
+        composeRule.onNodeWithTag("delete_project_source_name")
+            .assert(hasText(changedProject.name))
+            .assertIsDisplayed()
+        composeRule.onNodeWithTag("delete_project_confirm").assertIsNotEnabled()
+        composeRule.onNodeWithTag("delete_project_name_field")
+            .performTextReplacement("DELETE")
+        composeRule.onNodeWithTag("delete_project_confirm").assertIsEnabled()
+    }
+
+    @Test
+    fun rejectedDeleteAttemptRetainsDraftAndReenablesConfirmation() {
+        val uiState = mutableStateOf(duplicateUiState())
+        composeRule.setContent {
+            ProjectsScreen(
+                uiState = uiState.value,
+                onCreateProject = { _, _ -> },
+                onSelectProject = {},
+                onAddRfPath = {},
+                onRenameProject = {},
+                onDuplicateProject = {},
+                onDeleteProject = {},
+            )
+        }
+        openDeleteDialog()
+        composeRule.onNodeWithTag("delete_project_name_field")
+            .performTextReplacement("DELETE")
+        composeRule.onNodeWithTag("delete_project_confirm").performClick()
+        composeRule.onNodeWithText("Deleting...").assertIsDisplayed()
+
+        composeRule.runOnIdle {
+            uiState.value = duplicateUiState(completionCount = 8L)
+        }
+
+        composeRule.onNodeWithTag("delete_project_name_field")
+            .assert(hasText("DELETE"))
+        composeRule.onNodeWithTag("delete_project_confirm")
+            .assertIsEnabled()
+    }
+
+    @Test
+    fun deleteDialogClosesWhenTheLoadedWritableCatalogShowsDurableAbsence() {
+        val uiState = mutableStateOf(duplicateUiState())
+        composeRule.setContent {
+            ProjectsScreen(
+                uiState = uiState.value,
+                onCreateProject = { _, _ -> },
+                onSelectProject = {},
+                onAddRfPath = {},
+                onRenameProject = {},
+                onDuplicateProject = {},
+                onDeleteProject = {},
+            )
+        }
+        openDeleteDialog()
+        composeRule.onNodeWithTag("delete_project_name_field")
+            .performTextReplacement("DELETE")
+        composeRule.onNodeWithTag("delete_project_confirm").performClick()
+
+        composeRule.runOnIdle {
+            uiState.value = duplicateUiState(
+                projects = emptyList(),
+                selectedProjectId = "missing-project",
+            )
+        }
+
+        composeRule.onNodeWithTag("delete_project_name_field").assertDoesNotExist()
+        composeRule.onNodeWithTag("projects_list").assertIsDisplayed()
+    }
+
+    @Test
+    fun staleDeleteCompletionRebasesTheSnapshotAndRequiresFreshConfirmation() {
+        val uiState = mutableStateOf(duplicateUiState())
+        composeRule.setContent {
+            ProjectsScreen(
+                uiState = uiState.value,
+                onCreateProject = { _, _ -> },
+                onSelectProject = {},
+                onAddRfPath = {},
+                onRenameProject = {},
+                onDuplicateProject = {},
+                onDeleteProject = {},
+            )
+        }
+        openDeleteDialog()
+        composeRule.onNodeWithTag("delete_project_name_field")
+            .performTextReplacement("DELETE")
+        composeRule.onNodeWithTag("delete_project_confirm").performClick()
+
+        composeRule.runOnIdle {
+            uiState.value = duplicateUiState(
+                projects = listOf(
+                    restorationProject.copy(
+                        notes = "Changed by a concurrent catalog transaction.",
+                        updatedAtEpochMillis = 2L,
+                    ),
+                ),
+                completionCount = 8L,
+            )
+        }
+
+        composeRule.onNodeWithTag("delete_project_confirm").assertIsNotEnabled()
+        composeRule.onNodeWithTag("delete_project_name_field")
+            .performTextReplacement("DELETE")
+        composeRule.onNodeWithTag("delete_project_confirm").assertIsEnabled()
     }
 
     @Test
@@ -447,6 +657,13 @@ class AtxNavigationStateTest {
     }
 
     private fun routeMarker(route: AtxRoute) = "Current route: ${route.stableId}"
+
+    private fun openDeleteDialog() {
+        composeRule.onNodeWithTag("projects_list")
+            .performScrollToNode(hasTestTag("delete_project_button"))
+        composeRule.onNodeWithTag("delete_project_button").performClick()
+        composeRule.onNodeWithTag("delete_project_name_field").assertIsDisplayed()
+    }
 
     private val restorationProject = PlannerProject(
         id = "project-restoration",
