@@ -14,9 +14,9 @@ import org.junit.Test
 
 class ProjectModelsTest {
     @Test
-    fun `new catalogs use schema 3`() {
-        assertEquals(3, PROJECT_CATALOG_SCHEMA_VERSION)
-        assertEquals(3, ProjectCatalog().schemaVersion)
+    fun `new catalogs use schema 4`() {
+        assertEquals(4, PROJECT_CATALOG_SCHEMA_VERSION)
+        assertEquals(4, ProjectCatalog().schemaVersion)
         assertTrue(ProjectCatalog().archivedProjects.isEmpty())
     }
 
@@ -81,7 +81,7 @@ class ProjectModelsTest {
     }
 
     @Test
-    fun `archived aggregate and lifecycle metadata survive schema 3 round trip`() {
+    fun `archived aggregate and lifecycle metadata survive schema 4 round trip`() {
         val json = Json { encodeDefaults = true }
         val project = ProjectFactory.demonstration(nowEpochMillis = 42L)
         val archived = ArchivedProject(
@@ -98,6 +98,277 @@ class ProjectModelsTest {
         assertEquals(project.sites, restored.archivedProjects.single().project.sites)
         assertEquals(84L, restored.archivedProjects.single().archivedAtEpochMillis)
         assertEquals(7, restored.archivedProjects.single().originalProjectIndex)
+    }
+
+    @Test
+    fun `schema 4 carrier records survive project JSON round trip with their references`() {
+        val antennaArtifact = artifactReference(
+            id = "artifact-antenna",
+            role = ProjectArtifactRole.ANTENNA_PATTERN,
+            fileName = "antenna-pattern.json",
+            digestCharacter = 'a',
+        )
+        val gisArtifact = artifactReference(
+            id = "artifact-gis",
+            role = ProjectArtifactRole.GIS_LAYER,
+            fileName = "terrain-layer.tif",
+            digestCharacter = 'b',
+        )
+        val coverageArtifact = artifactReference(
+            id = "artifact-coverage",
+            role = ProjectArtifactRole.COVERAGE_RESULT,
+            fileName = "coverage-result.bin",
+            digestCharacter = 'c',
+        )
+        val regulatoryArtifact = artifactReference(
+            id = "artifact-regulatory",
+            role = ProjectArtifactRole.REGULATORY_RESULT,
+            fileName = "regulatory-result.json",
+            digestCharacter = 'd',
+        )
+        val pattern = AntennaPatternRecord(
+            id = "pattern-main",
+            name = "Main Horizontal Pattern",
+            nominalFrequencyHz = 758_000_000.0,
+            peakGainDbi = 17.5,
+            sourceFormat = "ATX JSON",
+            sourceSha256 = antennaArtifact.sha256,
+            dataArtifactId = antennaArtifact.id,
+        )
+        val gisLayer = GisLayerRecord(
+            id = "gis-terrain",
+            name = "Synthetic Terrain",
+            geometryType = GisGeometryType.RASTER,
+            coordinateReferenceSystem = "EPSG:31983",
+            featureCount = 1L,
+            dataArtifactId = gisArtifact.id,
+            sourceSha256 = gisArtifact.sha256,
+        )
+        val scenario = StudyScenarioRecord(
+            id = "scenario-baseline",
+            name = "Baseline Coverage",
+            modelId = "free-space-reference",
+            modelEdition = "2026-test",
+            settingsJson = "{\"resolutionM\":30}",
+        )
+        val coverage = CoverageSnapshotRecord(
+            id = "coverage-baseline",
+            name = "Baseline RSRP",
+            scenarioId = scenario.id,
+            metricId = "rsrp",
+            unit = "dBm",
+            noDataMeaning = "No evaluated sample is available.",
+            dataArtifactId = coverageArtifact.id,
+            createdAtEpochMillis = 40L,
+        )
+        val regulatory = RegulatoryStudyRecord(
+            id = "regulatory-screening",
+            name = "Synthetic Screening",
+            serviceId = "land-mobile",
+            status = RegulatoryRecordStatus.INCONCLUSIVE,
+            rulesetId = "synthetic-rules-v1",
+            dataArtifactId = regulatoryArtifact.id,
+            updatedAtEpochMillis = 50L,
+        )
+        val network = testNetwork()
+        val receiver = testReceiver(network.id).copy(
+            equipmentModel = "Synthetic CPE",
+            networkProfiles = listOf(
+                ReceiverNetworkProfile(
+                    networkId = network.id,
+                    antennaGainDbi = 17.0,
+                    systemLossDb = 1.25,
+                    sensitivityDbm = -98.5,
+                ),
+            ),
+        )
+        val site = RadioSite(
+            id = "site-schema-4",
+            name = "Schema 4 Site",
+            location = GeoPoint(-23.55, -46.63),
+            towerHeightM = 42.0,
+            sectors = listOf(
+                Sector(
+                    id = "sector-schema-4",
+                    name = "Schema 4 Sector",
+                    azimuthDegrees = 90.0,
+                    antennaHeightM = 35.0,
+                    transmitPowerDbm = 43.0,
+                    antennaGainDbi = 17.5,
+                    feederLossDb = 1.5,
+                    frequencyMHz = 758.0,
+                    networkId = network.id,
+                    transmitAntennaPatternId = pattern.id,
+                    receiveAntennaPatternId = pattern.id,
+                    equipmentModel = "Synthetic Radio",
+                ),
+            ),
+        )
+        val provenance = ImportProvenance(
+            sourceFormat = "Synthetic ATX fixture",
+            sourceSha256 = "e".repeat(64),
+            sourceVersion = "4-test",
+            importedAtEpochMillis = 25L,
+            warnings = listOf("Synthetic warning retained for audit."),
+            losses = listOf("Synthetic unsupported field retained for audit."),
+        )
+        val project = PlannerProject(
+            id = "project-schema-4-records",
+            name = "Schema 4 Records",
+            createdAtEpochMillis = 10L,
+            updatedAtEpochMillis = 50L,
+            networks = listOf(network),
+            sites = listOf(site),
+            receivers = listOf(receiver),
+            antennaPatterns = listOf(pattern),
+            gisLayers = listOf(gisLayer),
+            studyScenarios = listOf(scenario),
+            activeStudyScenarioId = scenario.id,
+            coverageSnapshots = listOf(coverage),
+            regulatoryStudies = listOf(regulatory),
+            artifacts = listOf(
+                antennaArtifact,
+                gisArtifact,
+                coverageArtifact,
+                regulatoryArtifact,
+            ),
+            importProvenance = provenance,
+        )
+        val json = Json { encodeDefaults = true }
+
+        val restored = json.decodeFromString<PlannerProject>(json.encodeToString(project))
+
+        assertEquals(project, restored)
+        assertEquals(pattern.id, restored.sites.single().sectors.single().transmitAntennaPatternId)
+        assertEquals(scenario.id, restored.activeStudyScenarioId)
+        assertEquals(coverageArtifact.id, restored.coverageSnapshots.single().dataArtifactId)
+        assertEquals(regulatoryArtifact.id, restored.regulatoryStudies.single().dataArtifactId)
+        assertEquals(provenance, restored.importProvenance)
+        assertEquals(receiver.networkProfiles, restored.receivers.single().networkProfiles)
+    }
+
+    @Test
+    fun `schema 4 carrier records reject malformed bounded metadata`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            artifactReference(digestCharacter = 'A')
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            AntennaPatternRecord(
+                id = "pattern-invalid",
+                name = "Invalid Pattern",
+                sourceSha256 = "not-a-sha-256-digest",
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            GisLayerRecord(
+                id = "gis-invalid",
+                name = "Invalid GIS Layer",
+                geometryType = GisGeometryType.UNKNOWN,
+                featureCount = -1L,
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            StudyScenarioRecord(
+                id = "scenario-invalid",
+                name = "Invalid Scenario",
+                modelId = "",
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            CoverageSnapshotRecord(
+                id = "coverage-invalid",
+                name = "Invalid Coverage",
+                metricId = "rsrp",
+                unit = "dBm",
+                noDataMeaning = "",
+                createdAtEpochMillis = 1L,
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            RegulatoryStudyRecord(
+                id = "regulatory-invalid",
+                name = "Invalid Regulatory Record",
+                serviceId = "land-mobile",
+                rulesetId = "synthetic-rules-v1",
+                updatedAtEpochMillis = -1L,
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            ImportProvenance(
+                sourceFormat = "Synthetic fixture",
+                sourceSha256 = "invalid",
+                importedAtEpochMillis = 1L,
+            )
+        }
+    }
+
+    @Test
+    fun `schema 4 project rejects missing antenna scenario and artifact references`() {
+        val network = testNetwork()
+        val sectorWithMissingPattern = Sector(
+            id = "sector-missing-pattern",
+            name = "Missing Pattern Sector",
+            azimuthDegrees = 0.0,
+            antennaHeightM = 30.0,
+            transmitPowerDbm = 43.0,
+            antennaGainDbi = 10.0,
+            feederLossDb = 1.0,
+            frequencyMHz = 758.0,
+            networkId = network.id,
+            transmitAntennaPatternId = "pattern-missing",
+        )
+
+        assertThrows(IllegalArgumentException::class.java) {
+            PlannerProject(
+                id = "project-missing-pattern",
+                name = "Missing Pattern",
+                createdAtEpochMillis = 1L,
+                updatedAtEpochMillis = 1L,
+                networks = listOf(network),
+                sites = listOf(
+                    RadioSite(
+                        id = "site-missing-pattern",
+                        name = "Missing Pattern Site",
+                        location = GeoPoint(0.0, 0.0),
+                        sectors = listOf(sectorWithMissingPattern),
+                    ),
+                ),
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            PlannerProject(
+                id = "project-missing-scenario",
+                name = "Missing Scenario",
+                createdAtEpochMillis = 1L,
+                updatedAtEpochMillis = 1L,
+                coverageSnapshots = listOf(
+                    CoverageSnapshotRecord(
+                        id = "coverage-missing-scenario",
+                        name = "Missing Scenario Coverage",
+                        scenarioId = "scenario-missing",
+                        metricId = "signal-level",
+                        unit = "dBm",
+                        noDataMeaning = "No evaluated sample is available.",
+                        createdAtEpochMillis = 1L,
+                    ),
+                ),
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            PlannerProject(
+                id = "project-missing-artifact",
+                name = "Missing Artifact",
+                createdAtEpochMillis = 1L,
+                updatedAtEpochMillis = 1L,
+                antennaPatterns = listOf(
+                    AntennaPatternRecord(
+                        id = "pattern-missing-artifact",
+                        name = "Missing Artifact Pattern",
+                        dataArtifactId = "artifact-missing",
+                    ),
+                ),
+            )
+        }
     }
 
     @Test
@@ -261,7 +532,38 @@ class ProjectModelsTest {
                 receivers = listOf(testReceiver(networkId = "missing-network")),
             )
         }
+        assertThrows(IllegalArgumentException::class.java) {
+            PlannerProject(
+                id = "orphaned-receiver-profile",
+                name = "Orphaned Receiver Profile",
+                createdAtEpochMillis = 1L,
+                updatedAtEpochMillis = 1L,
+                networks = listOf(network),
+                receivers = listOf(
+                    receiver.copy(
+                        networkProfiles = listOf(
+                            ReceiverNetworkProfile(networkId = "missing-profile-network"),
+                        ),
+                    ),
+                ),
+            )
+        }
     }
+
+    private fun artifactReference(
+        id: String = "artifact-test",
+        role: ProjectArtifactRole = ProjectArtifactRole.OTHER,
+        fileName: String = "artifact.bin",
+        digestCharacter: Char = 'f',
+    ) = ProjectArtifactReference(
+        id = id,
+        role = role,
+        fileName = fileName,
+        mediaType = "application/octet-stream",
+        sha256 = digestCharacter.toString().repeat(64),
+        byteCount = 128L,
+        createdAtEpochMillis = 5L,
+    )
 
     private fun testNetwork() = RfNetwork(
         id = "network-fwa",

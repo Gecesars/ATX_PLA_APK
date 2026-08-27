@@ -48,10 +48,10 @@ class ProjectCatalogPersistenceTest {
     }
 
     @Test
-    fun `schema 1 fixture is migrated through schema 2 and atomically promoted to schema 3`() = runBlocking {
+    fun `schema 1 fixture is migrated through schema 2 and atomically promoted to schema 4`() = runBlocking {
         val legacyPayload = fixture("project_catalog_v1.json")
         val expected = codec.decode(codec.parse(legacyPayload)).copy(
-            schemaVersion = 3,
+            schemaVersion = 4,
             archivedProjects = emptyList(),
         )
         val storage = InMemoryCatalogStorage(legacyPayload)
@@ -60,7 +60,7 @@ class ProjectCatalogPersistenceTest {
         val migrated = persistence.loadCatalog()
 
         assertEquals(expected, migrated)
-        assertEquals(3, migrated.schemaVersion)
+        assertEquals(4, migrated.schemaVersion)
         assertEquals("legacy-project", migrated.selectedProjectId)
         assertEquals("Legacy Mountain Link", migrated.selectedProject?.name)
         assertEquals("Legacy Carrier", migrated.selectedProject?.customer)
@@ -84,7 +84,7 @@ class ProjectCatalogPersistenceTest {
         assertNull(migrated.selectedProject?.sites?.single()?.sectors?.single()?.networkId)
         assertTrue(migrated.archivedProjects.isEmpty())
         assertEquals(1, storage.writeAttempts.get())
-        assertEquals(3, codec.parse(storage.snapshot()).schemaVersion)
+        assertEquals(4, codec.parse(storage.snapshot()).schemaVersion)
         assertEquals(migrated, codec.decode(storage.snapshot()))
 
         assertEquals(migrated, persistence.loadCatalog())
@@ -109,14 +109,14 @@ class ProjectCatalogPersistenceTest {
     }
 
     @Test
-    fun `schema 2 fixture is migrated and atomically promoted to schema 3`() = runBlocking {
+    fun `schema 2 fixture is migrated and atomically promoted to schema 4`() = runBlocking {
         val schema2Payload = fixture("project_catalog_v2.json")
         val storage = InMemoryCatalogStorage(schema2Payload)
         val persistence = persistence(storage)
 
         val migrated = persistence.loadCatalog()
 
-        assertEquals(3, migrated.schemaVersion)
+        assertEquals(4, migrated.schemaVersion)
         assertEquals("schema-2-project", migrated.selectedProjectId)
         assertEquals("Schema 2 Mountain Path", migrated.selectedProject?.name)
         assertEquals(
@@ -134,7 +134,7 @@ class ProjectCatalogPersistenceTest {
         )
         assertTrue(migrated.archivedProjects.isEmpty())
         assertEquals(1, storage.writeAttempts.get())
-        assertEquals(3, codec.parse(storage.snapshot()).schemaVersion)
+        assertEquals(4, codec.parse(storage.snapshot()).schemaVersion)
         assertEquals(migrated, codec.decode(storage.snapshot()))
 
         assertEquals(migrated, persistence.loadCatalog())
@@ -172,7 +172,7 @@ class ProjectCatalogPersistenceTest {
 
         val migrated = persistence.loadCatalog()
 
-        assertEquals(3, migrated.schemaVersion)
+        assertEquals(4, migrated.schemaVersion)
         assertTrue(migrated.archivedProjects.isEmpty())
         assertEquals("Schema 2 Mountain Path", migrated.selectedProject?.name)
         assertEquals(1, storage.writeAttempts.get())
@@ -192,9 +192,48 @@ class ProjectCatalogPersistenceTest {
 
         val migrated = persistence(storage).loadCatalog()
 
-        assertEquals(3, migrated.schemaVersion)
+        assertEquals(4, migrated.schemaVersion)
         assertTrue(migrated.archivedProjects.isEmpty())
         assertEquals("Legacy Mountain Link", migrated.selectedProject?.name)
+        assertEquals(1, storage.writeAttempts.get())
+    }
+
+    @Test
+    fun `schema 1 schema 2 field injection is discarded before chained migration`() = runBlocking {
+        val schema1Text = fixture("project_catalog_v1.json")
+            .toString(Charsets.UTF_8)
+            .replace(
+                "\"frequencyMHz\": 450.25",
+                "\"frequencyMHz\": 450.25,\n              \"networkId\": \"legacy-network\"",
+            )
+            .replace(
+                "      \"studies\": [",
+                """
+                      "receivers": [
+                        {
+                          "id": "injected-receiver",
+                          "name": "Injected Receiver",
+                          "networkId": "legacy-network",
+                          "location": {"latitude": -23.4, "longitude": -46.7},
+                          "antennaHeightM": 10.0,
+                          "antennaGainDbi": 0.0,
+                          "systemLossDb": 0.0,
+                          "sensitivityDbm": -100.0,
+                          "noiseFigureDb": 0.0,
+                          "azimuthDegrees": 0.0,
+                          "electricalTiltDegrees": 0.0
+                        }
+                      ],
+                      "studies": [
+                """.trimIndent(),
+            )
+            .toByteArray(Charsets.UTF_8)
+        val storage = InMemoryCatalogStorage(schema1Text)
+
+        val migrated = persistence(storage).loadCatalog()
+
+        assertTrue(migrated.selectedProject?.receivers?.isEmpty() == true)
+        assertNull(migrated.selectedProject?.sites?.single()?.sectors?.single()?.networkId)
         assertEquals(1, storage.writeAttempts.get())
     }
 
@@ -231,7 +270,7 @@ class ProjectCatalogPersistenceTest {
     }
 
     @Test
-    fun `negative archive timestamp is rejected without replacing the schema 3 payload`() {
+    fun `negative archive timestamp is rejected without replacing the schema 4 payload`() {
         val archivedProject = ProjectFactory.create(
             name = "Archived Fixture",
             customer = "",
@@ -267,7 +306,7 @@ class ProjectCatalogPersistenceTest {
     fun `future schema is rejected without replacing its payload`() {
         val futurePayload = """
             {
-              "schemaVersion": 4,
+              "schemaVersion": 5,
               "selectedProjectId": null,
               "projects": []
             }

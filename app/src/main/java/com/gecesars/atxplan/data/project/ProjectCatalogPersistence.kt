@@ -19,6 +19,7 @@ import java.nio.charset.CodingErrorAction
 internal const val MAX_PROJECT_CATALOG_BYTES: Int = 5 * 1024 * 1024
 private const val LEGACY_PROJECT_CATALOG_SCHEMA_VERSION = 1
 private const val RF_REFERENCE_PROJECT_CATALOG_SCHEMA_VERSION = 2
+private const val ARCHIVE_PROJECT_CATALOG_SCHEMA_VERSION = 3
 
 /**
  * Byte-oriented storage boundary. Implementations must either replace the complete payload or
@@ -43,12 +44,8 @@ internal data class EncodedProjectCatalog(
 
 /** JSON and strict UTF-8 policy for the on-device project catalog. */
 internal class ProjectCatalogCodec(
-    private val json: Json = Json {
-        prettyPrint = true
-        encodeDefaults = true
-        ignoreUnknownKeys = true
-        explicitNulls = false
-    },
+    private val legacyJson: Json = projectCatalogJson(ignoreUnknownKeys = true),
+    private val currentJson: Json = projectCatalogJson(ignoreUnknownKeys = false),
 ) {
     @Throws(CharacterCodingException::class, SerializationException::class)
     fun parse(payload: ByteArray): EncodedProjectCatalog {
@@ -57,7 +54,7 @@ internal class ProjectCatalogCodec(
             .onUnmappableCharacter(CodingErrorAction.REPORT)
             .decode(ByteBuffer.wrap(payload))
             .toString()
-        val jsonElement = json.parseToJsonElement(text)
+        val jsonElement = legacyJson.parseToJsonElement(text)
         val jsonObject = jsonElement as? JsonObject
             ?: throw SerializationException("The project catalog root must be a JSON object.")
         val schemaVersion = jsonObject["schemaVersion"]
@@ -66,13 +63,19 @@ internal class ProjectCatalogCodec(
         return EncodedProjectCatalog(schemaVersion, jsonElement)
     }
 
-    fun decode(document: EncodedProjectCatalog): ProjectCatalog =
-        json.decodeFromJsonElement(ProjectCatalog.serializer(), document.jsonElement)
+    fun decode(document: EncodedProjectCatalog): ProjectCatalog {
+        val decoder = if (document.schemaVersion >= PROJECT_CATALOG_SCHEMA_VERSION) {
+            currentJson
+        } else {
+            legacyJson
+        }
+        return decoder.decodeFromJsonElement(ProjectCatalog.serializer(), document.jsonElement)
+    }
 
     fun decode(payload: ByteArray): ProjectCatalog = decode(parse(payload))
 
     fun encode(catalog: ProjectCatalog): ByteArray =
-        json.encodeToString(ProjectCatalog.serializer(), catalog).toByteArray(Charsets.UTF_8)
+        currentJson.encodeToString(ProjectCatalog.serializer(), catalog).toByteArray(Charsets.UTF_8)
 
     private fun parseSchemaVersion(element: JsonElement): Int {
         val version = (element as? JsonPrimitive)?.intOrNull
@@ -81,6 +84,13 @@ internal class ProjectCatalogCodec(
         }
         return version
     }
+}
+
+private fun projectCatalogJson(ignoreUnknownKeys: Boolean) = Json {
+    prettyPrint = true
+    encodeDefaults = true
+    this.ignoreUnknownKeys = ignoreUnknownKeys
+    explicitNulls = false
 }
 
 /** Ordered, explicit migrations from every supported durable schema to the current schema. */
@@ -93,18 +103,32 @@ internal class ProjectCatalogMigrator {
     fun documentForDecode(document: EncodedProjectCatalog): EncodedProjectCatalog {
         if (document.schemaVersion >= PROJECT_CATALOG_SCHEMA_VERSION) return document
         val jsonObject = document.jsonElement as? JsonObject ?: return document
+        val sanitizedRoot = if (document.schemaVersion < ARCHIVE_PROJECT_CATALOG_SCHEMA_VERSION) {
+            jsonObject.filterKeys { key -> key != ARCHIVED_PROJECTS_FIELD_NAME }
+        } else {
+            jsonObject
+        }
         return document.copy(
-            jsonElement = JsonObject(
-                jsonObject.filterKeys { key -> key != ARCHIVED_PROJECTS_FIELD_NAME },
-            ),
+            jsonElement = if (document.schemaVersion < PROJECT_CATALOG_SCHEMA_VERSION) {
+                sanitizePreVersion4Root(
+                    root = JsonObject(sanitizedRoot),
+                    sourceSchemaVersion = document.schemaVersion,
+                )
+            } else {
+                JsonObject(sanitizedRoot)
+            },
         )
     }
 
     fun migrate(catalog: ProjectCatalog, sourceSchemaVersion: Int): ProjectCatalog =
         when (sourceSchemaVersion) {
             LEGACY_PROJECT_CATALOG_SCHEMA_VERSION ->
-                migrateVersion2ToVersion3(migrateVersion1ToVersion2(catalog))
-            RF_REFERENCE_PROJECT_CATALOG_SCHEMA_VERSION -> migrateVersion2ToVersion3(catalog)
+                migrateVersion3ToVersion4(
+                    migrateVersion2ToVersion3(migrateVersion1ToVersion2(catalog)),
+                )
+            RF_REFERENCE_PROJECT_CATALOG_SCHEMA_VERSION ->
+                migrateVersion3ToVersion4(migrateVersion2ToVersion3(catalog))
+            ARCHIVE_PROJECT_CATALOG_SCHEMA_VERSION -> migrateVersion3ToVersion4(catalog)
             PROJECT_CATALOG_SCHEMA_VERSION -> catalog
             else -> throw IllegalArgumentException(
                 "No catalog migration exists from schema $sourceSchemaVersion.",
@@ -122,13 +146,171 @@ internal class ProjectCatalogMigrator {
 
     private fun migrateVersion2ToVersion3(catalog: ProjectCatalog): ProjectCatalog =
         catalog.copy(
-            schemaVersion = PROJECT_CATALOG_SCHEMA_VERSION,
+            schemaVersion = ARCHIVE_PROJECT_CATALOG_SCHEMA_VERSION,
             // Archive storage did not exist before v3. Never promote an injected legacy field.
             archivedProjects = emptyList(),
         )
 
+    private fun migrateVersion3ToVersion4(catalog: ProjectCatalog): ProjectCatalog =
+        catalog.copy(schemaVersion = PROJECT_CATALOG_SCHEMA_VERSION)
+
+    private fun sanitizePreVersion4Root(
+        root: JsonObject,
+        sourceSchemaVersion: Int,
+    ): JsonObject = JsonObject(
+        root.mapValues { (key, value) ->
+            when (key) {
+                PROJECTS_FIELD_NAME -> sanitizeProjectArray(value, sourceSchemaVersion)
+                ARCHIVED_PROJECTS_FIELD_NAME -> sanitizeArchiveArray(value, sourceSchemaVersion)
+                else -> value
+            }
+        },
+    )
+
+    private fun sanitizeProjectArray(
+        value: JsonElement,
+        sourceSchemaVersion: Int,
+    ): JsonElement =
+        (value as? kotlinx.serialization.json.JsonArray)?.let { projects ->
+            kotlinx.serialization.json.JsonArray(
+                projects.map { project -> sanitizeProject(project, sourceSchemaVersion) },
+            )
+        } ?: value
+
+    private fun sanitizeArchiveArray(
+        value: JsonElement,
+        sourceSchemaVersion: Int,
+    ): JsonElement =
+        (value as? kotlinx.serialization.json.JsonArray)?.let { archives ->
+            kotlinx.serialization.json.JsonArray(
+                archives.map { archiveElement ->
+                    val archive = archiveElement as? JsonObject ?: return@map archiveElement
+                    JsonObject(
+                        archive.mapValues { (key, nestedValue) ->
+                            if (key == ARCHIVED_PROJECT_FIELD_NAME) {
+                                sanitizeProject(nestedValue, sourceSchemaVersion)
+                            } else {
+                                nestedValue
+                            }
+                        },
+                    )
+                },
+            )
+        } ?: value
+
+    private fun sanitizeProject(
+        value: JsonElement,
+        sourceSchemaVersion: Int,
+    ): JsonElement {
+        val project = value as? JsonObject ?: return value
+        val fieldsToRemove = if (sourceSchemaVersion < RF_REFERENCE_PROJECT_CATALOG_SCHEMA_VERSION) {
+            VERSION_4_PROJECT_FIELDS + VERSION_2_PROJECT_FIELDS
+        } else {
+            VERSION_4_PROJECT_FIELDS
+        }
+        val base = project.filterKeys { it !in fieldsToRemove }
+        return JsonObject(
+            base.mapValues { (key, nestedValue) ->
+                when (key) {
+                    NETWORKS_FIELD_NAME -> sanitizeObjectArray(nestedValue, VERSION_4_NETWORK_FIELDS)
+                    SITES_FIELD_NAME -> sanitizeSites(nestedValue, sourceSchemaVersion)
+                    RECEIVERS_FIELD_NAME -> sanitizeObjectArray(
+                        nestedValue,
+                        VERSION_4_RECEIVER_FIELDS,
+                    )
+                    else -> nestedValue
+                }
+            },
+        )
+    }
+
+    private fun sanitizeSites(
+        value: JsonElement,
+        sourceSchemaVersion: Int,
+    ): JsonElement =
+        (value as? kotlinx.serialization.json.JsonArray)?.let { sites ->
+            kotlinx.serialization.json.JsonArray(
+                sites.map { siteElement ->
+                    val site = siteElement as? JsonObject ?: return@map siteElement
+                    val base = site.filterKeys { it !in VERSION_4_SITE_FIELDS }
+                    JsonObject(
+                        base.mapValues { (key, nestedValue) ->
+                            if (key == SECTORS_FIELD_NAME) {
+                                val fieldsToRemove = if (
+                                    sourceSchemaVersion < RF_REFERENCE_PROJECT_CATALOG_SCHEMA_VERSION
+                                ) {
+                                    VERSION_4_SECTOR_FIELDS + VERSION_2_SECTOR_FIELDS
+                                } else {
+                                    VERSION_4_SECTOR_FIELDS
+                                }
+                                sanitizeObjectArray(nestedValue, fieldsToRemove)
+                            } else {
+                                nestedValue
+                            }
+                        },
+                    )
+                },
+            )
+        } ?: value
+
+    private fun sanitizeObjectArray(
+        value: JsonElement,
+        removedFields: Set<String>,
+    ): JsonElement = (value as? kotlinx.serialization.json.JsonArray)?.let { elements ->
+        kotlinx.serialization.json.JsonArray(
+            elements.map { element ->
+                (element as? JsonObject)?.let { JsonObject(it.filterKeys { key -> key !in removedFields }) }
+                    ?: element
+            },
+        )
+    } ?: value
+
     private companion object {
         const val ARCHIVED_PROJECTS_FIELD_NAME = "archivedProjects"
+        const val ARCHIVED_PROJECT_FIELD_NAME = "project"
+        const val PROJECTS_FIELD_NAME = "projects"
+        const val NETWORKS_FIELD_NAME = "networks"
+        const val SITES_FIELD_NAME = "sites"
+        const val SECTORS_FIELD_NAME = "sectors"
+        const val RECEIVERS_FIELD_NAME = "receivers"
+
+        val VERSION_4_PROJECT_FIELDS = setOf(
+            "antennaPatterns",
+            "gisLayers",
+            "studyScenarios",
+            "activeStudyScenarioId",
+            "coverageSnapshots",
+            "regulatoryStudies",
+            "artifacts",
+            "importProvenance",
+        )
+        val VERSION_2_PROJECT_FIELDS = setOf("receivers")
+        val VERSION_4_NETWORK_FIELDS = setOf(
+            "active",
+            "uplinkFrequencyMHz",
+            "duplexMode",
+            "downlinkThresholdDbm",
+            "uplinkThresholdDbm",
+            "channelPlan",
+            "technologyProfile",
+            "legacyParametersJson",
+        )
+        val VERSION_4_SITE_FIELDS = setOf("towerHeightM")
+        val VERSION_4_SECTOR_FIELDS = setOf(
+            "transmitAntennaPatternId",
+            "receiveAntennaPatternId",
+            "receiveAntennaHeightM",
+            "receiveAntennaGainDbi",
+            "receiveSystemLossDb",
+            "cableType",
+            "cableLengthM",
+            "equipmentModel",
+            "mimoIndex",
+            "simulcastDelayMicros",
+            "legacyParametersJson",
+        )
+        val VERSION_2_SECTOR_FIELDS = setOf("networkId")
+        val VERSION_4_RECEIVER_FIELDS = setOf("equipmentModel", "networkProfiles")
     }
 }
 

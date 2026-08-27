@@ -13,10 +13,19 @@ import com.gecesars.atxplan.domain.application.ProjectCreator
 import com.gecesars.atxplan.domain.application.ProjectDuplicationIdGenerator
 import com.gecesars.atxplan.domain.application.RenameProjectCommand
 import com.gecesars.atxplan.domain.application.RestoreProjectCommand
+import com.gecesars.atxplan.domain.application.RfAssetMutationCommand
+import com.gecesars.atxplan.domain.application.RfAssetMutationStatus
+import com.gecesars.atxplan.domain.application.RfEntityIdGenerator
+import com.gecesars.atxplan.domain.application.RfNetworkInput
 import com.gecesars.atxplan.domain.model.ArchivedProject
+import com.gecesars.atxplan.domain.model.BandwidthMHz
+import com.gecesars.atxplan.domain.model.FrequencyMHz
+import com.gecesars.atxplan.domain.model.GeoPoint
 import com.gecesars.atxplan.domain.model.PlannerProject
 import com.gecesars.atxplan.domain.model.ProjectCatalog
 import com.gecesars.atxplan.domain.model.ProjectFactory
+import com.gecesars.atxplan.domain.model.RadioSite
+import com.gecesars.atxplan.domain.model.RadioSystem
 import com.gecesars.atxplan.domain.rf.LinkBudgetExecutionMode
 import com.gecesars.atxplan.domain.rf.LinkBudgetInput
 import com.gecesars.atxplan.domain.rf.LinkBudgetProvenance
@@ -46,6 +55,20 @@ class AppViewModelTest {
 
     private var projectSequence = 0L
     private var duplicationSequence = 0L
+
+    @Test
+    fun `RF mutation session ids are nonempty and unique per ViewModel`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val first = createViewModel(FakeProjectRepository(ProjectCatalog()))
+            val second = createViewModel(FakeProjectRepository(ProjectCatalog()))
+
+            assertTrue(first.state.value.rfMutationSessionId.isNotBlank())
+            assertTrue(second.state.value.rfMutationSessionId.isNotBlank())
+            assertFalse(
+                first.state.value.rfMutationSessionId == second.state.value.rfMutationSessionId,
+            )
+            advanceUntilIdle()
+        }
 
     @Test
     fun `initial load exposes the persisted catalog`() = runTest(mainDispatcherRule.dispatcher) {
@@ -585,7 +608,7 @@ class AppViewModelTest {
             assertEquals(1L, state.catalogMutationCompletionCount)
             assertEquals(
                 AppUiEffect.ShowNotice(
-                    "Project and its catalog data were deleted from local storage.",
+                    "Project and its project-scoped data were removed from the local catalog.",
                 ),
                 state.pendingEffect,
             )
@@ -672,7 +695,7 @@ class AppViewModelTest {
             assertEquals(1L, firstViewModel.state.value.catalogMutationCompletionCount)
             assertEquals(1L, secondViewModel.state.value.catalogMutationCompletionCount)
             assertEquals(
-                "Project and its catalog data were deleted from local storage.",
+                "Project and its project-scoped data were removed from the local catalog.",
                 firstViewModel.state.value.notice,
             )
             assertEquals(
@@ -1120,6 +1143,179 @@ class AppViewModelTest {
         }
 
     @Test
+    fun `independent RF mutation publishes its receipt only after durable commit`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val initial = catalogWithProjects("RF Asset Project")
+            val repository = FakeProjectRepository(initial).apply {
+                saveDelayMillis = 50L
+            }
+            val viewModel = createViewModel(
+                repository = repository,
+                rfEntityIdGenerator = RfEntityIdGenerator { "network-view-model" },
+            )
+            advanceUntilIdle()
+            val command = RfAssetMutationCommand.CreateNetwork(
+                projectId = initial.selectedProjectId.orEmpty(),
+                input = RfNetworkInput(
+                    name = "Field Network",
+                    system = RadioSystem.LAND_MOBILE,
+                    downlinkFrequencyMHz = FrequencyMHz(460.125),
+                    bandwidthMHz = BandwidthMHz(0.025),
+                ),
+                requestId = "rf-view-model-request",
+            )
+
+            viewModel.mutateRfAsset(command)
+            runCurrent()
+
+            assertTrue(viewModel.state.value.isSavingCatalog)
+            assertTrue(viewModel.state.value.selectedProject!!.networks.isEmpty())
+            assertNull(viewModel.state.value.lastRfMutationReceipt)
+            assertEquals(
+                "rf-view-model-request",
+                viewModel.state.value.activeRfMutationRequestId,
+            )
+            assertTrue(repository.savedCatalogs.isEmpty())
+
+            advanceUntilIdle()
+
+            val state = viewModel.state.value
+            assertFalse(state.isSavingCatalog)
+            assertEquals("Field Network", state.selectedProject!!.networks.single().name)
+            assertEquals(state.catalog, repository.savedCatalogs.single())
+            assertEquals("rf-view-model-request", state.lastRfMutationReceipt!!.requestId)
+            assertEquals(RfAssetMutationStatus.CREATED, state.lastRfMutationReceipt!!.status)
+            assertNull(state.activeRfMutationRequestId)
+            assertEquals("Network created in local storage.", state.notice)
+        }
+
+    @Test
+    fun `overlapping RF mutation is rejected without replacing active receipt correlation`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val initial = catalogWithProjects("RF Single Flight Project")
+            val repository = FakeProjectRepository(initial).apply {
+                saveDelayMillis = 50L
+            }
+            val viewModel = createViewModel(
+                repository = repository,
+                rfEntityIdGenerator = RfEntityIdGenerator { "network-single-flight" },
+            )
+            advanceUntilIdle()
+            fun command(name: String, requestId: String) = RfAssetMutationCommand.CreateNetwork(
+                projectId = initial.selectedProjectId.orEmpty(),
+                input = RfNetworkInput(
+                    name = name,
+                    system = RadioSystem.GENERIC,
+                    downlinkFrequencyMHz = FrequencyMHz(470.0),
+                    bandwidthMHz = BandwidthMHz(6.0),
+                ),
+                requestId = requestId,
+            )
+
+            viewModel.mutateRfAsset(command("First Network", "rf-first-request"))
+            runCurrent()
+            viewModel.mutateRfAsset(command("Second Network", "rf-second-request"))
+            runCurrent()
+
+            assertEquals("rf-first-request", viewModel.state.value.activeRfMutationRequestId)
+            assertNull(viewModel.state.value.lastRfMutationReceipt)
+            assertEquals(
+                "Another RF asset change is still being saved. Wait for it to finish, then retry.",
+                viewModel.state.value.notice,
+            )
+
+            advanceUntilIdle()
+
+            val state = viewModel.state.value
+            assertEquals(listOf("First Network"), state.selectedProject!!.networks.map { it.name })
+            assertEquals(1, repository.savedCatalogs.size)
+            assertEquals("rf-first-request", state.lastRfMutationReceipt!!.requestId)
+            assertNull(state.activeRfMutationRequestId)
+        }
+
+    @Test
+    fun `map site move publishes coordinates only after durable commit`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val site = RadioSite(
+                id = "site-map-move",
+                name = "Map Site",
+                location = GeoPoint(latitude = -23.55052, longitude = -46.63331),
+                notes = "Keep this metadata unchanged.",
+            )
+            val base = catalogWithProjects("Map Project")
+            val initial = base.copy(
+                projects = listOf(base.projects.single().copy(sites = listOf(site))),
+            )
+            val repository = FakeProjectRepository(initial).apply {
+                saveDelayMillis = 50L
+            }
+            val viewModel = createViewModel(repository)
+            advanceUntilIdle()
+            val destination = GeoPoint(latitude = -23.56141, longitude = -46.65588)
+            val command = RfAssetMutationCommand.MoveSite(
+                projectId = initial.selectedProjectId.orEmpty(),
+                expected = site,
+                location = destination,
+                requestId = "map-move-request",
+            )
+
+            viewModel.mutateRfAsset(command)
+            runCurrent()
+
+            assertTrue(viewModel.state.value.isSavingCatalog)
+            assertEquals(site, viewModel.state.value.selectedProject!!.sites.single())
+            assertEquals("map-move-request", viewModel.state.value.activeRfMutationRequestId)
+            assertNull(viewModel.state.value.lastRfMutationReceipt)
+
+            advanceUntilIdle()
+
+            val state = viewModel.state.value
+            assertEquals(site.copy(location = destination), state.selectedProject!!.sites.single())
+            assertEquals(state.catalog, repository.savedCatalogs.single())
+            assertEquals(RfAssetMutationStatus.UPDATED, state.lastRfMutationReceipt!!.status)
+            assertEquals("map-move-request", state.lastRfMutationReceipt!!.requestId)
+            assertNull(state.activeRfMutationRequestId)
+            assertEquals("Site updated in local storage.", state.notice)
+        }
+
+    @Test
+    fun `failed RF durable commit clears active request correlation without publishing a receipt`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val initial = catalogWithProjects("RF Failure Project")
+            val repository = FakeProjectRepository(initial).apply {
+                saveDelayMillis = 50L
+                saveError = ProjectStorageException("RF storage is unavailable.")
+            }
+            val viewModel = createViewModel(repository)
+            advanceUntilIdle()
+            val command = RfAssetMutationCommand.CreateNetwork(
+                projectId = initial.selectedProjectId.orEmpty(),
+                input = RfNetworkInput(
+                    name = "Uncommitted Network",
+                    system = RadioSystem.GENERIC,
+                    downlinkFrequencyMHz = FrequencyMHz(470.0),
+                    bandwidthMHz = BandwidthMHz(6.0),
+                ),
+                requestId = "rf-failed-request",
+            )
+
+            viewModel.mutateRfAsset(command)
+            runCurrent()
+
+            assertEquals("rf-failed-request", viewModel.state.value.activeRfMutationRequestId)
+            assertTrue(viewModel.state.value.isSavingCatalog)
+
+            advanceUntilIdle()
+
+            val state = viewModel.state.value
+            assertNull(state.activeRfMutationRequestId)
+            assertNull(state.lastRfMutationReceipt)
+            assertFalse(state.isSavingCatalog)
+            assertTrue(state.selectedProject!!.networks.isEmpty())
+            assertEquals(AppProblemCode.CATALOG_SAVE_FAILED, state.storageProblem?.code)
+        }
+
+    @Test
     fun `catalog mutation waits for initial load instead of overwriting it`() =
         runTest(mainDispatcherRule.dispatcher) {
             val loadGate = CompletableDeferred<Unit>()
@@ -1239,6 +1435,9 @@ class AppViewModelTest {
         },
         clock: EpochMillisClock = EpochMillisClock { 10_000L },
         projectDuplicationIdGenerator: ProjectDuplicationIdGenerator? = null,
+        rfEntityIdGenerator: RfEntityIdGenerator = RfEntityIdGenerator { kind ->
+            "${kind.idPrefix}-test"
+        },
     ): AppViewModel {
         val dispatchers = AppCoroutineDispatchers(
             storage = mainDispatcherRule.dispatcher,
@@ -1260,6 +1459,7 @@ class AppViewModelTest {
                         duplicationSequence += 1
                         "duplicate-test-$duplicationSequence"
                     },
+                rfEntityIdGenerator = rfEntityIdGenerator,
                 clock = clock,
             ),
         )

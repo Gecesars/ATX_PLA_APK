@@ -97,6 +97,7 @@ data class AppUseCases(
     val deleteProject: DeleteProjectUseCase,
     val selectProject: SelectProjectUseCase,
     val addRfPath: AddRfPathUseCase,
+    val mutateRfAsset: RfAssetCrudUseCase,
     val calculateLinkBudget: CalculateLinkBudgetUseCase,
 ) {
     companion object {
@@ -126,6 +127,7 @@ data class AppUseCases(
             deleteProject = DeleteProjectUseCase(),
             selectProject = SelectProjectUseCase(),
             addRfPath = AddRfPathUseCase(rfEntityIdGenerator, clock),
+            mutateRfAsset = RfAssetCrudUseCase(rfEntityIdGenerator, clock),
             calculateLinkBudget = CalculateLinkBudgetUseCase(
                 calculator = linkBudgetCalculator,
                 dispatcher = dispatchers.computation,

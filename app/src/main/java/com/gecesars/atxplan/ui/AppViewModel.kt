@@ -18,6 +18,10 @@ import com.gecesars.atxplan.domain.application.RenameProjectCommand
 import com.gecesars.atxplan.domain.application.RenameProjectStatus
 import com.gecesars.atxplan.domain.application.RestoreProjectCommand
 import com.gecesars.atxplan.domain.application.RestoreProjectStatus
+import com.gecesars.atxplan.domain.application.RfAssetKind
+import com.gecesars.atxplan.domain.application.RfAssetMutationCommand
+import com.gecesars.atxplan.domain.application.RfAssetMutationReceipt
+import com.gecesars.atxplan.domain.application.RfAssetMutationStatus
 import com.gecesars.atxplan.domain.model.PlannerProject
 import com.gecesars.atxplan.domain.model.ProjectCatalog
 import com.gecesars.atxplan.domain.rf.LinkBudgetInput
@@ -32,6 +36,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.util.UUID
 
 sealed interface AppUiAction {
     data class CreateProject(val name: String, val customer: String) : AppUiAction
@@ -51,6 +56,8 @@ sealed interface AppUiAction {
     data class CalculateLinkBudget(val input: LinkBudgetInput) : AppUiAction
 
     data class AddRfPath(val command: AddRfPathCommand) : AppUiAction
+
+    data class MutateRfAsset(val command: RfAssetMutationCommand) : AppUiAction
 
     data object RetryLoad : AppUiAction
 
@@ -90,6 +97,9 @@ data class AppUiState(
     val linkBudgetInput: LinkBudgetInput? = null,
     val linkBudgetResult: LinkBudgetResult? = null,
     val calculatorProblem: AppProblem? = null,
+    val lastRfMutationReceipt: RfAssetMutationReceipt? = null,
+    val activeRfMutationRequestId: String? = null,
+    val rfMutationSessionId: String = "",
 ) {
     val selectedProject: PlannerProject?
         get() = catalog.selectedProject
@@ -110,7 +120,9 @@ class AppViewModel(
 ) : ViewModel() {
     constructor(repository: ProjectRepository) : this(AppUseCases.create(repository))
 
-    private val mutableState = MutableStateFlow(AppUiState())
+    private val mutableState = MutableStateFlow(
+        AppUiState(rfMutationSessionId = UUID.randomUUID().toString()),
+    )
     val state: StateFlow<AppUiState> = mutableState.asStateFlow()
 
     private val catalogMutex = Mutex()
@@ -132,6 +144,7 @@ class AppViewModel(
             is AppUiAction.SelectProject -> handleSelectProject(action.projectId)
             is AppUiAction.CalculateLinkBudget -> handleCalculateLinkBudget(action.input)
             is AppUiAction.AddRfPath -> handleAddRfPath(action.command)
+            is AppUiAction.MutateRfAsset -> handleRfAssetMutation(action.command)
             AppUiAction.RetryLoad -> loadCatalog()
             AppUiAction.DismissNotice -> mutableState.update { it.copy(pendingEffect = null) }
         }
@@ -171,6 +184,10 @@ class AppViewModel(
 
     fun addRfPath(command: AddRfPathCommand) {
         onAction(AppUiAction.AddRfPath(command))
+    }
+
+    fun mutateRfAsset(command: RfAssetMutationCommand) {
+        onAction(AppUiAction.MutateRfAsset(command))
     }
 
     fun dismissNotice() {
@@ -347,7 +364,7 @@ class AppViewModel(
                 DeleteProjectStatus.DELETED -> CatalogMutation(
                     updatedCatalog = result.catalog,
                     successEffect = AppUiEffect.ShowNotice(
-                        "Project and its catalog data were deleted from local storage.",
+                        "Project and its project-scoped data were removed from the local catalog.",
                     ),
                 )
                 DeleteProjectStatus.STALE_PROJECT -> CatalogMutation(
@@ -391,6 +408,79 @@ class AppViewModel(
                     "RF path \"${result.network.name}\" was saved with its transmitter and receiver.",
                 ),
             )
+        }
+    }
+
+    private fun handleRfAssetMutation(command: RfAssetMutationCommand) {
+        if (!reserveRfMutation(command.requestId)) return
+        persistCatalogMutation(rfRequestId = command.requestId) { current ->
+            val result = useCases.mutateRfAsset(current, command)
+            val receipt = result.receipt
+            val entityLabel = receipt.kind.name.lowercase().replaceFirstChar(Char::uppercase)
+            when (receipt.status) {
+                RfAssetMutationStatus.CREATED -> CatalogMutation(
+                    updatedCatalog = result.catalog,
+                    successEffect = AppUiEffect.ShowNotice("$entityLabel created in local storage."),
+                    rfMutationReceipt = receipt,
+                )
+                RfAssetMutationStatus.UPDATED -> CatalogMutation(
+                    updatedCatalog = result.catalog,
+                    successEffect = AppUiEffect.ShowNotice("$entityLabel updated in local storage."),
+                    rfMutationReceipt = receipt,
+                )
+                RfAssetMutationStatus.DELETED -> CatalogMutation(
+                    updatedCatalog = result.catalog,
+                    successEffect = AppUiEffect.ShowNotice("$entityLabel removed from the local project."),
+                    rfMutationReceipt = receipt,
+                )
+                RfAssetMutationStatus.UNCHANGED -> CatalogMutation(
+                    updatedCatalog = result.catalog,
+                    noChangeEffect = AppUiEffect.ShowNotice("No $entityLabel changes were needed."),
+                    rfMutationReceipt = receipt,
+                )
+                RfAssetMutationStatus.STALE -> CatalogMutation(
+                    updatedCatalog = result.catalog,
+                    noChangeEffect = AppUiEffect.ShowNotice(
+                        "The $entityLabel changed in local storage. Review it and try again.",
+                    ),
+                    rfMutationReceipt = receipt,
+                )
+                RfAssetMutationStatus.NOT_FOUND -> CatalogMutation(
+                    updatedCatalog = result.catalog,
+                    noChangeEffect = AppUiEffect.ShowNotice(
+                        "The $entityLabel no longer exists in the active project.",
+                    ),
+                    rfMutationReceipt = receipt,
+                )
+                RfAssetMutationStatus.BLOCKED_REFERENCES -> CatalogMutation(
+                    updatedCatalog = result.catalog,
+                    noChangeEffect = AppUiEffect.ShowNotice(
+                        rfBlockedReferenceMessage(entityLabel, receipt),
+                    ),
+                    rfMutationReceipt = receipt,
+                )
+            }
+        }
+    }
+
+    private fun reserveRfMutation(requestId: String): Boolean {
+        while (true) {
+            val current = mutableState.value
+            val activeRequestId = current.activeRfMutationRequestId
+            if (activeRequestId != null) {
+                val rejected = current.copy(
+                    pendingEffect = AppUiEffect.ShowNotice(
+                        "Another RF asset change is still being saved. Wait for it to finish, then retry.",
+                    ),
+                )
+                if (mutableState.compareAndSet(current, rejected)) return false
+            } else {
+                val reserved = current.copy(
+                    activeRfMutationRequestId = requestId,
+                    lastRfMutationReceipt = null,
+                )
+                if (mutableState.compareAndSet(current, reserved)) return true
+            }
         }
     }
 
@@ -438,6 +528,7 @@ class AppViewModel(
     }
 
     private fun persistCatalogMutation(
+        rfRequestId: String? = null,
         mutation: (ProjectCatalog) -> CatalogMutation?,
     ) {
         viewModelScope.launch {
@@ -451,6 +542,8 @@ class AppViewModel(
                             ),
                             catalogMutationCompletionCount =
                                 it.catalogMutationCompletionCount + 1L,
+                            activeRfMutationRequestId = it.activeRfMutationRequestId
+                                .clearedIfCompleted(rfRequestId),
                         )
                     }
                     return@withLock
@@ -485,6 +578,7 @@ class AppViewModel(
                             requestedMutation?.noChangeEffect
                         },
                         didCommitChange = didCommitChange,
+                        rfMutationReceipt = requestedMutation?.rfMutationReceipt,
                     )
                 }
                     .onSuccess { committed ->
@@ -500,6 +594,10 @@ class AppViewModel(
                                 } else {
                                     it.storageProblem
                                 },
+                                lastRfMutationReceipt =
+                                    committed.rfMutationReceipt ?: it.lastRfMutationReceipt,
+                                activeRfMutationRequestId = it.activeRfMutationRequestId
+                                    .clearedIfCompleted(rfRequestId),
                             )
                         }
                     }
@@ -515,6 +613,8 @@ class AppViewModel(
                                     pendingEffect = AppUiEffect.ShowNotice(
                                         rejected.cause?.message ?: "Invalid project data.",
                                     ),
+                                    activeRfMutationRequestId = it.activeRfMutationRequestId
+                                        .clearedIfCompleted(rfRequestId),
                                 )
                             }
                         } else {
@@ -528,6 +628,8 @@ class AppViewModel(
                                         error = error,
                                         fallbackMessage = "The local catalog could not be saved.",
                                     ),
+                                    activeRfMutationRequestId = it.activeRfMutationRequestId
+                                        .clearedIfCompleted(rfRequestId),
                                 )
                             }
                         }
@@ -536,16 +638,21 @@ class AppViewModel(
         }
     }
 
+    private fun String?.clearedIfCompleted(requestId: String?): String? =
+        if (requestId != null && this == requestId) null else this
+
     private data class CatalogMutation(
         val updatedCatalog: ProjectCatalog,
         val successEffect: AppUiEffect? = null,
         val noChangeEffect: AppUiEffect? = null,
+        val rfMutationReceipt: RfAssetMutationReceipt? = null,
     )
 
     private data class PersistedCatalogMutation(
         val catalog: ProjectCatalog,
         val completionEffect: AppUiEffect?,
         val didCommitChange: Boolean,
+        val rfMutationReceipt: RfAssetMutationReceipt?,
     )
 
     private class CatalogMutationRejected(
@@ -579,6 +686,38 @@ class AppViewModel(
             }
     }
 }
+
+private fun rfBlockedReferenceMessage(
+    entityLabel: String,
+    receipt: RfAssetMutationReceipt,
+): String {
+    val impact = receipt.impact
+    return when {
+        receipt.kind == RfAssetKind.NETWORK &&
+            impact.hasReferences -> {
+            val references = buildList {
+                if (impact.sectorCount > 0) {
+                    add(rfReferenceCount(impact.sectorCount, "sector", "sectors"))
+                }
+                if (impact.receiverCount > 0) {
+                    add(rfReferenceCount(impact.receiverCount, "receiver", "receivers"))
+                }
+            }
+            val verb = if (impact.sectorCount + impact.receiverCount == 1) "references" else "reference"
+            "$entityLabel cannot be deleted while ${references.joinToString(" and ")} $verb it. " +
+                "Reassign or remove the linked records first."
+        }
+        receipt.kind == RfAssetKind.SITE &&
+            impact.sectorCount > 0 ->
+            "$entityLabel contains ${rfReferenceCount(impact.sectorCount, "sector", "sectors")}. " +
+                "Review and explicitly confirm removal of the contained " +
+                if (impact.sectorCount == 1) "sector." else "sectors."
+        else -> "$entityLabel cannot be changed because linked RF records still reference it."
+    }
+}
+
+private fun rfReferenceCount(count: Int, singular: String, plural: String): String =
+    "$count ${if (count == 1) singular else plural}"
 
 private suspend fun <T> runSuspendCatching(block: suspend () -> T): Result<T> =
     try {

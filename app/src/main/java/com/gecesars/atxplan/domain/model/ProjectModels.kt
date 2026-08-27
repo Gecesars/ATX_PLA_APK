@@ -3,7 +3,7 @@ package com.gecesars.atxplan.domain.model
 import kotlinx.serialization.Serializable
 import java.util.UUID
 
-const val PROJECT_CATALOG_SCHEMA_VERSION = 3
+const val PROJECT_CATALOG_SCHEMA_VERSION = 4
 
 @Serializable
 data class ProjectCatalog(
@@ -59,6 +59,14 @@ data class PlannerProject(
     val sites: List<RadioSite> = emptyList(),
     val studies: List<StudySummary> = emptyList(),
     val receivers: List<Receiver> = emptyList(),
+    val antennaPatterns: List<AntennaPatternRecord> = emptyList(),
+    val gisLayers: List<GisLayerRecord> = emptyList(),
+    val studyScenarios: List<StudyScenarioRecord> = emptyList(),
+    val activeStudyScenarioId: String? = null,
+    val coverageSnapshots: List<CoverageSnapshotRecord> = emptyList(),
+    val regulatoryStudies: List<RegulatoryStudyRecord> = emptyList(),
+    val artifacts: List<ProjectArtifactReference> = emptyList(),
+    val importProvenance: ImportProvenance? = null,
 ) {
     init {
         require(id.isNotBlank()) { "The project requires an ID." }
@@ -98,6 +106,60 @@ data class PlannerProject(
             "Receivers reference networks outside this project: " +
                 "${receiversWithMissingNetworks.joinToString()}."
         }
+        val receiverProfilesWithMissingNetworks = receivers.flatMap { receiver ->
+            receiver.networkProfiles
+                .filterNot { profile -> profile.networkId in networkIds }
+                .map { profile -> "${receiver.id}/${profile.networkId}" }
+        }.sorted()
+        require(receiverProfilesWithMissingNetworks.isEmpty()) {
+            "Receiver profiles reference networks outside this project: " +
+                "${receiverProfilesWithMissingNetworks.joinToString()}."
+        }
+        requireUniqueIds("antenna pattern", antennaPatterns.map(AntennaPatternRecord::id))
+        requireUniqueIds("GIS layer", gisLayers.map(GisLayerRecord::id))
+        requireUniqueIds("study scenario", studyScenarios.map(StudyScenarioRecord::id))
+        requireUniqueIds("coverage snapshot", coverageSnapshots.map(CoverageSnapshotRecord::id))
+        requireUniqueIds("regulatory study", regulatoryStudies.map(RegulatoryStudyRecord::id))
+        requireUniqueIds("artifact", artifacts.map(ProjectArtifactReference::id))
+
+        val antennaPatternIds = antennaPatterns.map(AntennaPatternRecord::id).toSet()
+        val missingAntennaReferences = sites.flatMap { site ->
+            site.sectors.flatMap { sector ->
+                listOfNotNull(
+                    sector.transmitAntennaPatternId,
+                    sector.receiveAntennaPatternId,
+                ).filterNot(antennaPatternIds::contains).map { patternId ->
+                    "${site.id}/${sector.id}/$patternId"
+                }
+            }
+        }.sorted()
+        require(missingAntennaReferences.isEmpty()) {
+            "Sectors reference antenna patterns outside this project: " +
+                "${missingAntennaReferences.joinToString()}."
+        }
+
+        val scenarioIds = studyScenarios.map(StudyScenarioRecord::id).toSet()
+        require(activeStudyScenarioId == null || activeStudyScenarioId in scenarioIds) {
+            "The active study scenario must belong to this project."
+        }
+        val snapshotsWithMissingScenarios = coverageSnapshots
+            .filter { snapshot -> snapshot.scenarioId != null && snapshot.scenarioId !in scenarioIds }
+            .map(CoverageSnapshotRecord::id)
+            .sorted()
+        require(snapshotsWithMissingScenarios.isEmpty()) {
+            "Coverage snapshots reference missing study scenarios: " +
+                "${snapshotsWithMissingScenarios.joinToString()}."
+        }
+        val artifactIds = artifacts.map(ProjectArtifactReference::id).toSet()
+        val missingArtifactReferences = buildList {
+            antennaPatterns.mapNotNullTo(this) { it.dataArtifactId }
+            gisLayers.mapNotNullTo(this) { it.dataArtifactId }
+            coverageSnapshots.mapNotNullTo(this) { it.dataArtifactId }
+            regulatoryStudies.mapNotNullTo(this) { it.dataArtifactId }
+        }.filterNot(artifactIds::contains).distinct().sorted()
+        require(missingArtifactReferences.isEmpty()) {
+            "Project records reference missing artifacts: ${missingArtifactReferences.joinToString()}."
+        }
     }
 }
 
@@ -108,6 +170,14 @@ data class RfNetwork(
     val system: RadioSystem,
     val downlinkFrequencyMHz: Double,
     val bandwidthMHz: Double,
+    val active: Boolean = true,
+    val uplinkFrequencyMHz: Double? = null,
+    val duplexMode: DuplexMode = DuplexMode.UNSPECIFIED,
+    val downlinkThresholdDbm: Double? = null,
+    val uplinkThresholdDbm: Double? = null,
+    val channelPlan: List<ChannelPlanPoint> = emptyList(),
+    val technologyProfile: RadioTechnologyProfile? = null,
+    val legacyParametersJson: String? = null,
 ) {
     init {
         require(id.isNotBlank() && name.isNotBlank()) { "Invalid network." }
@@ -116,6 +186,69 @@ data class RfNetwork(
         }
         require(bandwidthMHz > 0.0 && bandwidthMHz.isFinite()) {
             "The bandwidth must be positive."
+        }
+        require(uplinkFrequencyMHz == null || uplinkFrequencyMHz > 0.0 && uplinkFrequencyMHz.isFinite()) {
+            "The uplink frequency must be positive when available."
+        }
+        require(downlinkThresholdDbm == null || downlinkThresholdDbm.isFinite()) {
+            "The downlink threshold must be finite when available."
+        }
+        require(uplinkThresholdDbm == null || uplinkThresholdDbm.isFinite()) {
+            "The uplink threshold must be finite when available."
+        }
+        require(channelPlan.map(ChannelPlanPoint::id).distinct().size == channelPlan.size) {
+            "The network contains duplicate channel-plan IDs."
+        }
+        require(legacyParametersJson == null || legacyParametersJson.length <= MAX_OPAQUE_JSON_CHARS) {
+            "The network legacy payload exceeds the safe character limit."
+        }
+    }
+}
+
+@Serializable
+enum class DuplexMode {
+    UNSPECIFIED,
+    SIMPLEX,
+    FDD,
+    TDD,
+}
+
+@Serializable
+data class ChannelPlanPoint(
+    val id: String,
+    val label: String,
+    val downlinkFrequencyMHz: Double,
+    val uplinkFrequencyMHz: Double? = null,
+) {
+    init {
+        require(id.isNotBlank() && label.isNotBlank()) { "Invalid channel-plan point." }
+        require(downlinkFrequencyMHz > 0.0 && downlinkFrequencyMHz.isFinite()) {
+            "The channel downlink frequency must be positive."
+        }
+        require(uplinkFrequencyMHz == null || uplinkFrequencyMHz > 0.0 && uplinkFrequencyMHz.isFinite()) {
+            "The channel uplink frequency must be positive when available."
+        }
+    }
+}
+
+@Serializable
+data class RadioTechnologyProfile(
+    val variant: String = "",
+    val adaptiveModulation: Boolean = false,
+    val mimoLayers: Int? = null,
+    val downlinkLoadPercent: Double? = null,
+    val uplinkLoadPercent: Double? = null,
+) {
+    init {
+        require(variant.length <= 120) { "The technology variant cannot exceed 120 characters." }
+        require(mimoLayers == null || mimoLayers in 1..64) {
+            "MIMO layers must be between 1 and 64 when available."
+        }
+        require(downlinkLoadPercent == null || downlinkLoadPercent.isFinite() && downlinkLoadPercent in 0.0..100.0) {
+            "The downlink load must be between 0% and 100% when available."
+        }
+        require(uplinkLoadPercent == null || uplinkLoadPercent.isFinite() && uplinkLoadPercent in 0.0..100.0) {
+            "The uplink load must be between 0% and 100% when available."
         }
     }
 }
@@ -138,6 +271,7 @@ data class RadioSite(
     val name: String,
     val location: GeoPoint,
     val groundElevationM: Double? = null,
+    val towerHeightM: Double? = null,
     val notes: String = "",
     val sectors: List<Sector> = emptyList(),
 ) {
@@ -145,6 +279,9 @@ data class RadioSite(
         require(id.isNotBlank() && name.isNotBlank()) { "Invalid site." }
         require(groundElevationM == null || groundElevationM.isFinite()) {
             "The site elevation must be finite."
+        }
+        require(towerHeightM == null || towerHeightM >= 0.0 && towerHeightM.isFinite()) {
+            "The tower height cannot be negative."
         }
         require(sectors.map(Sector::id).distinct().size == sectors.size) {
             "The site contains duplicate sectors."
@@ -183,11 +320,40 @@ data class Receiver(
     val azimuthDegrees: AzimuthDegrees = AzimuthDegrees(0.0),
     val electricalTiltDegrees: TiltDegrees = TiltDegrees(0.0),
     val notes: String = "",
+    val equipmentModel: String = "",
+    val networkProfiles: List<ReceiverNetworkProfile> = emptyList(),
 ) {
     init {
         require(id.isNotBlank()) { "The receiver requires an ID." }
         require(name.isNotBlank()) { "The receiver requires a name." }
         require(networkId.isNotBlank()) { "The receiver requires a network reference." }
+        require(equipmentModel.length <= 160) {
+            "The receiver equipment model cannot exceed 160 characters."
+        }
+        require(networkProfiles.map(ReceiverNetworkProfile::networkId).distinct().size == networkProfiles.size) {
+            "The receiver contains duplicate per-network profiles."
+        }
+    }
+}
+
+@Serializable
+data class ReceiverNetworkProfile(
+    val networkId: String,
+    val antennaGainDbi: Double? = null,
+    val systemLossDb: Double? = null,
+    val sensitivityDbm: Double? = null,
+) {
+    init {
+        require(networkId.isNotBlank()) { "A receiver network profile requires a network ID." }
+        require(antennaGainDbi == null || antennaGainDbi.isFinite()) {
+            "Receiver profile gain must be finite when available."
+        }
+        require(systemLossDb == null || systemLossDb >= 0.0 && systemLossDb.isFinite()) {
+            "Receiver profile loss cannot be negative."
+        }
+        require(sensitivityDbm == null || sensitivityDbm.isFinite()) {
+            "Receiver profile sensitivity must be finite when available."
+        }
     }
 }
 
@@ -204,6 +370,17 @@ data class Sector(
     val feederLossDb: Double,
     val frequencyMHz: Double,
     val networkId: String? = null,
+    val transmitAntennaPatternId: String? = null,
+    val receiveAntennaPatternId: String? = null,
+    val receiveAntennaHeightM: Double? = null,
+    val receiveAntennaGainDbi: Double? = null,
+    val receiveSystemLossDb: Double? = null,
+    val cableType: String = "",
+    val cableLengthM: Double? = null,
+    val equipmentModel: String = "",
+    val mimoIndex: Int? = null,
+    val simulcastDelayMicros: Double? = null,
+    val legacyParametersJson: String? = null,
 ) {
     init {
         require(id.isNotBlank() && name.isNotBlank()) { "Invalid sector." }
@@ -228,8 +405,247 @@ data class Sector(
         require(networkId == null || networkId.isNotBlank()) {
             "A sector network reference cannot be blank."
         }
+        require(transmitAntennaPatternId == null || transmitAntennaPatternId.isNotBlank()) {
+            "A transmit antenna pattern reference cannot be blank."
+        }
+        require(receiveAntennaPatternId == null || receiveAntennaPatternId.isNotBlank()) {
+            "A receive antenna pattern reference cannot be blank."
+        }
+        require(receiveAntennaHeightM == null || receiveAntennaHeightM >= 0.0 && receiveAntennaHeightM.isFinite()) {
+            "The receive antenna height cannot be negative."
+        }
+        require(receiveAntennaGainDbi == null || receiveAntennaGainDbi.isFinite()) {
+            "The receive antenna gain must be finite when available."
+        }
+        require(receiveSystemLossDb == null || receiveSystemLossDb >= 0.0 && receiveSystemLossDb.isFinite()) {
+            "The receive system loss cannot be negative."
+        }
+        require(cableType.length <= 120 && equipmentModel.length <= 160) {
+            "Sector equipment labels exceed their safe character limits."
+        }
+        require(cableLengthM == null || cableLengthM >= 0.0 && cableLengthM.isFinite()) {
+            "The cable length cannot be negative."
+        }
+        require(mimoIndex == null || mimoIndex >= 0) { "The MIMO index cannot be negative." }
+        require(simulcastDelayMicros == null || simulcastDelayMicros.isFinite()) {
+            "The simulcast delay must be finite when available."
+        }
+        require(legacyParametersJson == null || legacyParametersJson.length <= MAX_OPAQUE_JSON_CHARS) {
+            "The sector legacy payload exceeds the safe character limit."
+        }
     }
 }
+
+@Serializable
+data class ProjectArtifactReference(
+    val id: String,
+    val role: ProjectArtifactRole,
+    val fileName: String,
+    val mediaType: String,
+    val sha256: String,
+    val byteCount: Long,
+    val createdAtEpochMillis: Long,
+) {
+    init {
+        requireValidProjectArtifactMetadata(id, fileName, mediaType, createdAtEpochMillis)
+        require(SHA256_PATTERN.matches(sha256)) { "An artifact requires a lowercase SHA-256 digest." }
+        require(byteCount >= 0L) { "An artifact byte count cannot be negative." }
+    }
+}
+
+private fun requireValidProjectArtifactMetadata(
+    id: String,
+    fileName: String,
+    mediaType: String,
+    createdAtEpochMillis: Long,
+) {
+    require(id.isNotBlank()) { "An artifact reference requires an ID." }
+    require(fileName.isNotBlank() && fileName.length <= 240 && fileName.none(Char::isISOControl)) {
+        "An artifact filename must be non-blank, bounded, and contain no control characters."
+    }
+    require(mediaType.isNotBlank() && mediaType.length <= 120) {
+        "An artifact media type must be non-blank and bounded."
+    }
+    require(createdAtEpochMillis >= 0L) { "An artifact timestamp cannot be negative." }
+}
+
+@Serializable
+enum class ProjectArtifactRole {
+    IMPORT_SOURCE,
+    ANTENNA_PATTERN,
+    GIS_LAYER,
+    DATASET_REFERENCE,
+    COVERAGE_RESULT,
+    REGULATORY_RESULT,
+    STUDY_REPORT,
+    OTHER,
+}
+
+@Serializable
+data class AntennaPatternRecord(
+    val id: String,
+    val name: String,
+    val nominalFrequencyHz: Double? = null,
+    val peakGainDbi: Double? = null,
+    val sourceFormat: String = "",
+    val sourceSha256: String? = null,
+    val dataArtifactId: String? = null,
+) {
+    init {
+        require(id.isNotBlank() && name.isNotBlank()) { "Invalid antenna pattern record." }
+        require(nominalFrequencyHz == null || nominalFrequencyHz > 0.0 && nominalFrequencyHz.isFinite()) {
+            "The nominal antenna frequency must be positive when available."
+        }
+        require(peakGainDbi == null || peakGainDbi.isFinite()) {
+            "The antenna gain must be finite when available."
+        }
+        require(sourceSha256 == null || SHA256_PATTERN.matches(sourceSha256)) {
+            "The antenna source hash must be a lowercase SHA-256 digest."
+        }
+        require(dataArtifactId == null || dataArtifactId.isNotBlank()) {
+            "An antenna data artifact reference cannot be blank."
+        }
+    }
+}
+
+@Serializable
+enum class GisGeometryType {
+    POINT,
+    LINE,
+    POLYGON,
+    RASTER,
+    MIXED,
+    UNKNOWN,
+}
+
+@Serializable
+data class GisLayerRecord(
+    val id: String,
+    val name: String,
+    val geometryType: GisGeometryType,
+    val coordinateReferenceSystem: String = "EPSG:4326",
+    val featureCount: Long? = null,
+    val dataArtifactId: String? = null,
+    val sourceSha256: String? = null,
+) {
+    init {
+        require(id.isNotBlank() && name.isNotBlank()) { "Invalid GIS layer record." }
+        require(coordinateReferenceSystem.isNotBlank() && coordinateReferenceSystem.length <= 120) {
+            "A GIS layer requires a bounded coordinate reference system."
+        }
+        require(featureCount == null || featureCount >= 0L) {
+            "A GIS layer feature count cannot be negative."
+        }
+        require(dataArtifactId == null || dataArtifactId.isNotBlank()) {
+            "A GIS layer artifact reference cannot be blank."
+        }
+        require(sourceSha256 == null || SHA256_PATTERN.matches(sourceSha256)) {
+            "The GIS source hash must be a lowercase SHA-256 digest."
+        }
+    }
+}
+
+@Serializable
+data class StudyScenarioRecord(
+    val id: String,
+    val name: String,
+    val modelId: String,
+    val modelEdition: String = "",
+    val settingsJson: String = "{}",
+) {
+    init {
+        require(id.isNotBlank() && name.isNotBlank() && modelId.isNotBlank()) {
+            "Invalid study scenario record."
+        }
+        require(settingsJson.length <= MAX_OPAQUE_JSON_CHARS) {
+            "The study scenario settings exceed the safe character limit."
+        }
+    }
+}
+
+@Serializable
+data class CoverageSnapshotRecord(
+    val id: String,
+    val name: String,
+    val scenarioId: String? = null,
+    val metricId: String,
+    val unit: String,
+    val noDataMeaning: String,
+    val dataArtifactId: String? = null,
+    val createdAtEpochMillis: Long,
+) {
+    init {
+        require(id.isNotBlank() && name.isNotBlank() && metricId.isNotBlank() && unit.isNotBlank()) {
+            "Invalid coverage snapshot record."
+        }
+        require(noDataMeaning.isNotBlank()) { "A coverage snapshot must define its NoData meaning." }
+        require(createdAtEpochMillis >= 0L) { "A snapshot timestamp cannot be negative." }
+    }
+}
+
+@Serializable
+data class RegulatoryStudyRecord(
+    val id: String,
+    val name: String,
+    val serviceId: String,
+    val status: RegulatoryRecordStatus = RegulatoryRecordStatus.DRAFT,
+    val rulesetId: String,
+    val dataArtifactId: String? = null,
+    val updatedAtEpochMillis: Long,
+) {
+    init {
+        require(id.isNotBlank() && name.isNotBlank() && serviceId.isNotBlank() && rulesetId.isNotBlank()) {
+            "Invalid regulatory study record."
+        }
+        require(updatedAtEpochMillis >= 0L) { "A regulatory study timestamp cannot be negative." }
+    }
+}
+
+@Serializable
+enum class RegulatoryRecordStatus {
+    DRAFT,
+    SCREENING,
+    INCONCLUSIVE,
+    COMPLIANT,
+    CONFLICT,
+}
+
+@Serializable
+data class ImportProvenance(
+    val sourceFormat: String,
+    val sourceSha256: String,
+    val sourceVersion: String? = null,
+    val importedAtEpochMillis: Long,
+    val warnings: List<String> = emptyList(),
+    val losses: List<String> = emptyList(),
+) {
+    init {
+        require(sourceFormat.isNotBlank()) { "Import provenance requires a source format." }
+        require(SHA256_PATTERN.matches(sourceSha256)) {
+            "Import provenance requires a lowercase SHA-256 digest."
+        }
+        require(importedAtEpochMillis >= 0L) { "An import timestamp cannot be negative." }
+        require(warnings.size <= MAX_IMPORT_NOTICES && losses.size <= MAX_IMPORT_NOTICES) {
+            "Import provenance contains too many notices."
+        }
+        require((warnings + losses).all { it.length <= MAX_IMPORT_NOTICE_CHARS }) {
+            "An import provenance notice exceeds the safe character limit."
+        }
+    }
+}
+
+private fun requireUniqueIds(label: String, ids: List<String>) {
+    require(ids.all(String::isNotBlank)) { "Every $label requires a non-blank ID." }
+    val duplicates = ids.groupingBy { it }.eachCount().filterValues { it > 1 }.keys.sorted()
+    require(duplicates.isEmpty()) {
+        "The project contains duplicate $label IDs: ${duplicates.joinToString()}."
+    }
+}
+
+private val SHA256_PATTERN = Regex("^[0-9a-f]{64}$")
+private const val MAX_OPAQUE_JSON_CHARS = 1_000_000
+private const val MAX_IMPORT_NOTICES = 2_000
+private const val MAX_IMPORT_NOTICE_CHARS = 2_000
 
 @Serializable
 data class StudySummary(

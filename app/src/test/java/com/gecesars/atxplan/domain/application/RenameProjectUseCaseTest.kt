@@ -360,7 +360,7 @@ class RenameProjectUseCaseTest {
     }
 
     @Test
-    fun `schema 3 JSON round trip preserves the renamed project and RF references`() {
+    fun `schema 4 JSON round trip preserves the renamed project and RF references`() {
         val result = useCase(nowEpochMillis = 5_000L)(
             richCatalog(),
             RenameProjectCommand(
@@ -375,7 +375,7 @@ class RenameProjectUseCaseTest {
         val restored = json.decodeFromString<ProjectCatalog>(encoded)
         val restoredProject = restored.projects[1]
 
-        assertEquals(3, restored.schemaVersion)
+        assertEquals(4, restored.schemaVersion)
         assertEquals(result.catalog, restored)
         assertEquals("Serialized RF Project", restoredProject.name)
         assertEquals(

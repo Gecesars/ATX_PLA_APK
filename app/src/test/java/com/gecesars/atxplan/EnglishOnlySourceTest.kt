@@ -9,9 +9,12 @@ class EnglishOnlySourceTest {
     fun `production sources do not contain common Portuguese UI terms`() {
         val sourceRoot = locateProductionSourceRoot()
         val violations = sourceRoot.walkTopDown()
-            .filter { file -> file.isFile && file.extension in setOf("kt", "xml") }
+            .filter { file ->
+                file.isFile && file.extension.lowercase() in setOf("kt", "xml", "json", "txt")
+            }
             .mapNotNull { file ->
-                portugueseUiTerm.find(file.readText())?.let { match ->
+                val text = file.readText().withoutApprovedSourceIdentifiers()
+                portugueseUiTerm.find(text)?.let { match ->
                     "${file.relativeTo(sourceRoot).invariantSeparatorsPath}: '${match.value}'"
                 }
             }
@@ -28,6 +31,10 @@ class EnglishOnlySourceTest {
             .firstOrNull(File::isDirectory)
             ?: error("Could not locate the Android production source directory.")
 
+    private fun String.withoutApprovedSourceIdentifiers(): String =
+        replace(officialUrl, "")
+            .replace("BR_setores_CD2022.zip", "")
+
     private companion object {
         val portugueseUiTerm = Regex(
             """(?iu)(?<!\p{L})(?:
@@ -43,5 +50,6 @@ class EnglishOnlySourceTest {
                 demonstra[cç][aã]o|operadora|serra|centro|noroeste|n[aã]o|sem
             )(?!\p{L})""".replace(Regex("\\s+"), ""),
         )
+        val officialUrl = Regex("https://[^\\s\\\"]+")
     }
 }

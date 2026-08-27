@@ -51,6 +51,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.ui.NavDisplay
 import com.gecesars.atxplan.ui.components.StorageErrorBanner
+import com.gecesars.atxplan.ui.dataset.DataCatalogViewModel
 import com.gecesars.atxplan.ui.navigation.AtxRoute
 import com.gecesars.atxplan.ui.navigation.CatalogRoute
 import com.gecesars.atxplan.ui.navigation.DashboardRoute
@@ -58,6 +59,7 @@ import com.gecesars.atxplan.ui.navigation.MapRoute
 import com.gecesars.atxplan.ui.navigation.ProjectRenameRoute
 import com.gecesars.atxplan.ui.navigation.ProjectsRoute
 import com.gecesars.atxplan.ui.navigation.RfPathEditorRoute
+import com.gecesars.atxplan.ui.navigation.RfAssetsRoute
 import com.gecesars.atxplan.ui.navigation.StudiesRoute
 import com.gecesars.atxplan.ui.navigation.UnsupportedRoute
 import com.gecesars.atxplan.ui.navigation.activeRoute
@@ -69,6 +71,7 @@ import com.gecesars.atxplan.ui.screens.EngineeringMapScreen
 import com.gecesars.atxplan.ui.screens.ProjectRenameScreen
 import com.gecesars.atxplan.ui.screens.ProjectsScreen
 import com.gecesars.atxplan.ui.screens.RfPathEditorScreen
+import com.gecesars.atxplan.ui.screens.RfAssetsScreen
 import com.gecesars.atxplan.ui.screens.StudiesScreen
 import com.gecesars.atxplan.ui.theme.AtxNavy
 import com.gecesars.atxplan.ui.theme.AtxTeal
@@ -120,6 +123,7 @@ fun AtxPlanApp() {
         onSelectProject = viewModel::selectProject,
         onCalculateLink = viewModel::calculateLinkBudget,
         onSaveRfPath = viewModel::addRfPath,
+        onMutateRfAsset = viewModel::mutateRfAsset,
         onRetryLoad = viewModel::retryLoad,
     )
 }
@@ -138,12 +142,15 @@ private fun AtxPlanShell(
     onSelectProject: (String) -> Unit,
     onCalculateLink: (com.gecesars.atxplan.domain.rf.LinkBudgetInput) -> Unit,
     onSaveRfPath: (com.gecesars.atxplan.domain.application.AddRfPathCommand) -> Unit,
+    onMutateRfAsset: (com.gecesars.atxplan.domain.application.RfAssetMutationCommand) -> Unit,
     onRetryLoad: () -> Unit,
 ) {
     val backStack = rememberAtxNavBackStack()
     val currentUiState = rememberUpdatedState(uiState)
     val activeRoute = backStack.activeRoute
-    val isNestedEditor = activeRoute is RfPathEditorRoute || activeRoute is ProjectRenameRoute
+    val isNestedEditor = activeRoute is RfPathEditorRoute ||
+        activeRoute is ProjectRenameRoute ||
+        activeRoute is RfAssetsRoute
     var isEditorDirty by rememberSaveable { mutableStateOf(false) }
     var isEditorSavePending by remember { mutableStateOf(false) }
     var pendingEditorNavigation by remember { mutableStateOf<PendingEditorNavigation?>(null) }
@@ -151,6 +158,7 @@ private fun AtxPlanShell(
     val activeTopLevelRoute = when (activeRoute) {
         is RfPathEditorRoute,
         is ProjectRenameRoute,
+        is RfAssetsRoute,
         -> ProjectsRoute
         else -> activeRoute
     }
@@ -232,6 +240,7 @@ private fun AtxPlanShell(
                                 text = when (activeRoute) {
                                     is RfPathEditorRoute -> "Add RF Path"
                                     is ProjectRenameRoute -> "Rename Project"
+                                    is RfAssetsRoute -> "RF Assets"
                                     else -> destinations.firstOrNull { it.route == activeRoute }
                                         ?.label
                                         ?: destinations.first().label
@@ -311,10 +320,31 @@ private fun AtxPlanShell(
                                                     "data was not changed."
                                             }
                                         },
+                                        onManageRfAssets = { projectId ->
+                                            val route = AtxRoute.rfAssets(projectId)
+                                            if (route is RfAssetsRoute && backStack.lastOrNull() != route) {
+                                                backStack.add(route)
+                                            } else if (route !is RfAssetsRoute) {
+                                                navigationNotice = "The RF asset manager cannot open this project " +
+                                                    "because its stored ID is not navigation-safe. The project " +
+                                                    "data was not changed."
+                                            }
+                                        },
                                     )
                                 }
                                 MapRoute -> NavEntry(route) {
-                                    EngineeringMapScreen(project = currentUiState.value.selectedProject)
+                                    val state = currentUiState.value
+                                    EngineeringMapScreen(
+                                        project = state.selectedProject,
+                                        isCatalogWritable = state.isCatalogWritable,
+                                        isSaving = state.isSavingCatalog,
+                                        catalogMutationCompletionCount =
+                                            state.catalogMutationCompletionCount,
+                                        mutationSessionId = state.rfMutationSessionId,
+                                        activeMutationRequestId = state.activeRfMutationRequestId,
+                                        lastMutationReceipt = state.lastRfMutationReceipt,
+                                        onMoveSite = onMutateRfAsset,
+                                    )
                                 }
                                 StudiesRoute -> NavEntry(route) {
                                     StudiesScreen(
@@ -326,7 +356,7 @@ private fun AtxPlanShell(
                                         onCalculate = onCalculateLink,
                                     )
                                 }
-                                CatalogRoute -> NavEntry(route) { CatalogScreen() }
+                                CatalogRoute -> NavEntry(route) { DataCatalogRouteContent() }
                                 is RfPathEditorRoute -> NavEntry(route) {
                                     val state = currentUiState.value
                                     RfPathEditorScreen(
@@ -368,6 +398,22 @@ private fun AtxPlanShell(
                                             pendingEditorNavigation = null
                                             navigateBackImmediately()
                                         },
+                                        onBack = navigateBack,
+                                    )
+                                }
+                                is RfAssetsRoute -> NavEntry(route) {
+                                    val state = currentUiState.value
+                                    RfAssetsScreen(
+                                        project = state.catalog.projects
+                                            .firstOrNull { project -> project.id == route.projectId },
+                                        isLoadingCatalog = state.isLoading,
+                                        isCatalogWritable = state.isCatalogWritable,
+                                        isSaving = state.isSavingCatalog,
+                                        catalogMutationCompletionCount =
+                                            state.catalogMutationCompletionCount,
+                                        activeMutationRequestId = state.activeRfMutationRequestId,
+                                        lastMutationReceipt = state.lastRfMutationReceipt,
+                                        onMutate = onMutateRfAsset,
                                         onBack = navigateBack,
                                     )
                                 }
@@ -427,6 +473,21 @@ private fun AtxPlanShell(
             },
         )
     }
+}
+
+@Composable
+private fun DataCatalogRouteContent() {
+    val context = LocalContext.current
+    val viewModel: DataCatalogViewModel = viewModel(
+        factory = DataCatalogViewModel.factory(context),
+    )
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    CatalogScreen(
+        state = state,
+        onMunicipalityQueryChange = viewModel::updateMunicipalityQuery,
+        onMunicipalitySelected = viewModel::selectMunicipality,
+        onRetryDataset = viewModel::retryDataset,
+    )
 }
 
 @Composable

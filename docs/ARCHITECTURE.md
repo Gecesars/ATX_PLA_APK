@@ -1,6 +1,6 @@
 # Android Architecture
 
-> Architecture baseline and target as of August 27, 2026. The repository contains a working Compose application, typed/saveable Navigation 3 routes, explicit UDF and use-case boundaries, a transactional schema-3 JSON repository with explicit 1→2→3 and 2→3 migrations, validated RF-domain models, transactional project rename, duplication, archive, restore, and bounded hard deletion, a combined Add RF Path editor, and a bounded RF calculator. Sections labeled Target or Planned describe the next architecture and must not be read as delivered functionality.
+> Architecture baseline and target as of August 27, 2026. The repository contains a working Compose application, typed/saveable Navigation 3 routes, explicit UDF and use-case boundaries, a transactional schema-4 project store with a small atomic index and immutable SHA-256 project documents, explicit 1→2→3→4, 2→3→4, and 3→4 migrations, a content-addressed artifact-store foundation, validated RF-domain models, transactional project lifecycle operations, independent RF-entity CRUD, a combined Add RF Path editor, a bounded RF calculator, and a separate feature ViewModel/repository for the bundled verified IBGE 2022 attribute index. Sections labeled Target or Planned describe the next architecture and must not be read as delivered functionality.
 
 ## 1. Architecture goals
 
@@ -27,6 +27,7 @@ flowchart TD
     ACT[MainActivity] --> THEME[AtxPlanTheme]
     THEME --> APP[AtxPlanApp]
     APP --> VM[AppViewModel]
+    APP --> DVM[DataCatalogViewModel]
     APP --> NAV[Navigation 3 NavDisplay]
     NAV --> DASH[Dashboard]
     NAV --> PROJECTS[Projects]
@@ -43,7 +44,11 @@ flowchart TD
     USE --> DOMAIN[Project domain models]
     PORT --> FILE[FileProjectRepository]
     FILE --> PERSIST[ProjectCatalogPersistence]
-    PERSIST --> JSON[(Schema-3 JSON / AtomicFile)]
+    PERSIST --> JSON[(Schema-4 index and immutable project documents)]
+    DVM --> IPORT[IbgeDatasetRepository]
+    IPORT --> IREPO[BundledIbgeDatasetRepository]
+    IREPO --> IASSET[(Manifest, NOTICE, content-addressed asset)]
+    IREPO --> IDB[(Verified read-only SQLite in no-backup storage)]
 ```
 
 ### 2.2 Current status by concern
@@ -54,18 +59,19 @@ flowchart TD
 | UI shell | Delivered | Compose Material 3, edge-to-edge, custom light/dark theme. | Full accessibility/device-matrix validation remains. |
 | Adaptive navigation | Delivered | Bottom navigation on compact width; navigation rail at 720 dp or wider; rail labels/header collapse to accessible icons below 520 dp height. | Feature contents are not all adaptive list/detail layouts. |
 | Navigation 3 | Foundation | Serializable stable-ID `AtxRoute` keys, a saveable typed back stack, safe unknown-route fallback, and nested RF-path and project-name editors have saved-instance-state tests. | Deep links, deleted-ID UX, route ownership, and true process-death/rotation/device-matrix flows remain. |
-| State management | Foundation | Immutable state, explicit actions/effects, structured problems/recovery, injected use cases/dispatchers, an explicit mutation-completion counter, cancellation, and ViewModel tests. Serialized catalog mutations rebase generically on the latest repository catalog and publish only after persistence; rejected/no-op outcomes return that latest catalog without writing. | One application ViewModel remains; cross-instance catalog observation, DI/scoping, durable jobs, broader observability, accessibility, and system recovery remain. |
-| Repository boundary | Delivered | `ProjectRepository` interface separates ViewModel from file implementation. | Only the project catalog uses a repository. |
-| JSON persistence | Delivered baseline | Strict UTF-8 serialization, schema 3, explicit chained 1→2→3 and direct 2→3 migrations, private `AtomicFile`, `fd.sync`, 5 MiB limit, and mutex-protected latest-catalog read-transform-write transactions have migration/fault/no-op/concurrency tests. | Unreadable/future-catalog recovery/export, external asset/file ownership, jobs, backup, multi-process policy, storage-exhaustion system evidence, and the long-term store decision remain. |
-| Domain | Foundation | Schema-3 active/archive catalog invariants, `ArchivedProject` lifecycle metadata, project/network/site/sector/receiver/study models, engineering value types, and receiver/sector network-reference validation are implemented. | Legacy primitive entity fields need staged migration; no scenario, dataset, artifact, or full study model exists. |
-| Project workflow | Delivered bounded slices | Create/select/rename/duplicate/archive/restore/delete use cases operate through repository transactions. Archive retains the complete aggregate with its timestamp/original index while excluding it from active selection/metrics; restore reinserts it deterministically and selects it. Complete reviewed snapshots protect archive, restore, and hard delete from stale concurrent state. | Local archive is not backup/export/sync or hard-delete recovery. Unreadable/future-catalog recovery, external asset ownership/recovery, independent RF CRUD/linked deletion, and source-lineage/duplication-provenance remain. |
-| RF-path workflow | Delivered bounded slice | A saveable Compose draft calls a validated, deterministic use case and persists one linked network/site/sector/receiver transaction. | It is not complete entity CRUD, a terrain link study, or process-death system proof. |
+| State management | Foundation | Immutable state, explicit actions/effects, structured problems/recovery, injected use cases/dispatchers, an explicit mutation-completion counter, cancellation, and ViewModel tests. `DataCatalogViewModel` separately owns IBGE preparation, retry, debounced search, stale-query rejection, and selection state. Serialized project-catalog mutations rebase generically on the latest repository catalog and publish only after persistence; rejected/no-op outcomes return that latest catalog without writing. | Most project/RF screens still share `AppViewModel`; cross-instance catalog observation, DI/scoping, durable jobs, broader observability, accessibility, and system recovery remain. |
+| Repository boundary | Delivered | `ProjectRepository` separates project state from file persistence, and `IbgeDatasetRepository` separates the Data Catalog from the packaged SQLite implementation. | Generic user/acquired datasets, map sources, elevation, studies, and exchange still need their target ports. |
+| Project persistence | Delivered baseline | Strict UTF-8 schema-4 JSON uses a 5 MiB atomic control index and immutable, independently verified project documents bounded to a conservative 8 MiB each. Explicit 1→2→3→4, 2→3→4, and 3→4 migration writes and verifies documents before publishing the index. A process mutex protects latest-catalog read-transform-write transactions; migration, fault, no-op, corruption, and reuse tests are present. | Unreadable/future-store recovery/export, reachability cleanup, backup, multi-process policy, storage-exhaustion/interruption system evidence, lazy document loading, and the long-term operational-store decision remain. |
+| Artifact persistence | Foundation | A private streaming content-addressed store validates operation limits and optional expected SHA-256, syncs and promotes immutable blobs, deduplicates verified content, and reports available, missing, or corrupt states. | No import/attachment UI, document-reference transaction, export, ownership policy, garbage collection, or study-result workflow consumes this store yet. |
+| Domain | Foundation | Schema-4 active/archive invariants, `ArchivedProject`, project/network/site/sector/receiver/study models, expanded RP3-parity carrier fields, scenario/GIS/antenna/coverage/regulatory records, artifact references, import provenance, engineering value types, and cross-reference validation are implemented. Separate dataset-domain models describe the delivered global IBGE package and municipality summaries. | Project GIS/coverage records remain persistence foundations, not delivered parsers, sector geometry, propagation results, or regulatory conclusions. The release-managed IBGE reference index is not a project GIS layer. Remaining legacy primitive entity fields still need staged migration. |
+| Project workflow | Delivered bounded slices | Create/select/rename/duplicate/archive/restore/delete use cases operate through repository transactions. Archive retains the complete aggregate with its timestamp/original index while excluding it from active selection/metrics; restore reinserts it deterministically and selects it. Complete reviewed snapshots protect archive, restore, and logical hard delete from stale concurrent state. | Local archive is not backup/export/sync or hard-delete recovery. Unreadable/future-store recovery, physical orphan cleanup, and source-lineage/duplication-provenance remain. |
+| RF entity workflow | Delivered bounded slice | A project-scoped compact manager creates, edits, and deletes networks, sites, sectors, and receivers independently. Exact entity snapshots reject stale edits/deletes; referenced network deletion is blocked with sector/receiver counts, site-sector cascade requires explicit confirmation, and preserved per-network receiver profiles are surfaced as read-only compatibility references. The combined Add RF Path flow remains available. | Individual compatibility-profile editing/removal, terrain link studies, bulk editing/import, artifact workflows, and full process-death/device-matrix proof remain. |
 | RF engine | Delivered | Pure Kotlin FSPL, EIRP, received power, margin, midpoint Fresnel radius, noise floor, and SNR; results carry explicit in-memory model and implementation provenance. | Synchronous bounded calculation only; no terrain, geodesy, patterns, or persisted execution manifest. |
-| Engineering map | Foundation | Compose Canvas plots normalized site coordinates and active azimuth rays. | It is not a cartographic renderer or GIS engine. |
-| Dataset catalog | Foundation | Static capability screen. | No dataset inventory or file operation exists. |
-| Tests | Delivered baseline | The current 162 JVM tests and 40 Android 16/API 36 emulator instrumented tests pass. They cover domain, RF, schema migration/fault/latest-catalog concurrency, archive/restore/duplication/deletion conflict/selection/no-op policies, forms, ViewModel behavior, source-language rules, durable UI state, and Activity recreation. | A fresh physical run of the expanded instrumented suite, broader accessibility automation, performance, export, true system-reclaim process death, and a formal device matrix remain. |
+| Engineering map | Foundation | Compose renders an offline Web Mercator coordinate grid using pure domain camera math, project fit, pan, anchored pinch zoom, metric scale, site selection, active azimuth rays, an accessible site list, and a coordinate-only durable site move. The UI explicitly distinguishes stored elevation from `NoData` and states that movement does not resample it. | No basemap package, third-party tiles, DEM sampling, terrain, IBGE polygon/map integration, GIS features, receiver move, or map performance gate is delivered. It is not a cartographic basemap or GIS engine. |
+| Dataset catalog | Delivered bounded slice | The screen prepares and verifies one release-managed national IBGE package, reports checking/installing/validating/ready/failed state, exposes retry, and performs normalized offline municipality queries with explicit source, CRS, storage, hash, `NoData`, licensing, and geometry limits. | No arbitrary inventory, user import, remote acquisition, removal, rollback, sector polygons, exact containment, map rendering, or population-by-coverage exists. |
+| Tests | Delivered baseline | The current 233 JVM tests and 62 Android 16/API 36 emulator instrumented tests pass. They cover domain/RF/geographic/dataset validation, indexed migration/document/artifact faults, project lifecycle and independent RF CRUD conflicts, location-only site moves, forms, ViewModel behavior including separate Data Catalog state, Kotlin/XML/JSON/TXT language rules, real IBGE asset installation/query/recovery/storage behavior, compact Catalog/RF-assets reachability, Engineering Map interaction/restoration, unavailable targets, validation, draft protection, and Activity recreation. | A fresh physical run of the expanded instrumented suite, API 23 dataset execution, broader accessibility automation, performance, export, true system-reclaim process death, and a formal device matrix remain. |
 | Build automation | Delivered baseline | CI runs unit tests, lint, and debug/test APK assembly; current local lint has 0 errors and 12 dependency/tooling warnings. | Connected test and signed release are outside current CI. |
-| Product language | Delivered baseline | Production UI/errors/demo/tests are English and a unit test scans for common Portuguese source terms. | The blacklist is partial and must cover future resource/file types. |
+| Product language | Delivered baseline | Production UI/errors/demo/tests are English and a unit test scans Kotlin, XML, JSON, and text production resources for common Portuguese terms while allowing official identifiers. | The blacklist is partial and must cover every future user-visible resource type. |
 
 ## 3. Principles
 
@@ -112,7 +118,8 @@ flowchart TD
     USE --> DOMAIN[Pure Kotlin domain]
     USE --> PORTS[Repository and engine contracts]
     DATA[Data adapters] --> PORTS
-    DATA --> DB[(Room/SQLite when adopted)]
+    DATA --> DB[(Future operational Room/SQLite after ADR)]
+    DATA --> REFDB[(Current release-managed reference SQLite)]
     DATA --> FILES[Private files / SAF]
     DATA --> NET[Optional HTTPS]
     DATA --> MAPSDK[Map SDK]
@@ -142,9 +149,11 @@ ATX Plan is an information-dense engineering tool, so compact layout is a functi
 
 The current compact pass is measured on a physical Android 16 phone at approximately 394 dp portrait width and `fontScale = 1.15`. Responsive fallbacks were also inspected in portrait at `fontScale = 1.30`, after which the original setting was restored. Baseline landscape checks verified the short-height navigation rail, wide feature layouts, and the resized project-name editor with the IME before rotation was restored. This physical evidence remains bounded to one reference device.
 
-The compact adaptive Duplicate Project and Delete Project dialogs were separately validated on an Android 16/API 36 emulator at 1080 × 2400 pixels and 420 dpi, at `fontScale = 1.0` and `fontScale = 1.30`, in portrait and short landscape with Gboard open and closed. Archive Project/actions and the archived-project card were reachable in portrait at font scales 1.0, 1.30, and 2.0 and in landscape at 1.30. The exact `DELETE` field remained fully visible, and the actions remained reachable through the bounded responsive/scroll layouts. No system font-scale override or clamp was used. These physical-device and emulator observations are not a complete accessibility or device matrix.
+The compact adaptive Duplicate Project and Delete Project dialogs were separately validated on an Android 16/API 36 emulator at 1080 × 2400 pixels and 420 dpi, at `fontScale = 1.0` and `fontScale = 1.30`, in portrait and short landscape with Gboard open and closed. Archive Project/actions and the archived-project card were reachable in portrait at font scales 1.0, 1.30, and 2.0 and in landscape at 1.30. Manage RF Assets has an automated 360 × 480 dp/font-scale-1.30 check for horizontal tabs, a scrollable long editor, persistent actions, and blocked reference deletion, plus a 1080 × 2400 visual inspection. The Data Catalog has a separate 360 × 480 dp/font-scale-1.30 test for Ready/search/selection/limitations and preparation/failure/query states; a fresh 1080 × 2400/font-scale-1.30 manual run verified dense metrics, source/limitation text, unaccented search, four visible results, and selected envelope details. The exact `DELETE` field remained fully visible, and actions remained reachable through bounded responsive/scroll layouts. No system font-scale override or clamp was used. These observations are not a complete accessibility or device matrix.
 
-A bounded manual force-stop/relaunch retained an archived record. After restore, a second force-stop/relaunch retained that project as active and selected. This confirms the observed local schema-3 path only; it is not proof of Android Backup, system-reclaim restoration, every process-death timing, or broader device support.
+A bounded manual force-stop/relaunch retained an archived record. After restore, a second force-stop/relaunch retained that project as active and selected. This confirms the observed legacy schema-3 path that is now an input to schema-4 migration; it is not proof of Android Backup, schema-4 interruption recovery at every checkpoint, system-reclaim restoration, every process-death timing, or broader device support.
+
+A separate API 36 cold-launch check placed the schema-2 fixture in private app storage and observed its promotion to a schema-4 index and immutable project document while retaining project identity, receiver, and network references. Interruption behavior is covered by JVM fault injection, not by this bounded manual check.
 
 ### Domain/application layer
 
@@ -262,6 +271,8 @@ Rules:
 
 Every data screen models empty, loading, content, recoverable error, blocking problem, retry, and progress/cancellation where relevant.
 
+The current Data Catalog uses explicit `CHECKING`, `INSTALLING`, `VALIDATING`, `READY`, and `FAILED` states. Preparation failure never substitutes municipality/population data and exposes retry. Queries are debounced, bounded, executed off the main thread, reject stale completions, distinguish failure from a valid empty result, and retain selection only while its municipality remains in the returned set.
+
 ## 8. Navigation 3
 
 ### Current implementation
@@ -319,21 +330,23 @@ Adoption closes only after rotation, process death, invalid deep link, and phone
 
 The current pure Kotlin/serialization domain includes:
 
-- schema-3 `ProjectCatalog` with active and archived collections, selected active-project ID, uniqueness across both collections, and stale-selection fallback that never selects an archived project;
+- schema-4 `ProjectCatalog` with active and archived collections, selected active-project ID, uniqueness across both collections, and stale-selection fallback that never selects an archived project;
 - `ArchivedProject`, which retains one unchanged `PlannerProject` aggregate plus a non-negative archive timestamp and original active-list index used as a bounded restoration hint;
-- `PlannerProject` with identity, name, customer, notes, timestamps, demo flag, networks, sites, receivers, and study summaries;
-- `RfNetwork` with system, downlink frequency, and bandwidth validation;
+- `PlannerProject` with identity, name, customer, notes, timestamps, demo flag, networks, sites, receivers, study summaries, antenna/GIS/scenario/coverage/regulatory records, artifact references, and optional import provenance;
+- `RfNetwork` with system, active state, downlink/uplink configuration, duplex/threshold/channel-plan/technology carrier fields, and legacy payload retention;
 - `RadioSystem` values for generic, FM, TV, LTE, 5G NR, land mobile, FWA, and air-to-ground;
-- `RadioSite` with validated location, optional elevation, and unique sectors;
+- `RadioSite` with validated location, optional elevation/tower height, and unique sectors;
 - `GeoPoint` latitude/longitude validation;
-- `Sector` with active flag, azimuth, electrical tilt, height, power, gain, feeder loss, frequency, and a backward-compatible nullable network reference;
-- `Receiver`/CPE with typed coordinate, height, gain, system loss, sensitivity, noise figure, azimuth/tilt, and a required project-local network reference;
-- aggregate duplicate and referential-integrity validation for receivers and linked sectors;
+- `Sector` with active flag, azimuth, electrical tilt, transmit/receive chain fields, antenna-pattern references, equipment metadata, frequency, and a backward-compatible nullable network reference;
+- `Receiver`/CPE with typed coordinate, height, gain, system loss, sensitivity, noise figure, azimuth/tilt, equipment metadata, per-network profiles, and a required project-local network reference;
+- aggregate duplicate and referential-integrity validation for RF entities, antenna patterns, scenarios, project records, and artifacts;
 - a validated `DuplicateProjectCommand`/result/use case that reads the latest durable source inside the transaction, generates a fresh route-safe root project ID and root timestamps, preserves the project-scoped nested graph and references, appends the copy, and selects it without changing the source;
 - an `ArchiveProjectCommand`/result/status/use case that treats the complete reviewed active aggregate as an optimistic conflict token, retains it unchanged with an archive timestamp/original index, removes it from active selection/metrics, and selects the next, previous, or empty active state deterministically;
 - a `RestoreProjectCommand`/result/status/use case that compares the complete reviewed archive record, reinserts its unchanged aggregate at the original index clamped to the latest active list, removes the archive record, and selects the restored project;
 - a `DeleteProjectCommand`/result/status/use case that treats the complete reviewed aggregate as an optimistic conflict token, compares it structurally with the latest durable project, returns unchanged stale/missing outcomes, and atomically removes only an unchanged target while preserving other aggregate instances/order and choosing the next, previous, or empty selection deterministically;
 - a validated `AddRfPathCommand`/result/use case that generates stable IDs and creates one linked network, site/sector, and receiver as one immutable catalog transition;
+- typed independent RF mutation commands/results for all network/site/sector/receiver create, update, and delete operations, with immutable IDs, exact-snapshot conflict detection, project-local reference validation, network deletion impact, and explicitly confirmed site-sector cascade;
+- versioned carrier records for antenna patterns, GIS layers, study scenarios, coverage snapshots, regulatory records, project artifacts, and import provenance; these are storage/domain foundations and do not claim that parsers, datasets, studies, or regulatory decisions exist;
 - `StudySummary`, study types, and lifecycle statuses;
 - factory-created user projects and a synthetic demonstration project.
 
@@ -364,7 +377,7 @@ Delivered engineering value objects:
 
 They validate construction and deserialization and retain primitive numeric JSON representation. The combined Add RF Path command uses them at the UI/domain boundary. Existing legacy `RfNetwork`, `GeoPoint`, and `Sector` persisted fields remain primitive `Double` values and require staged migration rather than an incompatible rewrite.
 
-Still-planned unit/domain types include linear power, dBW, elevation angle, CRS/NoData policy, dataset hash, engine ID/version, and study/artifact provenance values.
+Still-planned unit/domain types include linear power, dBW, elevation angle, a complete CRS/NoData policy, engine ID/version, and executable study/result provenance values.
 
 Target conventions:
 
@@ -418,12 +431,14 @@ Delivered use cases load and transactionally update the catalog, create/select/r
 
 `DeleteProjectUseCase` compares the complete reviewed active aggregate with the latest durable aggregate inside the transaction. A changed, missing, or archived target is a typed no-op; an unchanged active target is removed as one catalog transition while other projects and order remain unchanged and selection moves to the next project, the previous project when last, or none when empty. The compact UI requires exact `DELETE`, reports current project-scoped collection counts, and waits for observable durable absence. Hard deletion remains distinct from archive: the local archive cannot recover a permanently deleted project and is not backup, export, synchronization, or external-asset recovery. `AddRfPathUseCase` accepts typed drafts and injected ID/clock providers; its result carries the committed catalog projection and linked entities.
 
+The delivered IBGE flow is intentionally narrower than a general acquisition use case. `DataCatalogViewModel` asks `IbgeDatasetRepository.prepare()` to validate or install the immutable bundled package, then issues bounded municipality queries. The repository emits byte progress and typed preparation/query failures; there is no network, user-selected package, or project mutation in this flow.
+
 Remaining target use cases include:
 
 ```text
 UpdateProjectMetadata
 Create/Edit/Delete Network, Site, Sector, and Receiver
-InstallDatasetPackage
+InstallUserDatasetPackage
 BuildTerrainProfile
 ImportAntennaPattern
 RunLinkStudy
@@ -440,22 +455,40 @@ Use cases accept domain commands, define transaction boundaries, return typed pr
 
 ### Current repository
 
-`ProjectRepository` exposes `loadCatalog()` and `updateCatalog(transform)`. The update contract loads the latest durable catalog, applies one pure transform, avoids storage writes when the result is equal, and otherwise atomically writes the replacement while the complete transaction is serialized. `AppViewModel` now uses this as the generic rebase boundary for every catalog mutation instead of computing against a potentially stale UI catalog. It publishes only the repository-returned catalog after persistence succeeds; rejected or no-op outcomes publish the latest durable catalog without writing. This policy covers rename, duplication, archive, restore, deletion, selection, creation, and Add RF Path. `FileProjectRepository` and the Android-independent `ProjectCatalogPersistence`:
+`ProjectRepository` exposes `loadCatalog()` and `updateCatalog(transform)`. The compatibility view remains one complete in-memory `ProjectCatalog`, while schema-4 persistence splits its physical ownership by project. The update contract loads the latest durable view, applies one pure transform, avoids storage writes when the result is equal, writes only changed project documents, and publishes a replacement index only after every referenced document is durable. `AppViewModel` uses this generic rebase boundary for project operations, Add RF Path, and independent RF mutations; it publishes only the repository-returned catalog after persistence succeeds.
 
-- store `atx_project_catalog_v1.json` in private app files, retaining the legacy filename so installed schema-1 catalogs are discovered;
-- use strict UTF-8 typed JSON with defaults and unknown-key tolerance;
-- seed the demo catalog only when the file does not exist;
-- reject files above 5 MiB;
-- reject a future schema, malformed UTF-8/JSON, and invalid domain content without overwriting original bytes;
-- explicitly migrate schema 1 through 2 to 3 or schema 2 directly to 3 and atomically promote the migrated document;
-- remove a same-named `archivedProjects` field from untrusted schema-1/2 input before decoding because archive storage did not exist in those versions;
-- preserve the complete source document if migration promotion fails;
-- save only schema 3;
-- use `AtomicFile.startWrite/finishWrite/failWrite` plus `fd.sync`;
-- share a process-wide mutex across repository instances;
-- run storage work through the injected storage dispatcher in application use cases.
+`FileProjectRepository` also implements `ProjectArtifactRepository`. The Android-independent `ProjectStorePersistence`, legacy migrator, document codecs, and content-addressed artifact store:
 
-Automated storage tests cover direct and chained schema migration, hostile legacy archive-field injection, failed promotion, malformed/invalid/future payload preservation, strict UTF-8, size limits, failed writes, no-op writes, and concurrent transactions rebased on the latest durable catalog. `AtomicFile` still protects the final Android replacement; the mutex is in-process and is not a multi-process locking policy.
+- retain `atx_project_catalog_v1.json` as the control filename so installed schema-1/2/3 catalogs are discovered, but schema 4 stores a small index there;
+- store immutable project documents under hash-only `atx_project_documents/sha256/<prefix>/<digest>.json` paths;
+- store immutable artifact blobs under hash-only `atx_project_artifacts/sha256/<prefix>/<digest>.blob` paths and use a private staging directory;
+- use strict UTF-8 and reject unknown keys for schema-4 index/documents; the bounded legacy decoder tolerates historical unknown keys only after version-aware sanitization;
+- seed the demonstration catalog only when no control payload exists;
+- bound the index/legacy input to 5 MiB and each project document to 8 MiB; artifact calls require an explicit streaming limit no greater than 512 MiB;
+- reject future or malformed store/document schemas, invalid UTF-8/JSON, unknown store discriminators, identity mismatch, byte-length mismatch, and SHA-256 mismatch without repairing or overwriting the committed index;
+- explicitly migrate schema 1 through 2 and 3 to 4, schema 2 through 3 to 4, or schema 3 directly to 4;
+- remove fields that did not belong to each legacy contract before decode so untrusted old input cannot inject schema-4 content;
+- write, sync, read back, and verify immutable project documents before atomically publishing the index; a failure can leave only an unreachable immutable file while the prior control bytes remain authoritative;
+- reuse unchanged document references for selection, archive, restore, and other index-only transitions;
+- validate and optionally match expected artifact hashes, deduplicate only verified content, and distinguish available, missing, and corrupt artifact states;
+- use `AtomicFile.startWrite/finishWrite/failWrite` plus `fd.sync` for the control index and project documents;
+- share a process-wide mutex across repository instances and run storage work through the injected storage dispatcher.
+
+Automated storage tests cover legacy 1/2/3 migration, hostile legacy-field injection, failed document/index publication, unknown/future discriminators, stale selection, missing/corrupt documents, hash and size checks, immutable-document reuse, no-op writes, artifact limits/deduplication/corruption, and latest-catalog transactions. `AtomicFile` and immutable addressing protect the in-process Android path; the mutex is not a multi-process locking policy, and no reachability garbage collector is delivered.
+
+### Current bundled IBGE repository
+
+`BundledIbgeDatasetRepository` implements the separate `IbgeDatasetRepository` contract for one immutable, release-managed dataset:
+
+- a 64 KiB bounded, strict UTF-8/strict-schema manifest is checked against compiled release identity, exact source/asset hashes, counts, sizes, CRS, attribution, license caveat, and the no-geometry flag;
+- the content-addressed 22,133,986-byte gzip asset is streamed from `assets/datasets/ibge`, never loaded wholly into memory;
+- installation uses `noBackupFilesDir/datasets/ibge`, a unique `.part` file, a 70,926,336-byte output bound, 16 MiB safety allowance, compressed and database SHA-256, `fd.sync`, read-only SQLite validation, and atomic rename;
+- only exact hash-named recomputable SQLite files and private staging files are eligible for cleanup; unrelated files are preserved;
+- validation checks SQLite application/schema IDs, `quick_check`, bounded metadata, source identities, table/summary counts, unassigned and `NoData` counts, sector and municipality population sums, and a known municipality record;
+- the Android database uses ordinary tables instead of desktop `STRICT`/`RTree` features and is opened read-only with no localized collators;
+- municipality search is parameterized, result/length bounded, wildcard escaped, code aware, and accent/whitespace normalized without a network request.
+
+The database contains all 468,099 sector attribute rows, 5,570 municipality summaries, and portable rectangle records, but no polygon geometry. Its immediate input is a pinned desktop-derived index; the official archive is independently pinned but is not parsed by the current transformer. This boundary, API 36.1-only runtime evidence, and unresolved redistribution review are recorded in `docs/IBGE_DATASET.md`.
 
 ### Target ports
 
@@ -463,7 +496,8 @@ Automated storage tests cover direct and chained schema migration, hostile legac
 ProjectRepository
 RfCatalogRepository
 AntennaRepository
-DatasetRepository
+IbgeDatasetRepository (delivered bounded contract)
+UserDatasetRepository
 ElevationProvider
 MapSourceRepository
 StudyRepository
@@ -482,21 +516,40 @@ A repository exposes domain models or stable projections, not Room entities, cur
 ```text
 private files/
   atx_project_catalog_v1.json
+  atx_project_documents/
+    sha256/<prefix>/<digest>.json
+  atx_project_artifacts/
+    staging/
+    sha256/<prefix>/<digest>.blob
+
+APK assets/
+  datasets/ibge/
+    manifest.json
+    NOTICE.txt
+    ibge-census-sectors-2022-<compressed-sha256>.ibgedata
+
+private no-backup files/
+  datasets/ibge/<database-sha256>.sqlite
 ```
 
-This is an intentionally bounded first durable boundary. It is suitable for the current small catalog, not for rasters, large artifacts, job checkpoints, or full project interchange.
+The control file is the schema-4 project commit point. Project documents and artifact blobs are immutable content-addressed files. The separate IBGE manifest is the release-time asset commit point, and its content-addressed payload installs as a recomputable read-only database. These formats support current project aggregates, bounded artifacts, and one global reference dataset; they are not a lazy project database, job store, portable project container, or general user/acquired raster/dataset lifecycle.
 
 ### Current guarantees
 
-- schema 3 is serialized, with fixture-backed direct 2→3 and chained 1→2→3 migrations;
-- writes are atomic and synced;
+- schema 4 is serialized, with fixture-backed 1→2→3→4, 2→3→4, and 3→4 migration;
+- changed documents are written, synced, and verified before the atomic index commit;
 - complete read-transform-write catalog mutations are serialized in-process and evaluated against the latest durable catalog;
-- invalid UTF-8, malformed/invalid JSON, future schema, and failed migration promotion do not replace original bytes;
-- size is limited;
+- invalid UTF-8, malformed/invalid JSON, unknown/future schema, integrity failure, and failed migration promotion do not replace committed control bytes;
+- index, document, and artifact operation sizes are independently limited;
+- unchanged immutable documents are reused, and artifact blobs are deduplicated only after verification;
+- artifact availability is explicit as available, missing, or corrupt;
 - archive records retain the complete project aggregate, archive timestamp, and original active-list index; archived projects are excluded from active selection/metrics;
 - restore reinserts an unchanged aggregate at a deterministic bounded index and selects it;
 - the ViewModel publishes only the repository-committed catalog, rebases rejected/no-op outcomes without writing, and exposes structured recovery state on storage failure;
-- project hard deletion is a complete catalog transition; a failed write retains the previous project aggregate and selection.
+- project hard deletion is a complete logical index transition; a failed write retains the previous reachable project aggregate and selection, while physical orphan cleanup is intentionally deferred;
+- the pinned IBGE asset/database identity, counts, source hashes, CRS, attribution, limitations, and sizes are checked before the dataset becomes queryable;
+- bundled-dataset extraction is output-bounded and streamed through a synced staging file with compressed and database hashes before atomic promotion;
+- a failed/corrupt bundled install exposes a typed problem and no synthetic population/municipality result; the embedded package remains available for retry.
 
 ### Current gaps
 
@@ -504,15 +557,19 @@ This is an intentionally bounded first durable boundary. It is suitable for the 
 - no true Android `AtomicFile` interruption/full-storage system test;
 - no multi-process locking or external-writer conflict policy;
 - no durable job/checkpoint store;
-- no separate project asset/file ownership or external-asset recovery;
-- no immutable study artifacts;
-- no approved transition plan for JSON versus Room/SQLite;
-- no selective backup policy because backup is disabled.
-- local archive does not provide hard-delete undo/recovery, backup, export, synchronization, or project-owned external-asset cleanup.
+- no artifact attachment/import UI, reachability garbage collection, portable export, or external-file ownership/recovery policy;
+- no immutable executable study result consumes the artifact-store foundation;
+- project loading still materializes every document into the compatibility catalog view;
+- no approved transition plan for project/job JSON versus Room/SQLite;
+- no selective backup policy because backup is disabled;
+- local archive does not provide hard-delete undo/recovery, backup, export, synchronization, or project-owned external-asset cleanup;
+- no generic dataset import/download/removal, rollback/resume, sector polygon package, basemap, or DEM lifecycle;
+- no API 23 runtime execution of the bundled SQLite integration test;
+- no approved IBGE redistribution terms or release-grade archive-to-index derivation proof.
 
 ### Target storage layout
 
-Room/SQLite is the preferred candidate for relational operational state after an ADR and migration plan. Large files remain outside BLOB columns.
+Room/SQLite is the preferred candidate for relational project/job operational state after an ADR and migration plan. The standalone bundled-reference SQLite file does not make that project-store decision. Large files remain outside BLOB columns.
 
 ```text
 files/
@@ -542,6 +599,20 @@ Backup remains disabled until the policy explicitly includes recoverable project
 
 ## 13. Offline-first data flow
 
+Current bundled IBGE flow:
+
+```text
+Data Catalog observes feature state
+  -> read and validate strict pinned manifest
+  -> reuse a fully verified content-addressed database, or preflight storage
+  -> stream embedded gzip into bounded private staging
+  -> verify compressed/database hashes and SQLite identity/content
+  -> atomically promote read-only database
+  -> issue bounded local municipality queries
+```
+
+Target external/user dataset flow:
+
 ```text
 UI observes local state
   -> explicit acquisition/import action
@@ -566,24 +637,25 @@ Invalid(reason)
 MissingExternalPermission
 ```
 
-Dataset inventory fields include ID/edition, provider/source URL, license/attribution/acceptance, extent/CRS/resolution/NoData, size/SHA-256/ETag/date, parser version, validation result, dependencies, references, and update policy.
+The current IBGE manifest records ID/title, provider/source URLs, access date, attribution, unresolved license status, CRS, source archive/index/signature hashes, geometry availability, population field, counts, compressed/installed sizes and hashes, schema/application IDs, transformer version, and bounding-box limitation. Generic acquired datasets still require extent/resolution/ETag, acceptance, dependencies/references, parser result, update/removal policy, and ownership.
 
 Community basemap endpoints must not be used for bulk prefetch. Offline packages require user files, an authorized source, or compatible infrastructure.
 
 ## 14. Map and GIS
 
-### Current Canvas
+### Current geographic coordinate viewport
 
-The existing `EngineeringMapScreen` is a useful offline diagnostic foundation:
+The current `EngineeringMapScreen` is a bounded offline geographic foundation:
 
-- computes a local extent from selected-project sites;
-- normalizes coordinates into the Canvas;
-- renders a visual grid, site markers, and active sector azimuth rays;
-- lists coordinates and active transmitter counts;
-- provides a semantic content description;
-- explicitly labels itself local and without tiles.
+- projects WGS 84 site coordinates through tested Web Mercator math;
+- fits selected-project sites across the antimeridian and supports pan plus anchor-preserving pinch zoom;
+- renders a coordinate grid, metric scale, camera center, site markers, and active-sector azimuth rays;
+- supports touch selection and accessible list-based select/center/edit controls;
+- submits a full-snapshot stale-safe command that changes only the selected site's coordinates and publishes only after durable persistence;
+- distinguishes stored project elevation from explicit `NoData` and warns that moving a site does not sample a DEM;
+- provides a semantic content description and permanently labels the view as a local coordinate grid with no basemap or third-party tiles.
 
-It does not perform a geographic projection and must not be called a cartographic basemap or GIS result.
+It remains a coordinate overlay rather than a cartographic basemap or GIS result. The delivered IBGE attribute package is not consumed by this screen and contains no renderable polygons. G4 still requires a renderer/package decision, an authorized basemap source and lifecycle, general hostile-package handling, DEM, geometry integration, airplane-mode map proof, and performance evidence. DEM sampling and pixel-level `NoData` are not present.
 
 ### Target map adapter
 
@@ -616,7 +688,7 @@ Format priorities:
 
 - P0: validated GeoJSON/CSV, HGT/GeoTIFF elevation, approved offline basemap;
 - P1: output GeoTIFF, KMZ, and dataset packages;
-- P2: GeoPackage, large vectors, clutter, buildings, and population.
+- P2: GeoPackage, large vectors, clutter, buildings, census-sector polygons, and population-by-coverage. The bounded IBGE attribute/municipality index is already delivered separately.
 
 ## 15. Compute backends
 
@@ -771,15 +843,15 @@ Canonical serialization is versioned. Irrelevant timestamps and local paths do n
 
 ### Current evidence
 
-The current automated baseline contains 162 passing JVM tests and 40 passing Android 16/API 36 emulator instrumented tests. The connected run completed on `Medium_Phone_API_36.1` at font scale 1.30 with no failures or skips. Local lint reports 0 errors and 12 dependency/tooling warnings.
+The current automated baseline contains 233 passing JVM tests and 62 passing Android 16/API 36 emulator instrumented tests. The connected run completed on `Medium_Phone_API_36.1` at font scale 1.30 with no failures or skips. Local lint reports 0 errors and 12 dependency/tooling warnings.
 
-- project/domain tests cover schema-3 defaults, active/archive uniqueness, archive lifecycle metadata, validation, engineering-value boundaries, primitive JSON, receiver/sector references, legacy compatibility, and exact round trips;
-- application tests cover transactional project archive/restore/duplication/deletion, complete aggregate preservation, timestamps/original indices, deterministic active selection/restoration position, latest-durable behavior, stale/repeated/missing no-op policy, fresh/colliding route-safe duplication IDs, source immutability, deterministic Add RF Path success, atomic failure, references, and JSON precision;
-- persistence tests cover direct 2→3 and chained 1→2→3 migrations, hostile legacy archive-field removal, failed migration promotion, malformed/invalid/future data, strict UTF-8, size limits, atomic write failure, no-op writes, and concurrent repository instances rebased on the latest durable catalog;
-- ViewModel tests cover load/create/select/rename/duplicate/archive/restore/delete/Add RF Path transitions, persist-before-publish behavior, generic latest-catalog rebase, structured failures/retry, mutation-completion accounting, ordering/concurrency, stale/repeated/missing outcomes without writes, invalid mutations, calculation cancellation, and stale-result suppression;
+- project/domain tests cover schema-4 defaults, active/archive uniqueness, archive lifecycle metadata, expanded record/reference validation, engineering-value boundaries, legacy compatibility, and exact round trips;
+- application tests cover transactional project lifecycle operations, independent RF-entity create/update/delete, exact-snapshot conflict handling, linked-deletion impact, deterministic Add RF Path success, atomic failure, references, and JSON precision;
+- persistence tests cover 1/2/3→4 migration, hostile legacy-field removal, failed document/index publication, malformed/invalid/future/unknown store data, strict UTF-8, integrity and size limits, immutable-document reuse, artifact deduplication/corruption, atomic write failure, no-op writes, and latest-catalog repository transactions;
+- ViewModel tests cover load/create/select/rename/duplicate/archive/restore/delete/Add RF Path/independent RF mutation transitions, persist-before-publish behavior and RF receipts, generic latest-catalog rebase, structured failures/retry, mutation-completion accounting, ordering/concurrency, stale/repeated/missing outcomes without writes, invalid mutations, calculation cancellation, and stale-result suppression;
 - RF and form tests cover implemented formulas, invalid physical inputs, unit parsing, defaults, and typed command conversion;
-- the English-only source test scans production Kotlin/XML for common Portuguese terms;
-- the current 40-test instrumented suite passes on an Android 16/API 36 emulator and covers the Dashboard-to-Studies smoke path, saved-instance-state restoration for supported, unknown, malformed, nested RF-path, and nested project-name routes, explicit mutation-completion and transient pending-save recovery, rename/duplication/archive/restore behavior, archive snapshot refresh and recreation, exact hard-delete confirmation and restoration behavior, deterministic selection, and create-project -> persist-RF-path -> Activity recreation; the preceding 18-test revision passed on the physical Android 16 reference phone;
+- the English-only source test scans production Kotlin, XML, JSON, and text resources for common Portuguese terms while allowing pinned official identifiers;
+- the current 62-test instrumented suite passes on an Android 16/API 36 emulator and covers the Dashboard-to-Studies smoke path, saved-instance-state restoration for supported, unknown, malformed, nested RF-path, nested project-name, and nested RF-assets routes, explicit mutation-completion and transient pending-save recovery, project lifecycle behavior, deterministic selection, create-project → persist-RF-path → Activity recreation, compact RF-assets reachability/reference impact, Engineering Map selection and coordinate editing, stale-write/isolation, draft recovery, inaccessible targets, validation, discard protection, save retry, real IBGE extraction/hash/schema/query/corruption/storage/update behavior, and compact Catalog state/reachability; the preceding 18-test revision passed on the physical Android 16 reference phone;
 - manual API 36 emulator checks cover Duplicate Project/Delete Project at font scales 1.0/1.30 in portrait and short landscape with Gboard open/closed, plus Archive Project/actions and the archived-project card in portrait at font scales 1.0/1.30/2.0 and landscape at 1.30;
 - a bounded manual force-stop/relaunch retained the archived record, and a second cycle after restore retained that project as active and selected; this is not Android Backup or system-reclaim restoration proof and does not establish every process-death timing or a support matrix;
 - lint/build evidence remains part of the debug baseline, but accessibility automation, performance, broader device/system flows, and release validation remain open.
@@ -826,9 +898,9 @@ Until measured targets exist, absolute requirements are:
 |---|---|---|
 | ADR-A001 | Product license, privacy, English-only policy, device matrix | G0 |
 | ADR-A002 | Navigation 3 deep links, feature ownership, deleted-ID recovery, and system process restoration | G2 |
-| ADR-A003 | Post-schema-3 JSON evolution, Room schema, files, unreadable/future-catalog recovery/export, backup, and migration | G3 |
+| ADR-A003 | Post-schema-4 operational store, Room criteria, reachability cleanup, unreadable/future-store recovery/export, backup, and migration | G3 |
 | ADR-A004 | Geographic renderer and offline map format | G4 |
-| ADR-A005 | Dataset catalog and acquisition | G4 |
+| ADR-A005 | Managed user/remote dataset acquisition, update, ownership, and removal beyond the bundled IBGE slice | G4 |
 | ADR-A006 | Compute contract and scheduler | G5/G6 |
 | ADR-A007 | Kotlin versus native backend | G6 |
 | ADR-A008 | Optional service and privacy | G6/G8 |
@@ -861,13 +933,13 @@ Until measured targets exist, absolute requirements are:
 2. preserve `MainActivity` as a thin host and move dependency assembly into an approved composition-root/DI policy;
 3. split the application-wide ViewModel into feature contracts and introduce durable job/effect/problem contracts as flows grow;
 4. complete deep-link/deleted-ID handling and prove navigation plus durable selection through true process death, rotation, accessibility, and the device matrix;
-5. continue project lifecycle after delivered rename/duplication/archive/restore/hard-delete with hard-delete recovery/export and a lineage/provenance policy, and add independent network/site/sector/receiver edit/delete with linked-deletion impact while staging remaining primitive-field migration;
-6. decide the long-term operational store, external project asset/file ownership and recovery, unreadable/future-catalog recovery/export, backup, and multi-process policy beyond schema 3;
-7. add scenario, immutable study request/result, provenance, and artifact models;
-8. add a geographic map behind an adapter while retaining the technical Canvas only as a diagnostic if useful;
-9. add dataset inventory and DEM;
+5. harden the delivered independent network/site/sector/receiver CRUD with true process-death/device-matrix evidence, then add hard-delete recovery/export and source-lineage policy while staging remaining primitive-field migration;
+6. decide the long-term operational store, artifact ownership/recovery and reachability cleanup, unreadable/future-store recovery/export, backup, and multi-process policy beyond schema 4;
+7. turn the delivered scenario/provenance/artifact carrier records into explicit editors, import adapters, immutable study requests/results, and verified artifact-reference transactions;
+8. place an authorized offline basemap behind an approved package/renderer adapter while retaining the coordinate viewport as the no-data fallback;
+9. add general/user package inventory and acquisition lifecycle, DEM, and an optional licensed census-sector geometry package without overstating the existing attribute index;
 10. extend the current Kotlin RF baseline to project-linked terrain-aware studies;
-11. persist manifests and artifacts;
+11. persist executable study manifests and attach their verified artifacts to project records;
 12. benchmark before coverage, native code, or an optional service;
 13. extract Gradle modules only after boundaries are proven.
 

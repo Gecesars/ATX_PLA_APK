@@ -30,7 +30,7 @@ class ProjectsScreenTest {
 
         assertEquals(
             "Deleting this project removes 1 network, 3 sites, 3 sectors, " +
-                "0 receivers, and 2 study summaries from local storage.",
+                "0 receivers, and 2 study summaries from the local catalog.",
             projectDeletionImpactSummary(project),
         )
     }

@@ -59,6 +59,17 @@ class AtxRouteTest {
     }
 
     @Test
+    fun `RF assets route preserves a bounded project ID`() {
+        val route = RfAssetsRoute("project:alpha-123")
+
+        val restored = roundTrip(route) as RfAssetsRoute
+
+        assertEquals("project:alpha-123", restored.projectId)
+        assertEquals("${RF_ASSETS_PREFIX}project:alpha-123", restored.stableId)
+        assertEquals(route, AtxRoute.rfAssets("project:alpha-123"))
+    }
+
+    @Test
     fun `malformed nested identifiers fall back safely`() {
         val malformedStableIds = listOf(
             RF_PATH_EDITOR_PREFIX,
@@ -81,10 +92,22 @@ class AtxRouteTest {
         malformedRenameStableIds.forEach { stableId ->
             assertSame(DashboardRoute, AtxRoute.fromStableId(stableId).supportedOrDashboard())
         }
+        val malformedRfAssetsStableIds = listOf(
+            RF_ASSETS_PREFIX,
+            "${RF_ASSETS_PREFIX}   ",
+            "${RF_ASSETS_PREFIX} project",
+            "$RF_ASSETS_PREFIX${"x".repeat(MAX_RF_PATH_PROJECT_ID_LENGTH + 1)}",
+            "$RF_ASSETS_PREFIX${"ok"}\u0000",
+        )
+        malformedRfAssetsStableIds.forEach { stableId ->
+            assertSame(DashboardRoute, AtxRoute.fromStableId(stableId).supportedOrDashboard())
+        }
         assertSame(DashboardRoute, AtxRoute.rfPathEditor(null))
         assertSame(DashboardRoute, AtxRoute.rfPathEditor(""))
         assertSame(DashboardRoute, AtxRoute.projectRename(null))
         assertSame(DashboardRoute, AtxRoute.projectRename(""))
+        assertSame(DashboardRoute, AtxRoute.rfAssets(null))
+        assertSame(DashboardRoute, AtxRoute.rfAssets(""))
         assertSame(
             DashboardRoute,
             RfPathEditorRoute("x".repeat(MAX_RF_PATH_PROJECT_ID_LENGTH + 1)).supportedOrDashboard(),
@@ -92,6 +115,11 @@ class AtxRouteTest {
         assertSame(
             DashboardRoute,
             ProjectRenameRoute("x".repeat(MAX_RF_PATH_PROJECT_ID_LENGTH + 1))
+                .supportedOrDashboard(),
+        )
+        assertSame(
+            DashboardRoute,
+            RfAssetsRoute("x".repeat(MAX_RF_PATH_PROJECT_ID_LENGTH + 1))
                 .supportedOrDashboard(),
         )
     }
@@ -102,6 +130,7 @@ class AtxRouteTest {
 
         assertSame(DashboardRoute, roundTrip(RfPathEditorRoute(oversizedProjectId)))
         assertSame(DashboardRoute, roundTrip(ProjectRenameRoute(oversizedProjectId)))
+        assertSame(DashboardRoute, roundTrip(RfAssetsRoute(oversizedProjectId)))
     }
 
     private fun roundTrip(route: AtxRoute): AtxRoute =

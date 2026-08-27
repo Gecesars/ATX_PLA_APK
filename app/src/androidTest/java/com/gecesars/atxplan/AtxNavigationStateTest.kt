@@ -32,9 +32,11 @@ import com.gecesars.atxplan.ui.AppUiState
 import com.gecesars.atxplan.ui.navigation.AtxRoute
 import com.gecesars.atxplan.ui.navigation.DashboardRoute
 import com.gecesars.atxplan.ui.navigation.PROJECT_RENAME_PREFIX
+import com.gecesars.atxplan.ui.navigation.RF_ASSETS_PREFIX
 import com.gecesars.atxplan.ui.navigation.RF_PATH_EDITOR_PREFIX
 import com.gecesars.atxplan.ui.navigation.ProjectRenameRoute
 import com.gecesars.atxplan.ui.navigation.ProjectsRoute
+import com.gecesars.atxplan.ui.navigation.RfAssetsRoute
 import com.gecesars.atxplan.ui.navigation.RfPathEditorRoute
 import com.gecesars.atxplan.ui.navigation.StudiesRoute
 import com.gecesars.atxplan.ui.navigation.UnsupportedRoute
@@ -150,6 +152,38 @@ class AtxNavigationStateTest {
             assertEquals(ProjectsRoute, backStack.first())
             val route = backStack.last() as ProjectRenameRoute
             assertEquals("project-rename-123", route.projectId)
+            backStack.removeLastOrNull()
+        }
+        composeRule.onNodeWithText(routeMarker(ProjectsRoute)).assertIsDisplayed()
+    }
+
+    @Test
+    fun rfAssetsRouteAndParentSurviveSerializedSavedStateRoundTrip() {
+        lateinit var backStack: NavBackStack<AtxRoute>
+        val restorationTester = StateRestorationTester(composeRule)
+        restorationTester.setContent {
+            backStack = rememberAtxNavBackStack()
+            Text(routeMarker(backStack.activeRoute))
+        }
+
+        composeRule.runOnIdle {
+            backStack.replaceTopLevel(ProjectsRoute)
+            backStack.add(RfAssetsRoute("project-rf-assets-123"))
+        }
+        composeRule.onNodeWithText(
+            "Current route: ${RF_ASSETS_PREFIX}project-rf-assets-123",
+        ).assertIsDisplayed()
+
+        restorationTester.emulateSavedInstanceStateRestore()
+
+        composeRule.onNodeWithText(
+            "Current route: ${RF_ASSETS_PREFIX}project-rf-assets-123",
+        ).assertIsDisplayed()
+        composeRule.runOnIdle {
+            assertEquals(2, backStack.size)
+            assertEquals(ProjectsRoute, backStack.first())
+            val route = backStack.last() as RfAssetsRoute
+            assertEquals("project-rf-assets-123", route.projectId)
             backStack.removeLastOrNull()
         }
         composeRule.onNodeWithText(routeMarker(ProjectsRoute)).assertIsDisplayed()
@@ -682,8 +716,8 @@ class AtxNavigationStateTest {
 
         composeRule.onNodeWithTag("delete_project_impact_summary").assert(
             hasText(
-                "Deleting this project removes 0 networks, 0 sites, 0 sectors, " +
-                    "0 receivers, and 0 study summaries from local storage.",
+            "Deleting this project removes 0 networks, 0 sites, 0 sectors, " +
+                "0 receivers, and 0 study summaries from the local catalog.",
             ),
         )
         composeRule.onNodeWithTag("delete_project_name_field")

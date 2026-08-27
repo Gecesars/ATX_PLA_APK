@@ -1,0 +1,37 @@
+IBGE 2022 Census Sector Index — Brazil
+
+Provider: Instituto Brasileiro de Geografia e Estatística (IBGE)
+Source: IBGE — 2022 Census Sector Mesh and sector aggregates.
+Official product page:
+https://www.ibge.gov.br/geociencias/organizacao-do-territorio/malhas-territoriais/26565-malhas-de-setores-censitarios-divisoes-intramunicipais.html
+Official national source archive:
+https://geoftp.ibge.gov.br/organizacao_do_territorio/malhas_territoriais/malhas_de_setores_censitarios__divisoes_intramunicipais/censo_2022/setores/shp/BR/BR_setores_CD2022.zip
+
+The Android asset is a derived, normalized SQLite index. It preserves the
+468,099 source records, census attributes used by ATX Plan, municipality
+summaries, and sector envelopes in a portable SQLite table. It removes the
+desktop build path, replaces SQLite STRICT and RTree virtual tables for Android
+API 23 compatibility, and adds version, integrity, source, CRS, and limitation
+metadata.
+
+The immediate row input is a pinned desktop-derived index with SHA-256
+fe8b789027d54de02de5fd1ddac7c77325657ee09721672008cb6227009a91a7. The
+official archive is independently hash-pinned as a provenance input, but the
+current transformer does not parse it directly. These hashes do not by
+themselves prove the upstream row-by-row archive-to-index derivation.
+
+The package does not contain census-sector polygon geometry. It cannot render
+official sector boundaries, resolve exact point containment, or calculate
+population inside a coverage contour. Sector envelopes are candidate filters,
+not boundaries.
+
+Source CRS: SIRGAS 2000 geographic (EPSG:4674).
+Population field: v0001, interpreted as resident population total by census
+sector for this source edition. Missing population remains NoData and is never
+silently replaced with zero.
+
+The official source archive contains no machine-readable license file. The
+files are published through the public IBGE download service. Review the
+applicable IBGE terms before public redistribution and retain this attribution,
+the exact source URL, access date, transformations, and hashes recorded in
+manifest.json.

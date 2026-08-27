@@ -16,3 +16,5 @@ gradlew text eol=lf
 *.pdf binary
 *.apk binary
 *.aab binary
+*.ibgedata binary
+*.sqlite binary

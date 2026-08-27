@@ -62,6 +62,8 @@ class MainActivityTest {
         }
         composeRule.onNodeWithTag("rf_path_editor_list").performScrollToIndex(1)
         composeRule.onNodeWithTag("network_name_field").performTextReplacement("Restored Network")
+        composeRule.onNodeWithTag("network_name_field").assert(hasText("Restored Network"))
+        composeRule.waitForIdle()
 
         composeRule.activityRule.scenario.recreate()
 
@@ -134,6 +136,8 @@ class MainActivityTest {
         val draftName = "Restored Rename $suffix"
         composeRule.onNodeWithTag("rename_project_name_field")
             .performTextReplacement(draftName)
+        composeRule.onNodeWithTag("rename_project_name_field").assert(hasText(draftName))
+        composeRule.waitForIdle()
 
         composeRule.activityRule.scenario.recreate()
 
@@ -217,6 +221,9 @@ class MainActivityTest {
         val restoredDraft = "Restored Duplicate $suffix"
         composeRule.onNodeWithTag("duplicate_project_name_field")
             .performTextReplacement(restoredDraft)
+        composeRule.onNodeWithTag("duplicate_project_name_field")
+            .assert(hasText(restoredDraft))
+        composeRule.waitForIdle()
 
         composeRule.activityRule.scenario.recreate()
 
@@ -348,6 +355,8 @@ class MainActivityTest {
         val restoredDraft = "DELE"
         composeRule.onNodeWithTag("delete_project_name_field")
             .performTextReplacement(restoredDraft)
+        composeRule.onNodeWithTag("delete_project_name_field").assert(hasText(restoredDraft))
+        composeRule.waitForIdle()
 
         composeRule.activityRule.scenario.recreate()
 

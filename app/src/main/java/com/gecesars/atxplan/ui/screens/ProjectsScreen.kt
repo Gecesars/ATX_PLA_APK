@@ -110,6 +110,7 @@ fun ProjectsScreen(
     onCreateProject: (String, String) -> Unit,
     onSelectProject: (String) -> Unit,
     onAddRfPath: (String) -> Unit,
+    onManageRfAssets: (String) -> Unit = {},
     onRenameProject: (String) -> Unit,
     onDuplicateProject: (DuplicateProjectCommand) -> Unit,
     onDeleteProject: (DeleteProjectCommand) -> Unit,
@@ -581,6 +582,7 @@ fun ProjectsScreen(
                         project = selected,
                         canEdit = uiState.isCatalogWritable && !uiState.isSavingCatalog,
                         onAddRfPath = { onAddRfPath(selected.id) },
+                        onManageRfAssets = { onManageRfAssets(selected.id) },
                         onRenameProject = { onRenameProject(selected.id) },
                         onDuplicateProject = {
                             duplicateSourceProjectId = selected.id
@@ -808,6 +810,7 @@ private fun SelectedProjectDetails(
     project: PlannerProject,
     canEdit: Boolean,
     onAddRfPath: () -> Unit,
+    onManageRfAssets: () -> Unit,
     onRenameProject: () -> Unit,
     onDuplicateProject: () -> Unit,
     onArchiveProject: () -> Unit,
@@ -963,6 +966,17 @@ private fun SelectedProjectDetails(
                     }
                 }
                 Button(
+                    onClick = onManageRfAssets,
+                    enabled = canEdit,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .testTag("manage_rf_assets_button"),
+                ) {
+                    Icon(Icons.Outlined.Science, contentDescription = null)
+                    Text("Manage RF Assets")
+                }
+                OutlinedButton(
                     onClick = onAddRfPath,
                     enabled = canEdit,
                     modifier = Modifier
@@ -2038,7 +2052,7 @@ internal fun boundedProjectNameForDisplay(name: String): String =
 internal fun projectDeletionImpactSummary(project: PlannerProject): String {
     return "Deleting this project removes " +
         projectScopedCollectionSummary(project) + " " +
-        "from local storage."
+        "from the local catalog."
 }
 
 internal fun projectArchiveImpactSummary(project: PlannerProject): String =
