@@ -7,15 +7,17 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProjectModelsTest {
     @Test
-    fun `new catalogs use schema 2`() {
-        assertEquals(2, PROJECT_CATALOG_SCHEMA_VERSION)
-        assertEquals(2, ProjectCatalog().schemaVersion)
+    fun `new catalogs use schema 3`() {
+        assertEquals(3, PROJECT_CATALOG_SCHEMA_VERSION)
+        assertEquals(3, ProjectCatalog().schemaVersion)
+        assertTrue(ProjectCatalog().archivedProjects.isEmpty())
     }
 
     @Test
@@ -45,6 +47,25 @@ class ProjectModelsTest {
     }
 
     @Test
+    fun `archived projects are excluded from active selection`() {
+        val archived = ProjectFactory.create("Archived Project", "", nowEpochMillis = 1L)
+        val active = ProjectFactory.create("Active Project", "", nowEpochMillis = 2L)
+        val catalog = ProjectCatalog(
+            selectedProjectId = archived.id,
+            projects = listOf(active),
+            archivedProjects = listOf(
+                ArchivedProject(
+                    project = archived,
+                    archivedAtEpochMillis = 3L,
+                    originalProjectIndex = 0,
+                ),
+            ),
+        )
+
+        assertSame(active, catalog.selectedProject)
+    }
+
+    @Test
     fun `demonstration project survives serialization round trip`() {
         val json = Json { encodeDefaults = true }
         val catalog = ProjectCatalog(
@@ -60,12 +81,54 @@ class ProjectModelsTest {
     }
 
     @Test
+    fun `archived aggregate and lifecycle metadata survive schema 3 round trip`() {
+        val json = Json { encodeDefaults = true }
+        val project = ProjectFactory.demonstration(nowEpochMillis = 42L)
+        val archived = ArchivedProject(
+            project = project,
+            archivedAtEpochMillis = 84L,
+            originalProjectIndex = 7,
+        )
+        val catalog = ProjectCatalog(archivedProjects = listOf(archived))
+
+        val restored = json.decodeFromString<ProjectCatalog>(json.encodeToString(catalog))
+
+        assertEquals(catalog, restored)
+        assertEquals(project.networks, restored.archivedProjects.single().project.networks)
+        assertEquals(project.sites, restored.archivedProjects.single().project.sites)
+        assertEquals(84L, restored.archivedProjects.single().archivedAtEpochMillis)
+        assertEquals(7, restored.archivedProjects.single().originalProjectIndex)
+    }
+
+    @Test
     fun `invalid coordinates and duplicate project ids are rejected`() {
         assertThrows(IllegalArgumentException::class.java) { GeoPoint(91.0, 0.0) }
 
         val project = ProjectFactory.create("Valid Project", "", nowEpochMillis = 1L)
         assertThrows(IllegalArgumentException::class.java) {
             ProjectCatalog(projects = listOf(project, project))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            ProjectCatalog(
+                projects = listOf(project),
+                archivedProjects = listOf(
+                    ArchivedProject(project, archivedAtEpochMillis = 2L, originalProjectIndex = 0),
+                ),
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            ProjectCatalog(
+                archivedProjects = listOf(
+                    ArchivedProject(project, archivedAtEpochMillis = 2L, originalProjectIndex = 0),
+                    ArchivedProject(project, archivedAtEpochMillis = 3L, originalProjectIndex = 1),
+                ),
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            ArchivedProject(project, archivedAtEpochMillis = 2L, originalProjectIndex = -1)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            ArchivedProject(project, archivedAtEpochMillis = -1L, originalProjectIndex = 0)
         }
     }
 

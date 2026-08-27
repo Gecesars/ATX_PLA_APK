@@ -1,6 +1,6 @@
 # Android Roadmap
 
-> Evidence baseline: August 27, 2026. The repository now contains an adaptive Compose shell, typed and saveable Navigation 3 routes, explicit UDF/application boundaries, a transactional schema-2 JSON repository with v1 migration, transactional project rename, duplication, and bounded hard deletion, a persisted combined RF-path editor, a bounded RF calculator, CI, JVM tests, and Android instrumentation. This roadmap does not treat those foundations as complete desktop or RadioPlanner parity.
+> Evidence baseline: August 27, 2026. The repository now contains an adaptive Compose shell, typed and saveable Navigation 3 routes, explicit UDF/application boundaries, a transactional schema-3 JSON repository with explicit 1→2→3 and 2→3 migrations, transactional project rename, duplication, archive, restore, and bounded hard deletion, a persisted combined RF-path editor, a bounded RF calculator, CI, JVM tests, and Android instrumentation. This roadmap does not treat those foundations as complete desktop or RadioPlanner parity.
 
 ## 1. Delivery strategy
 
@@ -25,16 +25,16 @@ Sequencing principles:
 | Build and lint | Delivered | Debug/test APKs built; latest lint has 0 errors and 12 dependency/tooling warnings. | Dependency/toolchain update advisories and no signed release. |
 | CI | Delivered | GitHub Actions runs unit tests, lint, debug APK, and debug test APK builds. | Connected Android test is not in CI. |
 | Compose theme and shell | Delivered | Custom light/dark ATX theme, Material 3, edge-to-edge, compact bottom bar, expanded navigation rail. | Full accessibility, locale enforcement, and device-matrix validation. |
-| Compact phone information density | Delivered baseline | Scalable compact typography and shared components, 12–16 dp feature gutters, responsive metrics/fields/cards/map height, a short-height rail, IME resizing for the project-name editor, and explicit 48 dp minimums on changed controls have manual evidence on one physical Android 16 phone: 1280 × 2772 pixels, density 520, portrait at font scales 1.15/1.30 and landscape at 1.15. The compact adaptive Duplicate Project and Delete Project dialogs were separately validated on an Android 16/API 36 emulator at 1080 × 2400 pixels and 420 dpi, in portrait and short landscape at font scales 1.0/1.30 with Gboard open and closed. At 1.30, portrait stacks the project actions; short landscape required one scroll to the delete field and exposed dialog actions after the IME was hidden. | These bounded physical-device and emulator observations are not a complete OEM/API/aspect-ratio/theme/font-scale/accessibility matrix; the app does not clamp or override system font scale. |
+| Compact phone information density | Delivered baseline | Scalable compact typography and shared components, 12–16 dp feature gutters, responsive metrics/fields/cards/map height, a short-height rail, IME resizing for the project-name editor, and explicit 48 dp minimums on changed controls have manual evidence on one physical Android 16 phone: 1280 × 2772 pixels, density 520, portrait at font scales 1.15/1.30 and landscape at 1.15. Duplicate Project and Delete Project were separately validated on an Android 16/API 36 emulator at 1080 × 2400 pixels and 420 dpi, in portrait and short landscape at font scales 1.0/1.30 with Gboard open and closed. Archive Project, its actions, and the archived-project card were reachable in portrait at font scales 1.0/1.30/2.0 and in landscape at 1.30. | These bounded physical-device and emulator observations are not a complete OEM/API/aspect-ratio/theme/font-scale/accessibility matrix; the app does not clamp or override system font scale. |
 | Navigation 3 | Foundation | Serializable stable-ID route keys, a saveable typed `NavBackStack`, bounded unknown-route fallback, and the nested RF-path and project-name editors have saved-instance-state restoration tests. | Deep links, deleted-ID recovery UX, adaptive list/detail, and true system process-death/rotation testing across the device matrix remain. |
-| UDF/ViewModel | Foundation | Explicit `AppUiAction`/`AppUiEffect`, structured problem/recovery values, injected use cases/dispatchers, serialized catalog mutations, cancellation-aware calculation, and ViewModel transition tests exist. | Feature-level ViewModels, cross-instance catalog observation, the DI/scoping decision, durable jobs, broader observability, accessibility, and system recovery evidence remain. |
-| Project persistence | Delivered baseline | Schema-2 strict UTF-8 JSON uses `AtomicFile`, `fd.sync`, a 5 MiB limit, explicit v1 migration, and a mutex-protected read-transform-write transaction. Tests cover migration, corruption, future schema, malformed UTF-8, failed writes, and concurrency. | Recovery/export UX, multi-process policy, storage-exhaustion evidence against Android storage, asset ownership, backup, and the long-term JSON-versus-Room decision remain. |
-| Project workflow | Foundation | Load, create, select, rename, duplicate, hard-delete, and display projects; seed the synthetic demo; and add one linked network/site/sector/receiver through the persisted Add RF Path flow. Duplication copies the latest durable source and selects a fresh-root copy. Deletion compares the complete reviewed aggregate with the latest durable version, rejects stale changes, atomically removes the current catalog aggregate, and leaves a deterministic valid next/previous selection or an empty catalog. | Archive, recovery/undo/export, independent create/edit/delete for every RF entity, scenarios, imports, impact-aware linked deletion, project-owned asset policy, and duplication lineage/provenance remain. |
-| Domain model | Foundation | Validated engineering value types, receiver/CPE, typed coordinates, and explicit receiver/sector network references extend the catalog/network/site/sector/study foundation. | Existing legacy entity primitives still need staged migration; scenarios, datasets, study requests/results, and artifacts are not modeled. |
+| UDF/ViewModel | Foundation | Explicit `AppUiAction`/`AppUiEffect`, structured problem/recovery values, injected use cases/dispatchers, cancellation-aware calculation, and serialized catalog mutations exist. Every catalog mutation is evaluated against the latest durable catalog inside the repository transaction; state is published only after persistence, while rejected/no-op outcomes rebase to the latest catalog without writing. | Feature-level ViewModels, cross-instance catalog observation, the DI/scoping decision, durable jobs, broader observability, accessibility, and system recovery evidence remain. |
+| Project persistence | Delivered baseline | Schema-3 strict UTF-8 JSON uses `AtomicFile`, `fd.sync`, a 5 MiB limit, explicit chained 1→2→3 and direct 2→3 migrations, and a mutex-protected read-transform-write transaction. Tests cover migration, hostile legacy archive-field injection, corruption, future schema, malformed UTF-8, failed writes, no-op writes, and concurrency. | Recovery/export UX for unreadable/future catalogs, multi-process policy, storage-exhaustion evidence against Android storage, external asset/file ownership, backup, and the long-term JSON-versus-Room decision remain. |
+| Project workflow | Foundation | Load, create, select, rename, duplicate, archive, restore, hard-delete, and display projects; seed the synthetic demo; and add one linked network/site/sector/receiver through the persisted Add RF Path flow. Archive retains the complete aggregate with timestamp/original index while excluding it from active selection and metrics; restore reinserts it deterministically and selects it. Archive/restore and deletion compare complete reviewed snapshots with the latest durable catalog and reject stale or repeated requests without writing. | Hard-delete recovery/undo/export, independent create/edit/delete for every RF entity, scenarios, imports, impact-aware linked deletion, project-owned external-asset policy, and duplication lineage/provenance remain. |
+| Domain model | Foundation | Schema-3 active/archive catalog invariants, `ArchivedProject` lifecycle metadata, validated engineering value types, receiver/CPE, typed coordinates, and explicit receiver/sector network references extend the catalog/network/site/sector/study foundation. | Existing legacy entity primitives still need staged migration; scenarios, datasets, study requests/results, and artifacts are not modeled. |
 | Engineering canvas | Foundation | Offline Canvas plots sites and active azimuths. | Real GIS/map renderer, projection, camera, offline source, editing, attribution. |
 | RF calculation | Delivered | FSPL, EIRP, received power, fade margin, midpoint Fresnel radius, thermal noise, and SNR. | Geodesy, terrain, curvature, LOS, patterns, diffraction, persistence, manifest. |
-| JVM tests | Delivered baseline | The current 125 tests pass and cover domain values/references, RF formulas, schema migration and storage faults, transactional concurrency, duplication, deletion selection/conflict/no-op policies, form parsing, ViewModel transitions, and English-only source hygiene. | Property/numerical golden, accessibility, performance, export, and complete system-flow coverage remain. |
-| Instrumented tests | Delivered baseline | The current 33 tests pass on an Android 16/API 36 emulator, covering top-level/nested typed routes, RF-path and project-name draft protection, explicit mutation-completion and transient pending-save recovery, legacy/normalized/competing rename behavior, accessibility behavior, persisted rename, project duplication, exact hard-delete confirmation, changed-snapshot and deletion draft/rejection/durable-absence restoration, deterministic fallback selection, and Activity recreation after deletion and RF-path persistence. The preceding 18-test revision passed on the physical Android 16 reference phone. | A fresh physical run of the current suite, true process termination, rotation/device matrix, broader accessibility automation, and CI execution remain. |
+| JVM tests | Delivered baseline | The current 162 tests pass and cover domain values/references, RF formulas, schema migration and storage faults, latest-catalog mutation rebasing/concurrency, archive/restore/duplication/deletion selection and conflict/no-op policies, form parsing, ViewModel transitions, and English-only source hygiene. | Property/numerical golden, accessibility, performance, export, and complete system-flow coverage remain. |
+| Instrumented tests | Delivered baseline | The current 40 tests pass with no failures or skips on the Android 16/API 36 `Medium_Phone_API_36.1` emulator; the final connected run used font scale 1.30. Coverage includes typed routes and drafts, mutation completion/recovery, rename/duplication/archive/restore/deletion snapshot and durable-state behavior, deterministic active selection/restoration, Activity recreation, and RF-path persistence. The preceding 18-test revision passed on the physical Android 16 reference phone. | A fresh physical run of the current suite, true system-reclaim process termination, rotation/device matrix, broader accessibility automation, and CI execution remain. |
 | Product language | Delivered baseline | Production UI/errors/demo/tests and documentation are English; a unit test scans production sources for common Portuguese terms. | The blacklist is partial and must expand with new resource types. |
 | Public release | Blocked | Debug baseline only; backup disabled. | License, signing, SBOM, privacy, shrinker, upgrade testing, release channel. |
 
@@ -49,8 +49,8 @@ Already delivered or founded:
 - Compose/Material 3 shell and custom theme;
 - typed, saveable Navigation 3 routes including nested RF-path and project-name editors;
 - explicit action/effect ViewModel flow, use cases, injected dispatchers, and structured recovery;
-- schema-2 transactional JSON catalog with explicit v1 migration and defensive tests;
-- project create/select/rename/duplicate/hard-delete, synthetic demo, and a combined persisted RF-path creation slice;
+- schema-3 transactional JSON catalog with explicit 1→2→3 and 2→3 migrations and defensive tests;
+- project create/select/rename/duplicate/archive/restore/hard-delete, synthetic demo, and a combined persisted RF-path creation slice;
 - typed engineering values, receiver/CPE, and network references;
 - free-space RF calculator and numerical unit tests.
 
@@ -58,7 +58,7 @@ Still required to close P0:
 
 - continued English-only enforcement and complete accessibility review;
 - true process-death/system-flow and broad device restoration evidence;
-- remaining project lifecycle work (archive, recovery/undo/export, and lineage/provenance policy) and independent RF-entity create/edit/delete;
+- remaining project lifecycle work (hard-delete recovery/undo/export and lineage/provenance policy) and independent RF-entity create/edit/delete;
 - durable jobs, recovery/export UX, and the long-term operational-store decision;
 - real offline geographic map;
 - local DEM, terrain profile, geodesy, curvature, LOS, and Fresnel clearance;
@@ -101,7 +101,7 @@ Still required to close P0:
 | **G0 — Product and identity** | Product name, package, repository, license, privacy policy, English-only policy, and supported API range approved. | **Foundation:** package/API/repository and English-only baseline exist; license/privacy/release approval remains blocked. | Public release and irreversible contracts. |
 | **G1 — Reproducible build** | Clean checkout runs unit tests, lint, debug APK, and test APK in CI with documented JDK/SDK. | **Delivered for debug baseline:** workflow and local artifacts exist. | Functional milestones if regression occurs. |
 | **G2 — Application architecture** | UDF, ViewModel, Navigation 3, dependency assembly, error model, restoration, and observability demonstrated. | **Foundation:** explicit actions/effects, structured recovery, use cases, injected dispatchers, and typed saved-state route tests exist. Feature splitting, DI/scoping policy, durable jobs/observability, accessibility, and true process-death/device flows remain. | Scaling feature count safely. |
-| **G3 — Durable persistence** | Exported schema, migrations, safe writes, backup policy, recovery, and data ownership validated. | **Foundation:** schema 2, explicit v1 migration, strict decoding, serialized transactions, and corruption/future-schema/concurrency tests exist. Recovery/export, backup/data ownership, assets/jobs, multi-process policy, and the long-term store decision remain. | Real user projects and portable assets. |
+| **G3 — Durable persistence** | Exported schema, migrations, safe writes, backup policy, recovery, and data ownership validated. | **Foundation:** schema 3, explicit 1→2→3 and 2→3 migrations, strict decoding, serialized latest-catalog transactions, local archive/restore, and corruption/future-schema/concurrency tests exist. Unreadable/future-catalog recovery/export, backup/data ownership, assets/jobs, multi-process policy, and the long-term store decision remain. | Real user projects and portable assets. |
 | **G4 — Map and data** | Renderer, offline format, attribution, license, NoData, disk budget, and lifecycle approved. | **Foundation:** technical Canvas only. | Terrain and field-map claims. |
 | **G5 — Numerical core** | Units, geodesy, FSPL, LOS, and Fresnel pass independent golden cases with tolerances. | **Foundation:** FSPL/noise/Fresnel-radius baseline is tested; geodesy/terrain/LOS are missing. | Terrain-aware engineering label. |
 | **G6 — Mobile compute** | Memory/time/battery budget, cancellation, blocking strategy, and device benchmarks. | Planned. | Raster coverage and heavy engines. |
@@ -123,12 +123,12 @@ A gate cannot be satisfied by documentation alone. It requires executable artifa
 - API 23 minimum, target 36, compile 36.1;
 - Kotlin/Compose/Material 3 baseline and custom theme;
 - adaptive five-area shell;
-- compact responsive feature information density with bounded physical Android 16 portrait checks at approximately 394 dp and font scales 1.15/1.30 plus a baseline landscape check, and separate API 36 emulator validation of the compact Duplicate Project and Delete Project dialogs at font scales 1.0/1.30 in portrait and short landscape with Gboard open and closed;
+- compact responsive feature information density with bounded physical Android 16 portrait checks at approximately 394 dp and font scales 1.15/1.30 plus a baseline landscape check; separate API 36 emulator validation covers Duplicate Project and Delete Project at font scales 1.0/1.30 in portrait and short landscape with Gboard open/closed, plus Archive Project/actions and the archived-project card in portrait at 1.0/1.30/2.0 and landscape at 1.30;
 - Navigation 3 dependency and top-level display;
 - atomic JSON repository and demonstration project;
 - free-space RF calculator;
-- CI workflow, 125 passing JVM tests, lint with 0 errors and 12 dependency/tooling warnings, and debug APK/test APK;
-- 33 Android 16/API 36 emulator instrumented navigation, saved-state, mutation-completion, accessibility, draft-protection, persisted rename, project-duplication, project-deletion, and persisted Add RF Path flow tests, with only the preceding 18-test revision also proven on the physical reference phone;
+- CI workflow, 162 passing JVM tests, lint with 0 errors and 12 dependency/tooling warnings, and debug APK/test APK;
+- 40 passing Android 16/API 36 emulator instrumented navigation, saved-state, mutation-completion, accessibility, draft-protection, persisted rename/duplication/archive/restore/deletion, deterministic selection, and persisted Add RF Path flow tests; the final connected run used font scale 1.30, with only the preceding 18-test revision also proven on the physical reference phone;
 - English production strings plus `EnglishOnlySourceTest` regression guard;
 - application backup disabled while the data policy is incomplete.
 
@@ -156,8 +156,8 @@ A gate cannot be satisfied by documentation alone. It requires executable artifa
 - explicit `AppUiAction`, `AppUiEffect`, `AppProblem`, problem codes, and recovery actions;
 - immutable `AppUiState` and `StateFlow` with lifecycle-aware collection;
 - injected application use cases, storage/computation dispatchers, repository, clock, ID generator, and calculator boundary;
-- cancellation-aware calculation and serialized durable catalog mutations;
-- ViewModel tests for loading, create/select/rename/duplicate/delete, mutation-completion accounting, save failure, retry, stale aggregate rejection, concurrent deletion, invalid mutations, cancellation, and stale calculation results;
+- cancellation-aware calculation and serialized durable catalog mutations evaluated against the latest catalog inside the repository transaction, with persist-before-publish state and no writes for rejected/no-op outcomes;
+- ViewModel tests for loading, create/select/rename/duplicate/archive/restore/delete, latest-catalog rebase, mutation-completion accounting, save failure, retry, stale aggregate rejection, concurrency, invalid mutations, cancellation, and stale calculation results;
 - serializable stable-ID `AtxRoute` keys and a saveable typed Navigation 3 back stack;
 - safe unknown/malformed route fallback and nested `RfPathEditorRoute(projectId)`;
 - saved-instance-state instrumentation for top-level, unknown, and nested editor routes;
@@ -195,21 +195,23 @@ A gate cannot be satisfied by documentation alone. It requires executable artifa
 
 ### F2 — Complete project and RF entity lifecycle
 
-**State:** Foundation implemented; the first project-update, project-duplication, project-deletion, and combined persisted RF-entity slices are delivered.
+**State:** Foundation implemented; the first project-update, project-duplication, project-archive/restore, project-deletion, and combined persisted RF-entity slices are delivered.
 
 **Objective:** evolve the current catalog/demo into editable, durable engineering projects.
 
 **Delivered foundation:**
 
-- schema-2 `ProjectCatalog` and `PlannerProject` with an explicit schema-1 fixture migration;
+- schema-3 `ProjectCatalog`, `ArchivedProject`, and `PlannerProject`, with fixture-backed direct 2→3 and chained 1→2→3 migrations;
 - strict UTF-8 parsing, 5 MiB limit, future-schema/corruption preservation, atomic replacement, and serialized read-transform-write mutation;
 - tests for successful and failed migration promotion, malformed UTF-8, malformed/invalid/future documents, size limits, failed writes, and concurrent repository instances;
 - validated engineering value objects for coordinates, frequency, bandwidth, power, gain, loss, distance, height, azimuth, and tilt with primitive JSON representation;
 - receiver/CPE model plus backward-compatible receiver collection and nullable sector network reference;
 - aggregate duplicate/reference validation for receivers and linked sectors;
-- create/select/rename/delete project workflow, including a saveable project-name editor and transactional rename use case;
+- create/select/rename/archive/restore/delete project workflow, including a saveable project-name editor and transactional rename use case;
 - compact adaptive project-duplication dialog and transactional use case that read the latest durable source, assign a fresh route-safe root project ID and fresh root timestamps, preserve the project-scoped nested graph/IDs/references/data/order, demonstration flag, and study timestamps, leave the source unchanged, append the copy, and select it;
 - compact adaptive project-deletion dialog with exact `DELETE` confirmation and impact counts, plus a transactional use case that compares the complete reviewed aggregate with the latest durable aggregate, rejects stale or already-removed targets without a write, atomically removes the current project aggregate, preserves other projects and order, and selects the next project, previous project, or none deterministically;
+- compact adaptive project-archive dialog and collapsible archived-project list with retained-data counts, timestamps, and accessible restore actions; the transactional use cases compare complete reviewed active/archive snapshots, retain the unchanged aggregate plus archive timestamp and original index, remove archived projects from active selection/metrics, deterministically reinsert and select a restored project, and reject stale/repeated/missing requests without writing;
+- a generic latest-catalog mutation boundary that rebases every mutation inside the repository transaction, persists before publishing UI state, and returns the latest durable catalog for rejected/no-op outcomes;
 - combined Add RF Path editor/use case that atomically adds one network, one site/sector, and one receiver with injected IDs and clock;
 - JSON round trips preserve IDs, `Double` precision, explicit units, and network references;
 - synthetic FM demo with one network, three sites, and two study summaries.
@@ -219,13 +221,15 @@ A gate cannot be satisfied by documentation alone. It requires executable artifa
 - scenario, dataset reference, study request/result, and artifact models;
 - independent create/edit/delete flows for sites, sectors, receivers, networks, and metadata;
 - staged migration of remaining legacy primitive entity fields to canonical unit types;
-- project archive, recovery/undo/export, and source-project lineage and duplication-provenance policy;
+- hard-delete recovery/undo/export and source-project lineage and duplication-provenance policy;
 - impact-aware linked deletion and richer conflict diagnostics;
 - decision and transition plan for JSON catalog versus Room/SQLite and asset files;
 - recovery/export workflow for preserved unreadable/future catalogs;
 - durable jobs, multi-process policy, Android `AtomicFile` interruption, and storage-exhaustion system evidence.
 
-**Delivered vertical slices:** rename an existing project through one repository transaction while preserving its identity and RF graph and rejecting a stale competing name; duplicate the latest durable source aggregate through one repository transaction with a fresh root ID/timestamps, unchanged source, preserved project-scoped nested IDs/references/data, and durable selection of the appended copy; compare a reviewed project aggregate with the latest durable version and atomically hard-delete only an unchanged target while preserving every other project and selecting a deterministic neighbor; open an existing project → enter a network, transmitter site/sector, and receiver → commit one repository transaction → reopen/round-trip with IDs, precision, units, and links preserved. The duplicated project does not yet carry source-project lineage or a duplication-provenance marker. Hard deletion has no in-app backup, undo, archive, recovery, export, or external-asset cleanup.
+**Delivered vertical slices:** rename an existing project through one repository transaction while preserving its identity and RF graph and rejecting a stale competing name; duplicate the latest durable source aggregate through one repository transaction with a fresh root ID/timestamps, unchanged source, preserved project-scoped nested IDs/references/data, and durable selection of the appended copy; archive an exact active aggregate with an archive timestamp/original index and deterministic active fallback, then restore that exact archive record at a clamped original index and select it; compare a reviewed active project aggregate with the latest durable version and atomically hard-delete only an unchanged target while preserving every other project and selecting a deterministic neighbor; open an existing project → enter a network, transmitter site/sector, and receiver → commit one repository transaction → reopen/round-trip with IDs, precision, units, and links preserved. Every mutation rebases on the latest durable catalog and publishes only a committed catalog; stale, repeated, and missing archive/restore outcomes do not write. The duplicated project does not yet carry source-project lineage or a duplication-provenance marker. Local archive cannot recover permanent deletion and is not backup, export, synchronization, or external-asset recovery.
+
+**Bounded manual archive evidence:** on the Android 16/API 36 emulator, archive UI/actions and the archived-project card were reachable in portrait at font scales 1.0, 1.30, and 2.0 and in landscape at 1.30. A force-stop/relaunch retained the archived record; after restore, a second force-stop/relaunch retained that project as active and selected. This does not prove Android Backup, system-reclaim restoration, all process-death timings, or a device support matrix.
 
 **Remaining phase demonstrator:** cover project creation and the same persisted entity flow through true process termination/relaunch, then exercise independent edits and linked deletion impact.
 
@@ -442,13 +446,13 @@ A gate cannot be satisfied by documentation alone. It requires executable artifa
 | MOB-003 | Implement adaptive Compose shell | Delivered | P0 | MOB-001 | Five destinations on compact/expanded layout. |
 | MOB-004 | Introduce Navigation 3 top-level display | Foundation | P0 | MOB-003 | Typed stable-ID save/restore and nested-editor tests exist; deep links and true system process-death/device flows remain. |
 | MOB-005 | Introduce ViewModel/StateFlow/repository | Foundation | P0 | MOB-003 | Explicit actions/effects, structured recovery, injected use cases/dispatchers, transactional mutations, and ViewModel tests exist; feature splitting, DI/scoping, jobs, and observability remain. |
-| MOB-006 | Implement atomic schema-2 JSON catalog | Delivered baseline | P0 | MOB-005 | `AtomicFile`, strict UTF-8, size/schema checks, explicit v1 migration, serialized transactions, and defensive tests. |
+| MOB-006 | Implement atomic schema-3 JSON catalog | Delivered baseline | P0 | MOB-005 | `AtomicFile`, strict UTF-8, size/schema checks, explicit 1→2→3 and 2→3 migrations, latest-catalog serialized transactions, and defensive tests. |
 | MOB-007 | Implement project create/select and demo | Delivered | P0 | MOB-006 | User project creation and synthetic seeded demo. |
 | MOB-008 | Implement pure Kotlin RF baseline | Delivered | P0 | domain baseline | FSPL/EIRP/received/noise/SNR/Fresnel-radius tests. |
 | MOB-009 | Enforce English-only product language | Delivered baseline | P0 | all layers | English production sources/tests plus automated regression scan. |
 | MOB-010 | Harden restorable typed navigation | Foundation | P0 | MOB-004 | Stable-ID save/restore and malformed/nested route tests delivered; deep links, deleted IDs, process termination, and tablet matrix remain. |
-| MOB-011 | Define durable schema evolution | Foundation | P0 | MOB-006 | Schema 2 and non-destructive v1 migration fixture delivered; long-term store/asset/backup/recovery ADR remains. |
-| MOB-012 | Complete RF value types and entity CRUD | Foundation | P0 | MOB-007/011 | Typed values, receiver/references, project rename/duplication/hard-delete, and combined Add RF Path round trip delivered; independent RF-entity edit/delete, project archive/recovery, external-asset policy, and lineage/provenance remain. |
+| MOB-011 | Define durable schema evolution | Foundation | P0 | MOB-006 | Schema 3 and non-destructive 1→2→3/2→3 migration fixtures are delivered; long-term store, file ownership, backup, unreadable/future-catalog recovery/export, and multi-process ADR work remains. |
+| MOB-012 | Complete RF value types and entity CRUD | Foundation | P0 | MOB-007/011 | Typed values, receiver/references, project rename/duplication/archive/restore/hard-delete, and combined Add RF Path round trip are delivered; independent RF-entity edit/delete, linked-deletion impact, hard-delete recovery/export, external-asset policy, and lineage/provenance remain. |
 | MOB-013 | Run geographic map spike | Planned | P0 | license gate | Lifecycle, offline, attribution, and performance report. |
 | MOB-014 | Define offline catalog/package format | Planned | P0 | MOB-013 | Safe fixture install, validation, ownership, and removal. |
 | MOB-015 | Implement DEM adapter and terrain profile | Planned | P0 | MOB-014 | Golden profile with NoData and provenance. |
@@ -460,7 +464,7 @@ A gate cannot be satisfied by documentation alone. It requires executable artifa
 | MOB-021 | Compare Kotlin and native compute | Planned | P2 | MOB-020 | Numerical/performance report and ADR. |
 | MOB-022 | Specify optional compute service | Planned | P2 | proven demand | Contract, privacy, authentication, retention, local fallback. |
 | MOB-023 | Add connected test to release lane | Planned | P0 | device infrastructure | Android 16+ smoke result stored with release evidence. |
-| MOB-024 | Validate compact phone information density | Delivered baseline | P0 | MOB-003 | One physical Android 16 phone has portrait evidence at approximately 394 dp, density 520, and font scales 1.15/1.30 plus a baseline landscape check. Separate API 36 emulator evidence covers the compact Duplicate Project and Delete Project dialogs at 1080 × 2400 pixels and 420 dpi, font scales 1.0/1.30, portrait and short landscape, with Gboard open/closed; the full device/accessibility matrix remains F8 work. |
+| MOB-024 | Validate compact phone information density | Delivered baseline | P0 | MOB-003 | One physical Android 16 phone has portrait evidence at approximately 394 dp, density 520, and font scales 1.15/1.30 plus a baseline landscape check. Separate API 36 emulator evidence covers Duplicate Project/Delete Project at font scales 1.0/1.30 in portrait and short landscape with Gboard open/closed, plus Archive Project/actions and the archived-project card in portrait at 1.0/1.30/2.0 and landscape at 1.30; the full device/accessibility matrix remains F8 work. |
 
 ## 7. Definition of Ready
 
@@ -512,9 +516,9 @@ Every increment must:
 
 | Risk | Impact | Mitigation/gate |
 |---|---|---|
-| Later JSON schemas evolve without explicit migrations | Project loss or lockout | Schema 1→2 fixture is delivered; G3 still requires a published evolution/asset/backup policy and fixtures for every future public schema. |
-| Hard delete is mistaken for archive or recovery | Irrecoverable project loss | Require exact `DELETE`, show current aggregate impact, reject stale snapshots, and commit atomically; G3 still requires archive, recovery/export, backup, and project-owned asset policy. |
-| Catalog mutation policy diverges across processes or future stores | Newer state can be overwritten | In-process read-transform-write is serialized and concurrency-tested; define multi-process/conflict policy before another writer or store is introduced. |
+| Later JSON schemas evolve without explicit migrations | Project loss or lockout | Fixture-backed chained 1→2→3 and direct 2→3 migrations are delivered; G3 still requires a published evolution/asset/backup policy and fixtures for every future public schema. |
+| Local archive is mistaken for backup or hard-delete recovery | Irrecoverable project loss | Keep archive/restore distinct from permanent deletion, which still requires exact `DELETE`; archive/restore preserve exact local aggregates transactionally but cannot recover permanent deletion and do not provide backup, export, synchronization, or external-asset recovery. |
+| Catalog mutation policy diverges across processes or future stores | Newer state can be overwritten | Every in-process mutation now rebases on the latest catalog inside a serialized repository transaction and publish follows persistence; define multi-process/conflict policy before another writer or store is introduced. |
 | Saved-instance-state route tests are treated as complete process recovery | Selected durable state or nested context can still be lost after system termination | G2 still requires true process-death, deleted-ID, rotation, and device-matrix flows. |
 | Technical Canvas is mistaken for a map | Incorrect geographic expectations | Keep Foundation label; G4 before map claims. |
 | Free-space result is mistaken for terrain-aware engineering | Invalid field decision | Explicit limits in UI/docs; G5 before terrain-aware label. |

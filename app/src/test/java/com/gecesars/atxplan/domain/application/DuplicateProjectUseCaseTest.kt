@@ -1,6 +1,7 @@
 package com.gecesars.atxplan.domain.application
 
 import com.gecesars.atxplan.data.project.ProjectRepository
+import com.gecesars.atxplan.domain.model.ArchivedProject
 import com.gecesars.atxplan.domain.model.AzimuthDegrees
 import com.gecesars.atxplan.domain.model.GainDbi
 import com.gecesars.atxplan.domain.model.GeoCoordinate
@@ -248,6 +249,39 @@ class DuplicateProjectUseCaseTest {
     }
 
     @Test
+    fun `rejects a generated root collision with an archived project before reading the clock`() {
+        val source = richProject()
+        val archived = richProject().copy(id = DUPLICATED_PROJECT_ID, name = "Archived Copy")
+        val archivedRecord = ArchivedProject(
+            project = archived,
+            archivedAtEpochMillis = 100L,
+            originalProjectIndex = 0,
+        )
+        val original = ProjectCatalog(
+            selectedProjectId = source.id,
+            projects = listOf(source),
+            archivedProjects = listOf(archivedRecord),
+        )
+        var clockCalls = 0
+        val useCase = DuplicateProjectUseCase(
+            idGenerator = ProjectDuplicationIdGenerator { DUPLICATED_PROJECT_ID },
+            clock = EpochMillisClock {
+                clockCalls += 1
+                500L
+            },
+        )
+
+        assertThrows(IllegalArgumentException::class.java) {
+            useCase(original, DuplicateProjectCommand(source.id, "Colliding Archive Copy"))
+        }
+
+        assertEquals(0, clockCalls)
+        assertEquals(listOf(source), original.projects)
+        assertEquals(listOf(archivedRecord), original.archivedProjects)
+        assertSame(archived, original.archivedProjects.single().project)
+    }
+
+    @Test
     fun `clock failure leaves the source aggregate and catalog untouched`() {
         val source = richProject()
         val original = ProjectCatalog(projects = listOf(source))
@@ -273,7 +307,7 @@ class DuplicateProjectUseCaseTest {
     }
 
     @Test
-    fun `schema 2 JSON round trip preserves the duplicated aggregate`() {
+    fun `schema 3 JSON round trip preserves the duplicated aggregate`() {
         val source = richProject()
         val result = useCase(DUPLICATED_PROJECT_ID, 8_000L)(
             ProjectCatalog(selectedProjectId = source.id, projects = listOf(source)),
@@ -284,7 +318,7 @@ class DuplicateProjectUseCaseTest {
         val restored = json.decodeFromString<ProjectCatalog>(json.encodeToString(result.catalog))
         val restoredCopy = restored.projects.last()
 
-        assertEquals(2, restored.schemaVersion)
+        assertEquals(3, restored.schemaVersion)
         assertEquals(result.catalog, restored)
         assertEquals(DUPLICATED_PROJECT_ID, restored.selectedProjectId)
         assertEquals(source.networks, restoredCopy.networks)

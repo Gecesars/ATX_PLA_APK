@@ -5,6 +5,7 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
@@ -271,6 +272,75 @@ class MainActivityTest {
     }
 
     @Test
+    fun archivedProjectCanBeRestoredAndRemainsSelectedAcrossActivityRecreation() {
+        val suffix = System.nanoTime()
+        val fallbackProjectName = "Archive Fallback $suffix"
+        val archivedProjectName = "Durable Archive $suffix"
+        createSelectedProject(fallbackProjectName)
+        createSelectedProject(archivedProjectName)
+        openProjectArchive()
+        composeRule.onNodeWithTag("archive_project_impact_summary").assertIsDisplayed()
+        composeRule.onNodeWithTag("archive_project_confirm")
+            .assertHeightIsAtLeast(48.dp)
+
+        composeRule.activityRule.scenario.recreate()
+
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            composeRule.onAllNodes(hasTestTag("archive_project_confirm"))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("archive_project_confirm")
+            .assertHeightIsAtLeast(48.dp)
+            .performDirectClick()
+        composeRule.waitUntil(timeoutMillis = 10_000L) {
+            composeRule.onAllNodes(hasTestTag("project_archive_dialog_content"))
+                .fetchSemanticsNodes().isEmpty()
+        }
+        composeRule.onNodeWithTag("projects_list")
+            .performScrollToNode(hasTestTag("selected_project_card"))
+        composeRule.onNodeWithTag("selected_project_card")
+            .assert(hasText(fallbackProjectName))
+            .assertIsDisplayed()
+        composeRule.onNodeWithTag("projects_list")
+            .performScrollToNode(hasText(archivedProjectName))
+        composeRule.onNodeWithText(archivedProjectName).assertIsDisplayed()
+
+        composeRule.activityRule.scenario.recreate()
+
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            composeRule.onAllNodesWithText(archivedProjectName)
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("projects_list")
+            .performScrollToNode(
+                hasContentDescription("Restore archived project $archivedProjectName"),
+            )
+        composeRule.onNodeWithContentDescription(
+            "Restore archived project $archivedProjectName",
+        ).assertHeightIsAtLeast(48.dp).performDirectClick()
+        composeRule.waitUntil(timeoutMillis = 10_000L) {
+            composeRule.onAllNodes(
+                hasTestTag("selected_project_card") and hasText(archivedProjectName),
+            ).fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("selected_project_card")
+            .assert(hasText(archivedProjectName))
+            .assertIsDisplayed()
+
+        composeRule.activityRule.scenario.recreate()
+
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            composeRule.onAllNodes(hasTestTag("selected_project_card"))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("projects_list")
+            .performScrollToNode(hasTestTag("selected_project_card"))
+        composeRule.onNodeWithTag("selected_project_card")
+            .assert(hasText(archivedProjectName))
+            .assertIsDisplayed()
+    }
+
+    @Test
     fun deleteProjectDialogDraftSurvivesActivityRecreation() {
         val suffix = System.nanoTime().toString()
         createSelectedProject("Delete Draft $suffix")
@@ -453,6 +523,23 @@ class MainActivityTest {
             .performDirectClick()
         composeRule.waitUntil(timeoutMillis = 5_000L) {
             composeRule.onAllNodes(hasTestTag("delete_project_name_field"))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+    }
+
+    private fun openProjectArchive() {
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            composeRule.onAllNodes(hasTestTag("projects_list"))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("projects_list")
+            .performScrollToNode(hasTestTag("archive_project_button"))
+        composeRule.onNodeWithTag("archive_project_button")
+            .assertIsDisplayed()
+            .assertHeightIsAtLeast(48.dp)
+            .performDirectClick()
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            composeRule.onAllNodes(hasTestTag("project_archive_dialog_content"))
                 .fetchSemanticsNodes().isNotEmpty()
         }
     }

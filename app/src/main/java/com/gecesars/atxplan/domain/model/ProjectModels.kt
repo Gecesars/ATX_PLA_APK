@@ -3,23 +3,47 @@ package com.gecesars.atxplan.domain.model
 import kotlinx.serialization.Serializable
 import java.util.UUID
 
-const val PROJECT_CATALOG_SCHEMA_VERSION = 2
+const val PROJECT_CATALOG_SCHEMA_VERSION = 3
 
 @Serializable
 data class ProjectCatalog(
     val schemaVersion: Int = PROJECT_CATALOG_SCHEMA_VERSION,
     val selectedProjectId: String? = null,
     val projects: List<PlannerProject> = emptyList(),
+    val archivedProjects: List<ArchivedProject> = emptyList(),
 ) {
     init {
         require(schemaVersion >= 1) { "Invalid catalog version: $schemaVersion" }
-        require(projects.map(PlannerProject::id).distinct().size == projects.size) {
-            "The catalog contains duplicate project IDs."
+        val activeProjectIds = projects.map(PlannerProject::id)
+        val archivedProjectIds = archivedProjects.map { archived -> archived.project.id }
+        val allProjectIds = activeProjectIds + archivedProjectIds
+        require(allProjectIds.distinct().size == allProjectIds.size) {
+            "Active and archived project IDs must be unique across the catalog."
         }
     }
 
     val selectedProject: PlannerProject?
         get() = projects.firstOrNull { it.id == selectedProjectId } ?: projects.firstOrNull()
+}
+
+/**
+ * A project aggregate moved out of the active workspace list without changing its engineering
+ * content. The original index provides a deterministic, bounded insertion hint for restoration.
+ */
+@Serializable
+data class ArchivedProject(
+    val project: PlannerProject,
+    val archivedAtEpochMillis: Long,
+    val originalProjectIndex: Int,
+) {
+    init {
+        require(archivedAtEpochMillis >= 0L) {
+            "An archived project requires a non-negative archive timestamp."
+        }
+        require(originalProjectIndex >= 0) {
+            "An archived project requires a non-negative original index."
+        }
+    }
 }
 
 @Serializable

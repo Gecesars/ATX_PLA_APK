@@ -17,6 +17,7 @@ data class DeleteProjectCommand(
 enum class DeleteProjectStatus {
     DELETED,
     STALE_PROJECT,
+    ARCHIVED,
     NOT_FOUND,
 }
 
@@ -59,9 +60,22 @@ data class DeleteProjectResult(
                 "A stale project must expose the conflicting aggregate from the result catalog."
             }
 
+            DeleteProjectStatus.ARCHIVED -> require(
+                currentProject == null &&
+                    catalog.projects.none { project -> project.id == expectedProject.id } &&
+                    catalog.archivedProjects.singleOrNull { archived ->
+                        archived.project.id == expectedProject.id
+                    } != null,
+            ) {
+                "An archived project cannot be permanently deleted as an active project."
+            }
+
             DeleteProjectStatus.NOT_FOUND -> require(
                 currentProject == null &&
-                    catalog.projects.none { project -> project.id == expectedProject.id },
+                    catalog.projects.none { project -> project.id == expectedProject.id } &&
+                    catalog.archivedProjects.none { archived ->
+                        archived.project.id == expectedProject.id
+                    },
             ) {
                 "A missing project must remain absent from the result catalog."
             }
@@ -94,11 +108,20 @@ class DeleteProjectUseCase {
         }
 
         if (projectIndex < 0) {
+            val status = if (
+                catalog.archivedProjects.any { archived ->
+                    archived.project.id == expectedProject.id
+                }
+            ) {
+                DeleteProjectStatus.ARCHIVED
+            } else {
+                DeleteProjectStatus.NOT_FOUND
+            }
             return DeleteProjectResult(
                 catalog = catalog,
                 expectedProject = expectedProject,
                 currentProject = null,
-                status = DeleteProjectStatus.NOT_FOUND,
+                status = status,
             )
         }
 
@@ -115,19 +138,12 @@ class DeleteProjectUseCase {
         val remainingProjects = catalog.projects.filterIndexed { index, _ ->
             index != projectIndex
         }
-        val selectedProjectId = when {
-            remainingProjects.isEmpty() -> null
-            catalog.selectedProjectId == expectedProject.id ->
-                catalog.projects.getOrNull(projectIndex + 1)?.id
-                    ?: catalog.projects[projectIndex - 1].id
-
-            remainingProjects.any { project -> project.id == catalog.selectedProjectId } ->
-                catalog.selectedProjectId
-
-            else -> remainingProjects.first().id
-        }
         val updatedCatalog = catalog.copy(
-            selectedProjectId = selectedProjectId,
+            selectedProjectId = selectedProjectIdAfterRemoval(
+                catalog = catalog,
+                removedProjectIndex = projectIndex,
+                remainingProjects = remainingProjects,
+            ),
             projects = remainingProjects,
         )
 

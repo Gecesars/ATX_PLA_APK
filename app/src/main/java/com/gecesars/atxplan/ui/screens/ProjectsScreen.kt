@@ -27,13 +27,17 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.DeleteForever
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Science
+import androidx.compose.material.icons.outlined.Unarchive
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -67,6 +71,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -74,8 +79,11 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogWindowProvider
+import com.gecesars.atxplan.domain.application.ArchiveProjectCommand
 import com.gecesars.atxplan.domain.application.DeleteProjectCommand
 import com.gecesars.atxplan.domain.application.DuplicateProjectCommand
+import com.gecesars.atxplan.domain.application.RestoreProjectCommand
+import com.gecesars.atxplan.domain.model.ArchivedProject
 import com.gecesars.atxplan.domain.model.PlannerProject
 import com.gecesars.atxplan.domain.model.RadioSystem
 import com.gecesars.atxplan.ui.AppUiState
@@ -91,7 +99,7 @@ import java.util.Locale
 private const val PROJECT_NAME_LIMIT = 80
 private const val PROJECT_NAME_DISPLAY_LIMIT = 160
 private const val DELETE_CONFIRMATION_KEYWORD = "DELETE"
-private val deleteFingerprintJson = Json {
+private val projectFingerprintJson = Json {
     encodeDefaults = true
     explicitNulls = true
 }
@@ -105,6 +113,8 @@ fun ProjectsScreen(
     onRenameProject: (String) -> Unit,
     onDuplicateProject: (DuplicateProjectCommand) -> Unit,
     onDeleteProject: (DeleteProjectCommand) -> Unit,
+    onArchiveProject: (ArchiveProjectCommand) -> Unit = {},
+    onRestoreProject: (RestoreProjectCommand) -> Unit = {},
 ) {
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
     var projectCountBeforeCreate by rememberSaveable { mutableStateOf<Int?>(null) }
@@ -122,6 +132,16 @@ fun ProjectsScreen(
     var deleteExpectedProject by remember { mutableStateOf<PlannerProject?>(null) }
     var deleteReviewResetCount by remember { mutableLongStateOf(0L) }
     var pendingDeleteCompletionCount by remember { mutableStateOf<Long?>(null) }
+    var archivedProjectsExpanded by rememberSaveable { mutableStateOf(false) }
+    var archivedProjectsAutoExpanded by rememberSaveable { mutableStateOf(false) }
+    var archiveSourceProjectKey by rememberSaveable { mutableStateOf<String?>(null) }
+    var archiveReviewedProjectFingerprint by rememberSaveable { mutableStateOf<String?>(null) }
+    var archiveExpectedProject by remember { mutableStateOf<PlannerProject?>(null) }
+    var archiveReviewResetCount by remember { mutableLongStateOf(0L) }
+    var archiveSnapshotWasRefreshed by remember { mutableStateOf(false) }
+    var pendingArchiveCompletionCount by remember { mutableStateOf<Long?>(null) }
+    var pendingRestoreProjectKey by remember { mutableStateOf<String?>(null) }
+    var pendingRestoreCompletionCount by remember { mutableStateOf<Long?>(null) }
 
     fun dismissDuplicateDialog() {
         duplicateSourceProjectId = null
@@ -154,6 +174,29 @@ fun ProjectsScreen(
         pendingDeleteCompletionCount = null
     }
 
+    fun refreshArchiveSnapshot(
+        project: PlannerProject,
+        requireFreshReview: Boolean = false,
+        reviewedFingerprint: String? = null,
+    ) {
+        if (requireFreshReview) {
+            archiveReviewResetCount += 1L
+            archiveSnapshotWasRefreshed = true
+        }
+        archiveExpectedProject = project
+        archiveReviewedProjectFingerprint =
+            reviewedFingerprint ?: projectSavedStateFingerprint(project)
+    }
+
+    fun dismissArchiveDialog() {
+        archiveSourceProjectKey = null
+        archiveReviewedProjectFingerprint = null
+        archiveExpectedProject = null
+        archiveReviewResetCount = 0L
+        archiveSnapshotWasRefreshed = false
+        pendingArchiveCompletionCount = null
+    }
+
     val duplicateSourceProject = duplicateSourceProjectId?.let { sourceId ->
         uiState.catalog.projects.firstOrNull { project -> project.id == sourceId }
     }
@@ -178,10 +221,53 @@ fun ProjectsScreen(
             projectSavedStateKey(project.id) == sourceKey
         }
     }
+    val currentDeleteArchivedProject = deleteSourceProjectKey?.let { sourceKey ->
+        deleteExpectedProject?.let { expectedProject ->
+            uiState.catalog.archivedProjects.firstOrNull { archived ->
+                archived.project.id == expectedProject.id
+            }
+        } ?: uiState.catalog.archivedProjects.firstOrNull { archived ->
+            projectSavedStateKey(archived.project.id) == sourceKey
+        }
+    }
     val durableDeleteIsObservable = deleteSourceProjectKey != null &&
         uiState.isCatalogWritable &&
         !uiState.isLoading &&
-        currentDeleteProject == null
+        currentDeleteProject == null &&
+        currentDeleteArchivedProject == null
+    val currentArchiveProject = archiveSourceProjectKey?.let { sourceKey ->
+        archiveExpectedProject?.let { expectedProject ->
+            uiState.catalog.projects.firstOrNull { project ->
+                project.id == expectedProject.id
+            }
+        } ?: uiState.catalog.projects.firstOrNull { project ->
+            projectSavedStateKey(project.id) == sourceKey
+        }
+    }
+    val durableArchivedProject = archiveSourceProjectKey?.let { sourceKey ->
+        archiveExpectedProject?.let { expectedProject ->
+            uiState.catalog.archivedProjects.firstOrNull { archived ->
+                archived.project.id == expectedProject.id
+            }
+        } ?: uiState.catalog.archivedProjects.firstOrNull { archived ->
+            projectSavedStateKey(archived.project.id) == sourceKey
+        }
+    }
+    val durableArchiveIsObservable = archiveSourceProjectKey != null &&
+        uiState.isCatalogWritable &&
+        !uiState.isLoading &&
+        currentArchiveProject == null &&
+        durableArchivedProject != null
+    val pendingRestoreArchivedProject = pendingRestoreProjectKey?.let { sourceKey ->
+        uiState.catalog.archivedProjects.firstOrNull { archived ->
+            projectSavedStateKey(archived.project.id) == sourceKey
+        }
+    }
+    val durableRestoredProject = pendingRestoreProjectKey?.let { sourceKey ->
+        uiState.catalog.projects.firstOrNull { project ->
+            projectSavedStateKey(project.id) == sourceKey
+        }
+    }
 
     LaunchedEffect(
         durableDuplicateIsObservable,
@@ -262,6 +348,101 @@ fun ProjectsScreen(
         }
     }
 
+    LaunchedEffect(
+        uiState.isLoading,
+        uiState.catalog.projects.size,
+        uiState.catalog.archivedProjects.size,
+    ) {
+        when {
+            uiState.catalog.archivedProjects.isEmpty() -> {
+                archivedProjectsExpanded = false
+                archivedProjectsAutoExpanded = false
+            }
+
+            !uiState.isLoading &&
+                uiState.catalog.projects.isEmpty() &&
+                !archivedProjectsAutoExpanded -> {
+                archivedProjectsExpanded = true
+                archivedProjectsAutoExpanded = true
+            }
+        }
+    }
+    LaunchedEffect(durableArchiveIsObservable) {
+        if (durableArchiveIsObservable) {
+            archivedProjectsExpanded = true
+            dismissArchiveDialog()
+        }
+    }
+    LaunchedEffect(
+        archiveSourceProjectKey,
+        currentArchiveProject,
+        uiState.isSavingCatalog,
+        pendingArchiveCompletionCount,
+    ) {
+        val currentProject = currentArchiveProject ?: return@LaunchedEffect
+        if (
+            archiveSourceProjectKey == null ||
+            uiState.isSavingCatalog ||
+            pendingArchiveCompletionCount != null
+        ) {
+            return@LaunchedEffect
+        }
+        when {
+            archiveExpectedProject == null -> {
+                val currentFingerprint = projectSavedStateFingerprint(currentProject)
+                refreshArchiveSnapshot(
+                    project = currentProject,
+                    requireFreshReview = archiveReviewedProjectFingerprint != currentFingerprint,
+                    reviewedFingerprint = currentFingerprint,
+                )
+            }
+
+            archiveExpectedProject != currentProject -> refreshArchiveSnapshot(
+                project = currentProject,
+                requireFreshReview = true,
+            )
+        }
+    }
+    LaunchedEffect(
+        uiState.catalogMutationCompletionCount,
+        pendingArchiveCompletionCount,
+        currentArchiveProject,
+    ) {
+        val pendingCompletionCount = pendingArchiveCompletionCount
+        if (
+            pendingCompletionCount != null &&
+            uiState.catalogMutationCompletionCount != pendingCompletionCount
+        ) {
+            pendingArchiveCompletionCount = null
+            currentArchiveProject?.let { currentProject ->
+                refreshArchiveSnapshot(
+                    project = currentProject,
+                    requireFreshReview = archiveExpectedProject != currentProject,
+                )
+            }
+        }
+    }
+    LaunchedEffect(
+        uiState.catalogMutationCompletionCount,
+        pendingRestoreCompletionCount,
+        pendingRestoreProjectKey,
+        pendingRestoreArchivedProject,
+        durableRestoredProject,
+        uiState.isLoading,
+    ) {
+        val pendingCompletionCount = pendingRestoreCompletionCount ?: return@LaunchedEffect
+        val restoreIsDurable = !uiState.isLoading &&
+            durableRestoredProject != null &&
+            pendingRestoreArchivedProject == null
+        if (
+            restoreIsDurable ||
+            uiState.catalogMutationCompletionCount != pendingCompletionCount
+        ) {
+            pendingRestoreProjectKey = null
+            pendingRestoreCompletionCount = null
+        }
+    }
+
     LaunchedEffect(uiState.isSavingCatalog, uiState.catalog.projects.size) {
         val previousCount = projectCountBeforeCreate ?: return@LaunchedEffect
         if (uiState.isSavingCatalog) {
@@ -293,7 +474,11 @@ fun ProjectsScreen(
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     Text(
-                        projectCountLabel(uiState.catalog.projects.size, "workspace", "workspaces"),
+                        projectCountLabel(
+                            uiState.catalog.projects.size,
+                            "active project",
+                            "active projects",
+                        ),
                         style = MaterialTheme.typography.titleMedium,
                     )
                     StatusPill(
@@ -342,7 +527,53 @@ fun ProjectsScreen(
                 }
             }
             if (!uiState.isLoading && uiState.catalog.projects.isEmpty() && uiState.isCatalogWritable) {
-                item { EmptyProjectsCard() }
+                item {
+                    if (uiState.catalog.archivedProjects.isEmpty()) {
+                        EmptyProjectsCard()
+                    } else {
+                        NoActiveProjectsCard()
+                    }
+                }
+            }
+            if (!uiState.isLoading && uiState.catalog.archivedProjects.isNotEmpty()) {
+                item(key = "archived_projects_header") {
+                    ArchivedProjectsHeader(
+                        count = uiState.catalog.archivedProjects.size,
+                        expanded = archivedProjectsExpanded,
+                        onToggle = { archivedProjectsExpanded = !archivedProjectsExpanded },
+                    )
+                }
+                if (archivedProjectsExpanded) {
+                    items(
+                        items = uiState.catalog.archivedProjects,
+                        key = { archived -> projectSavedStateKey(archived.project.id) },
+                    ) { archived ->
+                        val archiveKey = projectSavedStateKey(archived.project.id)
+                        ArchivedProjectCard(
+                            archivedProject = archived,
+                            enabled = uiState.isCatalogWritable &&
+                                !uiState.isSavingCatalog &&
+                                pendingRestoreCompletionCount == null,
+                            isRestoring = pendingRestoreProjectKey == archiveKey,
+                            onRestore = {
+                                if (
+                                    pendingRestoreCompletionCount == null &&
+                                    !uiState.isSavingCatalog &&
+                                    uiState.isCatalogWritable
+                                ) {
+                                    pendingRestoreProjectKey = archiveKey
+                                    pendingRestoreCompletionCount =
+                                        uiState.catalogMutationCompletionCount
+                                    onRestoreProject(
+                                        RestoreProjectCommand(
+                                            expectedArchivedProject = archived,
+                                        ),
+                                    )
+                                }
+                            },
+                        )
+                    }
+                }
             }
             uiState.selectedProject?.let { selected ->
                 item {
@@ -362,6 +593,15 @@ fun ProjectsScreen(
                             duplicateBaselineCompletionCount =
                                 uiState.catalogMutationCompletionCount
                             pendingDuplicateCompletionCount = null
+                        },
+                        onArchiveProject = {
+                            archiveSourceProjectKey = projectSavedStateKey(selected.id)
+                            archiveReviewedProjectFingerprint =
+                                projectSavedStateFingerprint(selected)
+                            archiveExpectedProject = selected
+                            archiveReviewResetCount = 0L
+                            archiveSnapshotWasRefreshed = false
+                            pendingArchiveCompletionCount = null
                         },
                         onDeleteProject = {
                             deleteSourceProjectKey = projectSavedStateKey(selected.id)
@@ -407,6 +647,36 @@ fun ProjectsScreen(
                             newName = normalizedDuplicateName,
                         ),
                     )
+                }
+            },
+        )
+    }
+
+    if (archiveSourceProjectKey != null) {
+        ArchiveProjectDialog(
+            sourceProject = archiveExpectedProject ?: currentArchiveProject,
+            reviewResetCount = archiveReviewResetCount,
+            snapshotWasRefreshed = archiveSnapshotWasRefreshed,
+            sourceProjectExists = currentArchiveProject != null,
+            sourceProjectIsAvailable = archiveExpectedProject != null &&
+                currentArchiveProject == archiveExpectedProject,
+            isCatalogLoading = uiState.isLoading,
+            isCatalogWritable = uiState.isCatalogWritable,
+            isSubmitting = pendingArchiveCompletionCount != null || uiState.isSavingCatalog,
+            onDismiss = ::dismissArchiveDialog,
+            onConfirm = {
+                val expectedProject = archiveExpectedProject
+                if (
+                    expectedProject != null &&
+                    projectSavedStateKey(expectedProject.id) == archiveSourceProjectKey &&
+                    currentArchiveProject == expectedProject &&
+                    pendingArchiveCompletionCount == null &&
+                    !uiState.isSavingCatalog &&
+                    uiState.isCatalogWritable
+                ) {
+                    archiveSnapshotWasRefreshed = false
+                    pendingArchiveCompletionCount = uiState.catalogMutationCompletionCount
+                    onArchiveProject(ArchiveProjectCommand(expectedProject = expectedProject))
                 }
             },
         )
@@ -540,6 +810,7 @@ private fun SelectedProjectDetails(
     onAddRfPath: () -> Unit,
     onRenameProject: () -> Unit,
     onDuplicateProject: () -> Unit,
+    onArchiveProject: () -> Unit,
     onDeleteProject: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -598,12 +869,9 @@ private fun SelectedProjectDetails(
                 )
                 BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
                     val fontScale = LocalDensity.current.fontScale
-                    val useSingleActionRow = maxWidth >= if (fontScale <= 1.2f) {
-                        500.dp
-                    } else {
-                        650.dp
-                    }
-                    val useTwoActionRows = maxWidth >= 330.dp && fontScale <= 1.2f
+                    val useSingleActionRow = maxWidth >= 720.dp && fontScale <= 1.2f
+                    val useTwoActionRows = maxWidth >= 328.dp &&
+                        (fontScale < 1.3f || (fontScale <= 1.4f && maxWidth >= 600.dp))
                     if (useSingleActionRow) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -617,6 +885,11 @@ private fun SelectedProjectDetails(
                             DuplicateProjectButton(
                                 enabled = canEdit,
                                 onClick = onDuplicateProject,
+                                modifier = Modifier.weight(1f),
+                            )
+                            ArchiveProjectButton(
+                                enabled = canEdit,
+                                onClick = onArchiveProject,
                                 modifier = Modifier.weight(1f),
                             )
                             DeleteProjectButton(
@@ -645,11 +918,21 @@ private fun SelectedProjectDetails(
                                     modifier = Modifier.weight(1f),
                                 )
                             }
-                            DeleteProjectButton(
-                                enabled = canEdit,
-                                onClick = onDeleteProject,
+                            Row(
                                 modifier = Modifier.fillMaxWidth(),
-                            )
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                ArchiveProjectButton(
+                                    enabled = canEdit,
+                                    onClick = onArchiveProject,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                DeleteProjectButton(
+                                    enabled = canEdit,
+                                    onClick = onDeleteProject,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
                         }
                     } else {
                         Column(
@@ -664,6 +947,11 @@ private fun SelectedProjectDetails(
                             DuplicateProjectButton(
                                 enabled = canEdit,
                                 onClick = onDuplicateProject,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            ArchiveProjectButton(
+                                enabled = canEdit,
+                                onClick = onArchiveProject,
                                 modifier = Modifier.fillMaxWidth(),
                             )
                             DeleteProjectButton(
@@ -734,6 +1022,24 @@ private fun DuplicateProjectButton(
 }
 
 @Composable
+private fun ArchiveProjectButton(
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier
+            .heightIn(min = 48.dp)
+            .testTag("archive_project_button"),
+    ) {
+        Icon(Icons.Outlined.Archive, contentDescription = null)
+        Text("Archive")
+    }
+}
+
+@Composable
 private fun DeleteProjectButton(
     enabled: Boolean,
     onClick: () -> Unit,
@@ -770,6 +1076,374 @@ private fun EmptyProjectsCard() {
             )
         }
     }
+}
+
+@Composable
+private fun NoActiveProjectsCard() {
+    Card(shape = RoundedCornerShape(16.dp)) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(18.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(Icons.Outlined.Archive, contentDescription = null)
+            Text("No Active Projects", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Create a project or restore one from Archived Projects below.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ArchivedProjectsHeader(
+    count: Int,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+) {
+    OutlinedButton(
+        onClick = onToggle,
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .semantics {
+                heading()
+                stateDescription = if (expanded) "Expanded" else "Collapsed"
+            }
+            .testTag("archived_projects_toggle"),
+    ) {
+        Text(
+            text = archivedProjectsSectionTitle(count),
+            modifier = Modifier.weight(1f),
+        )
+        Icon(
+            imageVector = if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+            contentDescription = null,
+        )
+    }
+}
+
+@Composable
+private fun ArchivedProjectCard(
+    archivedProject: ArchivedProject,
+    enabled: Boolean,
+    isRestoring: Boolean,
+    onRestore: () -> Unit,
+) {
+    val project = archivedProject.project
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("archived_project_card"),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+        ),
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = boundedProjectNameForDisplay(project.name),
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = project.customer
+                            .takeIf(String::isNotBlank)
+                            ?.let(::boundedProjectNameForDisplay)
+                            ?: "No customer specified",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                StatusPill("Archived", StatusTone.NEUTRAL)
+            }
+            Text(
+                text = projectScopedCollectionSummary(project),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("archived_project_asset_summary"),
+            )
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                val placeActionBesideDate = maxWidth >= 420.dp &&
+                    LocalDensity.current.fontScale <= 1.2f
+                if (placeActionBesideDate) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        ArchivedDateText(
+                            archivedAtEpochMillis = archivedProject.archivedAtEpochMillis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        RestoreProjectButton(
+                            archivedProject = archivedProject,
+                            enabled = enabled,
+                            isRestoring = isRestoring,
+                            onClick = onRestore,
+                        )
+                    }
+                } else {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        ArchivedDateText(archivedProject.archivedAtEpochMillis)
+                        RestoreProjectButton(
+                            archivedProject = archivedProject,
+                            enabled = enabled,
+                            isRestoring = isRestoring,
+                            onClick = onRestore,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ArchivedDateText(
+    archivedAtEpochMillis: Long,
+    modifier: Modifier = Modifier,
+) {
+    Text(
+        text = "Archived ${formatDate(archivedAtEpochMillis)}",
+        modifier = modifier,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+@Composable
+private fun RestoreProjectButton(
+    archivedProject: ArchivedProject,
+    enabled: Boolean,
+    isRestoring: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier
+            .heightIn(min = 48.dp)
+            .semantics {
+                contentDescription = archivedProjectRestoreDescription(archivedProject)
+                if (isRestoring) {
+                    stateDescription = "Restoring"
+                    liveRegion = LiveRegionMode.Polite
+                }
+            }
+            .testTag("restore_project_button"),
+    ) {
+        Icon(Icons.Outlined.Unarchive, contentDescription = null)
+        Text(
+            text = if (isRestoring) "Restoring..." else "Restore",
+        )
+    }
+}
+
+@Composable
+private fun ArchiveProjectDialog(
+    sourceProject: PlannerProject?,
+    reviewResetCount: Long,
+    snapshotWasRefreshed: Boolean,
+    sourceProjectExists: Boolean,
+    sourceProjectIsAvailable: Boolean,
+    isCatalogLoading: Boolean,
+    isCatalogWritable: Boolean,
+    isSubmitting: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    val configuration = LocalConfiguration.current
+    val useShortLandscapeLayout =
+        configuration.orientation == Configuration.ORIENTATION_LANDSCAPE &&
+            with(LocalDensity.current) {
+                LocalWindowInfo.current.containerSize.height.toDp() <= 480.dp
+            }
+    val dialogContentState = rememberLazyListState()
+    LaunchedEffect(reviewResetCount) {
+        if (reviewResetCount > 0L) dialogContentState.scrollToItem(index = 0)
+    }
+    AlertDialog(
+        onDismissRequest = { if (!isSubmitting) onDismiss() },
+        icon = if (useShortLandscapeLayout) {
+            null
+        } else {
+            { Icon(Icons.Outlined.Archive, contentDescription = null) }
+        },
+        title = {
+            Text(
+                text = "Archive Project",
+                modifier = Modifier.semantics { heading() },
+                style = if (useShortLandscapeLayout) {
+                    MaterialTheme.typography.titleMedium
+                } else {
+                    MaterialTheme.typography.titleLarge
+                },
+            )
+        },
+        text = {
+            LazyColumn(
+                state = dialogContentState,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("project_archive_dialog_content"),
+                contentPadding = PaddingValues(
+                    bottom = if (useShortLandscapeLayout) 2.dp else 4.dp,
+                ),
+                verticalArrangement = Arrangement.spacedBy(
+                    if (useShortLandscapeLayout) 6.dp else 10.dp,
+                ),
+            ) {
+                item(key = "archive_source") {
+                    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        if (!useShortLandscapeLayout) {
+                            Text(
+                                text = "Project to Archive",
+                                modifier = Modifier.semantics { heading() },
+                                style = MaterialTheme.typography.titleSmall,
+                            )
+                        }
+                        Text(
+                            text = sourceProject?.name?.let(::boundedProjectNameForDisplay)
+                                ?: "Project snapshot unavailable",
+                            modifier = Modifier.testTag("archive_project_source_name"),
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = sourceProject?.let(::projectArchiveImpactSummary)
+                                ?: "Retained-data counts are unavailable while the catalog snapshot is refreshed.",
+                            modifier = Modifier.testTag("archive_project_impact_summary"),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                item(key = "archive_disclosure") {
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        ),
+                        shape = RoundedCornerShape(14.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(10.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.Top,
+                        ) {
+                            Icon(
+                                Icons.Outlined.Info,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp),
+                            )
+                            Text(
+                                text = projectArchiveDisclosure(useShortLandscapeLayout),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("archive_project_disclosure"),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            )
+                        }
+                    }
+                }
+                if (snapshotWasRefreshed) {
+                    item(key = "archive_snapshot_refreshed") {
+                        Text(
+                            text = "The project changed in local storage. Review the refreshed " +
+                                "details before confirming again.",
+                            modifier = Modifier
+                                .semantics { liveRegion = LiveRegionMode.Polite }
+                                .testTag("archive_project_snapshot_refreshed"),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+                if (!sourceProjectIsAvailable) {
+                    item(key = "archive_source_unavailable") {
+                        Text(
+                            text = when {
+                                sourceProjectExists ->
+                                    "Preparing the latest project snapshot."
+                                isCatalogLoading ->
+                                    "The local catalog is still loading."
+                                else ->
+                                    "The active project cannot be verified in the current local catalog."
+                            },
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                } else if (!isCatalogWritable) {
+                    item(key = "archive_catalog_write_error") {
+                        Text(
+                            text = "The local catalog must be writable before this project can be archived.",
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                enabled = sourceProjectIsAvailable &&
+                    isCatalogWritable &&
+                    !isSubmitting,
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .testTag("archive_project_confirm"),
+            ) {
+                Text(
+                    text = when {
+                        isSubmitting -> "Archiving..."
+                        useShortLandscapeLayout -> "Archive"
+                        else -> "Archive Project"
+                    },
+                    modifier = if (isSubmitting) {
+                        Modifier.semantics { liveRegion = LiveRegionMode.Polite }
+                    } else {
+                        Modifier
+                    },
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                enabled = !isSubmitting,
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .testTag("archive_project_cancel"),
+            ) {
+                Text("Cancel")
+            }
+        },
+    )
 }
 
 @Composable
@@ -1344,7 +2018,7 @@ internal fun projectSavedStateKey(projectId: String): String =
 
 internal fun projectSavedStateFingerprint(project: PlannerProject): String =
     sha256Hex(
-        deleteFingerprintJson
+        projectFingerprintJson
             .encodeToString(PlannerProject.serializer(), project)
             .toByteArray(Charsets.UTF_8),
     )
@@ -1362,14 +2036,38 @@ internal fun boundedProjectNameForDisplay(name: String): String =
     }
 
 internal fun projectDeletionImpactSummary(project: PlannerProject): String {
-    val sectorCount = project.sites.sumOf { site -> site.sectors.size }
     return "Deleting this project removes " +
-        "${projectCountLabel(project.networks.size, "network", "networks")}, " +
+        projectScopedCollectionSummary(project) + " " +
+        "from local storage."
+}
+
+internal fun projectArchiveImpactSummary(project: PlannerProject): String =
+    "Archiving this project retains ${projectScopedCollectionSummary(project)} " +
+        "in the local catalog."
+
+internal fun projectArchiveDisclosure(useShortLayout: Boolean): String =
+    if (useShortLayout) {
+        "Reversible only while retained in the local catalog. Not a backup, export, " +
+            "synchronization, or recovery for a permanently deleted project."
+    } else {
+        "Archiving is reversible while this project remains in the local catalog. " +
+            "It is not a backup, export, or synchronization, and it cannot recover a " +
+            "permanently deleted project."
+    }
+
+internal fun archivedProjectsSectionTitle(count: Int): String =
+    "Archived Projects ($count)"
+
+internal fun archivedProjectRestoreDescription(archivedProject: ArchivedProject): String =
+    "Restore archived project ${boundedProjectNameForDisplay(archivedProject.project.name)}"
+
+internal fun projectScopedCollectionSummary(project: PlannerProject): String {
+    val sectorCount = project.sites.sumOf { site -> site.sectors.size }
+    return "${projectCountLabel(project.networks.size, "network", "networks")}, " +
         "${projectCountLabel(project.sites.size, "site", "sites")}, " +
         "${projectCountLabel(sectorCount, "sector", "sectors")}, " +
         "${projectCountLabel(project.receivers.size, "receiver", "receivers")}, and " +
-        "${projectCountLabel(project.studies.size, "study summary", "study summaries")} " +
-        "from local storage."
+        projectCountLabel(project.studies.size, "study summary", "study summaries")
 }
 
 internal fun suggestedDuplicateProjectName(

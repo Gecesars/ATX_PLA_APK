@@ -1,6 +1,7 @@
 package com.gecesars.atxplan.domain.application
 
 import com.gecesars.atxplan.data.project.ProjectRepository
+import com.gecesars.atxplan.domain.model.ArchivedProject
 import com.gecesars.atxplan.domain.model.AzimuthDegrees
 import com.gecesars.atxplan.domain.model.GainDbi
 import com.gecesars.atxplan.domain.model.GeoCoordinate
@@ -261,6 +262,25 @@ class DeleteProjectUseCaseTest {
     }
 
     @Test
+    fun `a project archived by a peer returns archived without permanent deletion`() {
+        val expected = richProject(id = "project-archived", name = "Archived")
+        val archived = ArchivedProject(
+            project = expected,
+            archivedAtEpochMillis = 10L,
+            originalProjectIndex = 0,
+        )
+        val latestCatalog = ProjectCatalog(archivedProjects = listOf(archived))
+
+        val result = useCase(latestCatalog, DeleteProjectCommand(expected))
+
+        assertFalse(result.didDelete)
+        assertEquals(DeleteProjectStatus.ARCHIVED, result.status)
+        assertNull(result.currentProject)
+        assertSame(latestCatalog, result.catalog)
+        assertSame(archived, result.catalog.archivedProjects.single())
+    }
+
+    @Test
     fun `structurally equal snapshots delete imported IDs by exact identity`() {
         val imported = richProject(id = " imported project ", name = "Imported")
         val decodedEquivalentSnapshot = imported.copy(
@@ -284,7 +304,7 @@ class DeleteProjectUseCaseTest {
     }
 
     @Test
-    fun `schema 2 JSON round trip preserves the deletion result catalog`() {
+    fun `schema 3 JSON round trip preserves the deletion result catalog`() {
         val first = richProject(id = "project-first", name = "First")
         val target = richProject(id = "project-target", name = "Target")
         val result = useCase(
@@ -297,7 +317,7 @@ class DeleteProjectUseCaseTest {
             json.encodeToString(result.catalog),
         )
 
-        assertEquals(2, restored.schemaVersion)
+        assertEquals(3, restored.schemaVersion)
         assertEquals(result.catalog, restored)
         assertEquals(first.id, restored.selectedProjectId)
         assertEquals(listOf(first), restored.projects)

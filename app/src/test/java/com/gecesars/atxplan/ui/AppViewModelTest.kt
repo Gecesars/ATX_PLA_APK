@@ -4,6 +4,7 @@ import com.gecesars.atxplan.data.project.ProjectRepository
 import com.gecesars.atxplan.data.project.ProjectStorageException
 import com.gecesars.atxplan.domain.application.AppCoroutineDispatchers
 import com.gecesars.atxplan.domain.application.AppUseCases
+import com.gecesars.atxplan.domain.application.ArchiveProjectCommand
 import com.gecesars.atxplan.domain.application.DeleteProjectCommand
 import com.gecesars.atxplan.domain.application.DuplicateProjectCommand
 import com.gecesars.atxplan.domain.application.EpochMillisClock
@@ -11,6 +12,8 @@ import com.gecesars.atxplan.domain.application.LinkBudgetCalculator
 import com.gecesars.atxplan.domain.application.ProjectCreator
 import com.gecesars.atxplan.domain.application.ProjectDuplicationIdGenerator
 import com.gecesars.atxplan.domain.application.RenameProjectCommand
+import com.gecesars.atxplan.domain.application.RestoreProjectCommand
+import com.gecesars.atxplan.domain.model.ArchivedProject
 import com.gecesars.atxplan.domain.model.PlannerProject
 import com.gecesars.atxplan.domain.model.ProjectCatalog
 import com.gecesars.atxplan.domain.model.ProjectFactory
@@ -280,6 +283,277 @@ class AppViewModelTest {
             assertEquals(3, durable.projects.map { it.id }.distinct().size)
             assertEquals("Second Copy", durable.selectedProject?.name)
             assertEquals(2, repository.savedCatalogs.size)
+        }
+
+    @Test
+    fun `archive first then stale duplicate rebases without a second write or generator side effects`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val initial = catalogWithProjects("Archive Before Duplicate", "Surviving Project")
+            val repository = FakeProjectRepository(initial)
+            var duplicateIdCalls = 0
+            var duplicateClockCalls = 0
+            val archiveViewModel = createViewModel(repository)
+            val staleDuplicateViewModel = createViewModel(
+                repository = repository,
+                projectDuplicationIdGenerator = ProjectDuplicationIdGenerator {
+                    duplicateIdCalls += 1
+                    "must-not-be-generated"
+                },
+                clock = EpochMillisClock {
+                    duplicateClockCalls += 1
+                    20_000L
+                },
+            )
+            advanceUntilIdle()
+            val projectToArchive = initial.projects.first()
+
+            archiveViewModel.archiveProject(ArchiveProjectCommand(projectToArchive))
+            advanceUntilIdle()
+
+            val durableArchive = repository.catalogToLoad
+            assertEquals(initial, staleDuplicateViewModel.state.value.catalog)
+            assertEquals(1, repository.savedCatalogs.size)
+
+            staleDuplicateViewModel.duplicateProject(
+                DuplicateProjectCommand(projectToArchive.id, "Must Not Be Created"),
+            )
+            advanceUntilIdle()
+
+            assertEquals(durableArchive, repository.catalogToLoad)
+            assertEquals(durableArchive, archiveViewModel.state.value.catalog)
+            assertEquals(durableArchive, staleDuplicateViewModel.state.value.catalog)
+            assertEquals(listOf("Surviving Project"), durableArchive.projects.map { it.name })
+            assertEquals(projectToArchive, durableArchive.archivedProjects.single().project)
+            assertEquals(1, repository.savedCatalogs.size)
+            assertEquals(0, duplicateIdCalls)
+            assertEquals(0, duplicateClockCalls)
+            assertEquals(1L, staleDuplicateViewModel.state.value.catalogMutationCompletionCount)
+            assertEquals(
+                "Project '${projectToArchive.id}' was not found.",
+                staleDuplicateViewModel.state.value.notice,
+            )
+        }
+
+    @Test
+    fun `archive action persists before publishing and selects the next active project`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val initial = catalogWithProjects("Archive Me", "Next Active", "Last Active")
+            val repository = FakeProjectRepository(initial).apply {
+                saveDelayMillis = 50L
+            }
+            val viewModel = createViewModel(repository)
+            advanceUntilIdle()
+
+            viewModel.archiveProject(ArchiveProjectCommand(initial.projects.first()))
+            runCurrent()
+
+            assertTrue(viewModel.state.value.isSavingCatalog)
+            assertEquals(initial, viewModel.state.value.catalog)
+            assertTrue(repository.savedCatalogs.isEmpty())
+
+            advanceUntilIdle()
+
+            val state = viewModel.state.value
+            val archived = state.catalog.archivedProjects.single()
+            assertFalse(state.isSavingCatalog)
+            assertEquals(listOf("Next Active", "Last Active"), state.catalog.projects.map { it.name })
+            assertEquals("Next Active", state.selectedProject?.name)
+            assertEquals(initial.projects.first(), archived.project)
+            assertEquals(10_000L, archived.archivedAtEpochMillis)
+            assertEquals(0, archived.originalProjectIndex)
+            assertEquals(state.catalog, repository.savedCatalogs.single())
+            assertEquals(1L, state.catalogMutationCompletionCount)
+            assertEquals(
+                AppUiEffect.ShowNotice("Project moved to the local archive."),
+                state.pendingEffect,
+            )
+        }
+
+    @Test
+    fun `archive save failure retains the complete prior catalog`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val initial = catalogWithProjects("Durable Project", "Fallback Project")
+            val repository = FakeProjectRepository(initial).apply {
+                saveError = ProjectStorageException("Archive could not be written.")
+            }
+            val viewModel = createViewModel(repository)
+            advanceUntilIdle()
+
+            viewModel.archiveProject(ArchiveProjectCommand(initial.projects.first()))
+            advanceUntilIdle()
+
+            val state = viewModel.state.value
+            assertEquals(initial, state.catalog)
+            assertTrue(state.catalog.archivedProjects.isEmpty())
+            assertEquals(1L, state.catalogMutationCompletionCount)
+            assertEquals("Archive could not be written.", state.storageError)
+            assertFalse(state.isSavingCatalog)
+            assertTrue(repository.savedCatalogs.isEmpty())
+        }
+
+    @Test
+    fun `stale archive cannot move a project whose durable RF graph changed`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val initial = catalogWithProjects("Shared RF Project")
+            val repository = FakeProjectRepository(initial)
+            val staleArchiveViewModel = createViewModel(repository)
+            val peerRfViewModel = createViewModel(repository)
+            advanceUntilIdle()
+            val expectedSnapshot = initial.projects.single()
+
+            peerRfViewModel.addRfPath(
+                RfPathDraft().toCommand(expectedSnapshot.id).getOrThrow(),
+            )
+            advanceUntilIdle()
+            val latestProject = repository.catalogToLoad.projects.single()
+            repository.saveError = ProjectStorageException(
+                "A rejected no-op archive must not attempt a catalog write.",
+            )
+
+            staleArchiveViewModel.archiveProject(ArchiveProjectCommand(expectedSnapshot))
+            advanceUntilIdle()
+
+            val state = staleArchiveViewModel.state.value
+            assertEquals(listOf(latestProject), state.catalog.projects)
+            assertTrue(state.catalog.archivedProjects.isEmpty())
+            assertEquals(1, repository.savedCatalogs.size)
+            assertEquals(1L, state.catalogMutationCompletionCount)
+            assertNull(state.storageError)
+            assertEquals(
+                "The project changed in local storage. Review its latest details and " +
+                    "archive it again.",
+                state.notice,
+            )
+        }
+
+    @Test
+    fun `concurrent archive attempts commit once and both observe the durable archive`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val initial = catalogWithProjects("Shared Archive Target", "Surviving Project")
+            val repository = FakeProjectRepository(initial)
+            val firstViewModel = createViewModel(repository)
+            val secondViewModel = createViewModel(repository)
+            advanceUntilIdle()
+            val command = ArchiveProjectCommand(initial.projects.first())
+
+            firstViewModel.archiveProject(command)
+            secondViewModel.archiveProject(command)
+            advanceUntilIdle()
+
+            val durable = repository.catalogToLoad
+            assertEquals(listOf("Surviving Project"), durable.projects.map { it.name })
+            assertEquals("Shared Archive Target", durable.archivedProjects.single().project.name)
+            assertEquals(durable, firstViewModel.state.value.catalog)
+            assertEquals(durable, secondViewModel.state.value.catalog)
+            assertEquals(1, repository.savedCatalogs.size)
+            assertEquals("Project moved to the local archive.", firstViewModel.state.value.notice)
+            assertEquals(
+                "The project is already in the local archive.",
+                secondViewModel.state.value.notice,
+            )
+        }
+
+    @Test
+    fun `restore action persists the archived aggregate at its prior position and selects it`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val source = catalogWithProjects("Restore Me", "Active Project")
+            val archived = ArchivedProject(
+                project = source.projects.first(),
+                archivedAtEpochMillis = 9_000L,
+                originalProjectIndex = 0,
+            )
+            val initial = ProjectCatalog(
+                selectedProjectId = source.projects.last().id,
+                projects = listOf(source.projects.last()),
+                archivedProjects = listOf(archived),
+            )
+            val repository = FakeProjectRepository(initial).apply {
+                saveDelayMillis = 50L
+            }
+            val viewModel = createViewModel(repository)
+            advanceUntilIdle()
+
+            viewModel.restoreProject(RestoreProjectCommand(archived))
+            runCurrent()
+
+            assertTrue(viewModel.state.value.isSavingCatalog)
+            assertEquals(initial, viewModel.state.value.catalog)
+
+            advanceUntilIdle()
+
+            val state = viewModel.state.value
+            assertEquals(listOf("Restore Me", "Active Project"), state.catalog.projects.map { it.name })
+            assertTrue(state.catalog.archivedProjects.isEmpty())
+            assertEquals(archived.project.id, state.catalog.selectedProjectId)
+            assertSame(archived.project, state.catalog.projects.first())
+            assertEquals(state.catalog, repository.savedCatalogs.single())
+            assertEquals(
+                AppUiEffect.ShowNotice("Project restored from the local archive."),
+                state.pendingEffect,
+            )
+        }
+
+    @Test
+    fun `stale restore refreshes the archive without attempting a write`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val project = catalogWithProjects("Archived Project").projects.single()
+            val reviewed = ArchivedProject(project, 8_000L, 0)
+            val initial = ProjectCatalog(archivedProjects = listOf(reviewed))
+            val repository = FakeProjectRepository(initial)
+            val viewModel = createViewModel(repository)
+            advanceUntilIdle()
+            val changed = reviewed.copy(archivedAtEpochMillis = 9_000L)
+            repository.catalogToLoad = initial.copy(archivedProjects = listOf(changed))
+            repository.saveError = ProjectStorageException(
+                "A rejected no-op restore must not attempt a catalog write.",
+            )
+
+            viewModel.restoreProject(RestoreProjectCommand(reviewed))
+            advanceUntilIdle()
+
+            val state = viewModel.state.value
+            assertEquals(listOf(changed), state.catalog.archivedProjects)
+            assertTrue(state.catalog.projects.isEmpty())
+            assertTrue(repository.savedCatalogs.isEmpty())
+            assertNull(state.storageError)
+            assertEquals(
+                "The archived project changed in local storage. Review its latest details and " +
+                    "restore it again.",
+                state.notice,
+            )
+        }
+
+    @Test
+    fun `concurrent restore attempts commit once and both observe the active project`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val project = catalogWithProjects("Shared Restore Target").projects.single()
+            val archived = ArchivedProject(project, 8_000L, 0)
+            val initial = ProjectCatalog(archivedProjects = listOf(archived))
+            val repository = FakeProjectRepository(initial)
+            val firstViewModel = createViewModel(repository)
+            val secondViewModel = createViewModel(repository)
+            advanceUntilIdle()
+            val command = RestoreProjectCommand(archived)
+
+            firstViewModel.restoreProject(command)
+            secondViewModel.restoreProject(command)
+            advanceUntilIdle()
+
+            val durable = repository.catalogToLoad
+            assertEquals(listOf(project), durable.projects)
+            assertTrue(durable.archivedProjects.isEmpty())
+            assertEquals(project.id, durable.selectedProjectId)
+            assertEquals(durable, firstViewModel.state.value.catalog)
+            assertEquals(durable, secondViewModel.state.value.catalog)
+            assertEquals(1, repository.savedCatalogs.size)
+            assertEquals(
+                "Project restored from the local archive.",
+                firstViewModel.state.value.notice,
+            )
+            assertEquals(
+                "The project is already active in the local catalog.",
+                secondViewModel.state.value.notice,
+            )
         }
 
     @Test
@@ -964,6 +1238,7 @@ class AppViewModelTest {
             RfCalculator.linkBudget(input)
         },
         clock: EpochMillisClock = EpochMillisClock { 10_000L },
+        projectDuplicationIdGenerator: ProjectDuplicationIdGenerator? = null,
     ): AppViewModel {
         val dispatchers = AppCoroutineDispatchers(
             storage = mainDispatcherRule.dispatcher,
@@ -980,10 +1255,11 @@ class AppViewModelTest {
                 dispatchers = dispatchers,
                 projectCreator = projectCreator,
                 linkBudgetCalculator = calculator,
-                projectDuplicationIdGenerator = ProjectDuplicationIdGenerator {
-                    duplicationSequence += 1
-                    "duplicate-test-$duplicationSequence"
-                },
+                projectDuplicationIdGenerator = projectDuplicationIdGenerator
+                    ?: ProjectDuplicationIdGenerator {
+                        duplicationSequence += 1
+                        "duplicate-test-$duplicationSequence"
+                    },
                 clock = clock,
             ),
         )

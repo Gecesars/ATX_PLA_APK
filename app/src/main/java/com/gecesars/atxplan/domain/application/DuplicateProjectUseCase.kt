@@ -75,7 +75,12 @@ class DuplicateProjectUseCase(
             "Generated project ID must be non-blank, trimmed, and no longer than " +
                 "$MAX_PROJECT_ID_LENGTH characters, with no control characters."
         }
-        require(catalog.projects.none { project -> project.id == duplicatedProjectId }) {
+        require(
+            catalog.projects.none { project -> project.id == duplicatedProjectId } &&
+                catalog.archivedProjects.none { archived ->
+                    archived.project.id == duplicatedProjectId
+                },
+        ) {
             "Generated project ID '$duplicatedProjectId' already exists in the catalog."
         }
 

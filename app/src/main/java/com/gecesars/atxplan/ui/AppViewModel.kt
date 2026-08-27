@@ -9,11 +9,15 @@ import com.gecesars.atxplan.data.project.ProjectRepository
 import com.gecesars.atxplan.data.project.ProjectStorageException
 import com.gecesars.atxplan.domain.application.AppUseCases
 import com.gecesars.atxplan.domain.application.AddRfPathCommand
+import com.gecesars.atxplan.domain.application.ArchiveProjectCommand
+import com.gecesars.atxplan.domain.application.ArchiveProjectStatus
 import com.gecesars.atxplan.domain.application.DeleteProjectCommand
 import com.gecesars.atxplan.domain.application.DeleteProjectStatus
 import com.gecesars.atxplan.domain.application.DuplicateProjectCommand
 import com.gecesars.atxplan.domain.application.RenameProjectCommand
 import com.gecesars.atxplan.domain.application.RenameProjectStatus
+import com.gecesars.atxplan.domain.application.RestoreProjectCommand
+import com.gecesars.atxplan.domain.application.RestoreProjectStatus
 import com.gecesars.atxplan.domain.model.PlannerProject
 import com.gecesars.atxplan.domain.model.ProjectCatalog
 import com.gecesars.atxplan.domain.rf.LinkBudgetInput
@@ -35,6 +39,10 @@ sealed interface AppUiAction {
     data class RenameProject(val command: RenameProjectCommand) : AppUiAction
 
     data class DuplicateProject(val command: DuplicateProjectCommand) : AppUiAction
+
+    data class ArchiveProject(val command: ArchiveProjectCommand) : AppUiAction
+
+    data class RestoreProject(val command: RestoreProjectCommand) : AppUiAction
 
     data class DeleteProject(val command: DeleteProjectCommand) : AppUiAction
 
@@ -118,6 +126,8 @@ class AppViewModel(
             is AppUiAction.CreateProject -> handleCreateProject(action.name, action.customer)
             is AppUiAction.RenameProject -> handleRenameProject(action.command)
             is AppUiAction.DuplicateProject -> handleDuplicateProject(action.command)
+            is AppUiAction.ArchiveProject -> handleArchiveProject(action.command)
+            is AppUiAction.RestoreProject -> handleRestoreProject(action.command)
             is AppUiAction.DeleteProject -> handleDeleteProject(action.command)
             is AppUiAction.SelectProject -> handleSelectProject(action.projectId)
             is AppUiAction.CalculateLinkBudget -> handleCalculateLinkBudget(action.input)
@@ -137,6 +147,14 @@ class AppViewModel(
 
     fun duplicateProject(command: DuplicateProjectCommand) {
         onAction(AppUiAction.DuplicateProject(command))
+    }
+
+    fun archiveProject(command: ArchiveProjectCommand) {
+        onAction(AppUiAction.ArchiveProject(command))
+    }
+
+    fun restoreProject(command: RestoreProjectCommand) {
+        onAction(AppUiAction.RestoreProject(command))
     }
 
     fun deleteProject(command: DeleteProjectCommand) {
@@ -256,6 +274,72 @@ class AppViewModel(
         }
     }
 
+    private fun handleArchiveProject(command: ArchiveProjectCommand) {
+        persistCatalogMutation { current ->
+            val result = useCases.archiveProject(current, command)
+            when (result.status) {
+                ArchiveProjectStatus.ARCHIVED -> CatalogMutation(
+                    updatedCatalog = result.catalog,
+                    successEffect = AppUiEffect.ShowNotice(
+                        "Project moved to the local archive.",
+                    ),
+                )
+                ArchiveProjectStatus.STALE_PROJECT -> CatalogMutation(
+                    updatedCatalog = result.catalog,
+                    noChangeEffect = AppUiEffect.ShowNotice(
+                        "The project changed in local storage. Review its latest details and " +
+                            "archive it again.",
+                    ),
+                )
+                ArchiveProjectStatus.ALREADY_ARCHIVED -> CatalogMutation(
+                    updatedCatalog = result.catalog,
+                    noChangeEffect = AppUiEffect.ShowNotice(
+                        "The project is already in the local archive.",
+                    ),
+                )
+                ArchiveProjectStatus.NOT_FOUND -> CatalogMutation(
+                    updatedCatalog = result.catalog,
+                    noChangeEffect = AppUiEffect.ShowNotice(
+                        "The project no longer exists in local storage.",
+                    ),
+                )
+            }
+        }
+    }
+
+    private fun handleRestoreProject(command: RestoreProjectCommand) {
+        persistCatalogMutation { current ->
+            val result = useCases.restoreProject(current, command)
+            when (result.status) {
+                RestoreProjectStatus.RESTORED -> CatalogMutation(
+                    updatedCatalog = result.catalog,
+                    successEffect = AppUiEffect.ShowNotice(
+                        "Project restored from the local archive.",
+                    ),
+                )
+                RestoreProjectStatus.STALE_ARCHIVE -> CatalogMutation(
+                    updatedCatalog = result.catalog,
+                    noChangeEffect = AppUiEffect.ShowNotice(
+                        "The archived project changed in local storage. Review its latest " +
+                            "details and restore it again.",
+                    ),
+                )
+                RestoreProjectStatus.ALREADY_ACTIVE -> CatalogMutation(
+                    updatedCatalog = result.catalog,
+                    noChangeEffect = AppUiEffect.ShowNotice(
+                        "The project is already active in the local catalog.",
+                    ),
+                )
+                RestoreProjectStatus.NOT_FOUND -> CatalogMutation(
+                    updatedCatalog = result.catalog,
+                    noChangeEffect = AppUiEffect.ShowNotice(
+                        "The archived project no longer exists in local storage.",
+                    ),
+                )
+            }
+        }
+    }
+
     private fun handleDeleteProject(command: DeleteProjectCommand) {
         persistCatalogMutation { current ->
             val result = useCases.deleteProject(current, command)
@@ -277,6 +361,13 @@ class AppViewModel(
                     updatedCatalog = result.catalog,
                     noChangeEffect = AppUiEffect.ShowNotice(
                         "The project no longer exists in local storage.",
+                    ),
+                )
+                DeleteProjectStatus.ARCHIVED -> CatalogMutation(
+                    updatedCatalog = result.catalog,
+                    noChangeEffect = AppUiEffect.ShowNotice(
+                        "The project is archived in local storage. Restore it before permanent " +
+                            "deletion.",
                     ),
                 )
             }
@@ -372,7 +463,10 @@ class AppViewModel(
                         val requested = try {
                             mutation(latestCatalog)
                         } catch (error: Exception) {
-                            throw CatalogMutationRejected(error)
+                            throw CatalogMutationRejected(
+                                latestCatalog = latestCatalog,
+                                cause = error,
+                            )
                         }
                         requestedMutation = requested
                         didCommitChange = requested != null &&
@@ -417,6 +511,7 @@ class AppViewModel(
                                     isSavingCatalog = false,
                                     catalogMutationCompletionCount =
                                         it.catalogMutationCompletionCount + 1L,
+                                    catalog = rejected.latestCatalog,
                                     pendingEffect = AppUiEffect.ShowNotice(
                                         rejected.cause?.message ?: "Invalid project data.",
                                     ),
@@ -453,7 +548,10 @@ class AppViewModel(
         val didCommitChange: Boolean,
     )
 
-    private class CatalogMutationRejected(cause: Throwable) : RuntimeException(cause)
+    private class CatalogMutationRejected(
+        val latestCatalog: ProjectCatalog,
+        cause: Throwable,
+    ) : RuntimeException(cause)
 
     private fun storageProblem(
         code: AppProblemCode,

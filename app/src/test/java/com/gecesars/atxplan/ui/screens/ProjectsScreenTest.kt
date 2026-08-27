@@ -1,5 +1,6 @@
 package com.gecesars.atxplan.ui.screens
 
+import com.gecesars.atxplan.domain.model.ArchivedProject
 import com.gecesars.atxplan.domain.model.ProjectFactory
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -35,7 +36,58 @@ class ProjectsScreenTest {
     }
 
     @Test
-    fun `delete saved state key has a fixed bound for an untrusted imported id`() {
+    fun `archive impact reports every retained collection without deletion language`() {
+        val project = ProjectFactory.demonstration(nowEpochMillis = 1L)
+
+        val summary = projectArchiveImpactSummary(project)
+
+        assertEquals(
+            "Archiving this project retains 1 network, 3 sites, 3 sectors, " +
+                "0 receivers, and 2 study summaries in the local catalog.",
+            summary,
+        )
+        assertFalse(summary.contains("removes", ignoreCase = true))
+        assertFalse(summary.contains("deletes", ignoreCase = true))
+    }
+
+    @Test
+    fun `archive disclosure describes its exact local recovery boundary`() {
+        listOf(false, true).forEach { useShortLayout ->
+            val disclosure = projectArchiveDisclosure(useShortLayout).lowercase()
+
+            assertTrue(disclosure.contains("reversible"))
+            assertTrue(disclosure.contains("local catalog"))
+            assertTrue(disclosure.contains("backup"))
+            assertTrue(disclosure.contains("export"))
+            assertTrue(disclosure.contains("synchronization"))
+            assertTrue(disclosure.contains("permanently deleted"))
+        }
+    }
+
+    @Test
+    fun `archived section title exposes its count compactly`() {
+        assertEquals("Archived Projects (0)", archivedProjectsSectionTitle(0))
+        assertEquals("Archived Projects (12)", archivedProjectsSectionTitle(12))
+    }
+
+    @Test
+    fun `restore accessibility description bounds an imported project name`() {
+        val importedName = "R".repeat(10_000)
+        val archivedProject = ArchivedProject(
+            project = ProjectFactory.demonstration(nowEpochMillis = 1L).copy(name = importedName),
+            archivedAtEpochMillis = 2L,
+            originalProjectIndex = 0,
+        )
+
+        val description = archivedProjectRestoreDescription(archivedProject)
+
+        assertTrue(description.startsWith("Restore archived project "))
+        assertTrue(description.length <= "Restore archived project ".length + 160)
+        assertFalse(description.contains(importedName))
+    }
+
+    @Test
+    fun `project saved state key has a fixed bound for an untrusted imported id`() {
         val importedId = "x".repeat(100_000)
         val key = projectSavedStateKey(importedId)
 
@@ -46,7 +98,7 @@ class ProjectsScreenTest {
     }
 
     @Test
-    fun `delete reviewed fingerprint changes with the complete project snapshot`() {
+    fun `reviewed fingerprint changes with the complete project snapshot`() {
         val reviewed = ProjectFactory.demonstration(nowEpochMillis = 1L)
         val changed = reviewed.copy(notes = "Concurrent change")
 

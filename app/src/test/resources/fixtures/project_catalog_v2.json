@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 2,
+  "selectedProjectId": "schema-2-project",
+  "projects": [
+    {
+      "id": "schema-2-project",
+      "name": "Schema 2 Mountain Path",
+      "customer": "Fixture Carrier",
+      "notes": "Schema 2 migration fixture",
+      "createdAtEpochMillis": 3000,
+      "updatedAtEpochMillis": 4000,
+      "isDemonstration": false,
+      "networks": [
+        {
+          "id": "schema-2-network",
+          "name": "Schema 2 FWA Network",
+          "system": "FWA",
+          "downlinkFrequencyMHz": 3550.125,
+          "bandwidthMHz": 100.0
+        }
+      ],
+      "sites": [
+        {
+          "id": "schema-2-site",
+          "name": "Schema 2 Summit",
+          "location": {
+            "latitude": -23.55052,
+            "longitude": -46.63331
+          },
+          "groundElevationM": 760.5,
+          "notes": "Synthetic fixture location",
+          "sectors": [
+            {
+              "id": "schema-2-sector",
+              "name": "Schema 2 TX",
+              "active": true,
+              "azimuthDegrees": 315.0,
+              "electricalTiltDegrees": -2.0,
+              "antennaHeightM": 42.0,
+              "transmitPowerDbm": 44.0,
+              "antennaGainDbi": 11.5,
+              "feederLossDb": 1.75,
+              "frequencyMHz": 3550.125,
+              "networkId": "schema-2-network"
+            }
+          ]
+        }
+      ],
+      "studies": [
+        {
+          "id": "schema-2-study",
+          "name": "Schema 2 Point-to-Point Study",
+          "type": "POINT_TO_POINT",
+          "status": "READY",
+          "updatedAtEpochMillis": 4000
+        }
+      ],
+      "receivers": [
+        {
+          "id": "schema-2-receiver",
+          "name": "Schema 2 CPE",
+          "networkId": "schema-2-network",
+          "location": {
+            "latitude": -23.45910,
+            "longitude": -46.75550
+          },
+          "antennaHeightM": 12.5,
+          "antennaGainDbi": 18.0,
+          "systemLossDb": 1.5,
+          "sensitivityDbm": -96.0,
+          "noiseFigureDb": 6.0,
+          "azimuthDegrees": 135.0,
+          "electricalTiltDegrees": 0.0,
+          "notes": "Synthetic schema 2 endpoint"
+        }
+      ]
+    }
+  ]
+}

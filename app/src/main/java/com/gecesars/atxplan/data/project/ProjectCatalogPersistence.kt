@@ -18,6 +18,7 @@ import java.nio.charset.CodingErrorAction
 
 internal const val MAX_PROJECT_CATALOG_BYTES: Int = 5 * 1024 * 1024
 private const val LEGACY_PROJECT_CATALOG_SCHEMA_VERSION = 1
+private const val RF_REFERENCE_PROJECT_CATALOG_SCHEMA_VERSION = 2
 
 /**
  * Byte-oriented storage boundary. Implementations must either replace the complete payload or
@@ -84,9 +85,26 @@ internal class ProjectCatalogCodec(
 
 /** Ordered, explicit migrations from every supported durable schema to the current schema. */
 internal class ProjectCatalogMigrator {
+    /**
+     * Archive data is a schema-3 contract. Remove a same-named injected field from older
+     * documents before decoding so untrusted schema-1/2 input cannot smuggle archived projects
+     * into the current model or fail validation through data that did not exist in that schema.
+     */
+    fun documentForDecode(document: EncodedProjectCatalog): EncodedProjectCatalog {
+        if (document.schemaVersion >= PROJECT_CATALOG_SCHEMA_VERSION) return document
+        val jsonObject = document.jsonElement as? JsonObject ?: return document
+        return document.copy(
+            jsonElement = JsonObject(
+                jsonObject.filterKeys { key -> key != ARCHIVED_PROJECTS_FIELD_NAME },
+            ),
+        )
+    }
+
     fun migrate(catalog: ProjectCatalog, sourceSchemaVersion: Int): ProjectCatalog =
         when (sourceSchemaVersion) {
-            LEGACY_PROJECT_CATALOG_SCHEMA_VERSION -> migrateVersion1ToVersion2(catalog)
+            LEGACY_PROJECT_CATALOG_SCHEMA_VERSION ->
+                migrateVersion2ToVersion3(migrateVersion1ToVersion2(catalog))
+            RF_REFERENCE_PROJECT_CATALOG_SCHEMA_VERSION -> migrateVersion2ToVersion3(catalog)
             PROJECT_CATALOG_SCHEMA_VERSION -> catalog
             else -> throw IllegalArgumentException(
                 "No catalog migration exists from schema $sourceSchemaVersion.",
@@ -95,11 +113,23 @@ internal class ProjectCatalogMigrator {
 
     private fun migrateVersion1ToVersion2(catalog: ProjectCatalog): ProjectCatalog =
         catalog.copy(
-            schemaVersion = 2,
+            schemaVersion = RF_REFERENCE_PROJECT_CATALOG_SCHEMA_VERSION,
             // The v2 serializer supplies empty receivers and null sector network references for
             // v1 payloads. copy() retains every decoded legacy field and those explicit defaults.
             projects = catalog.projects,
+            archivedProjects = emptyList(),
         )
+
+    private fun migrateVersion2ToVersion3(catalog: ProjectCatalog): ProjectCatalog =
+        catalog.copy(
+            schemaVersion = PROJECT_CATALOG_SCHEMA_VERSION,
+            // Archive storage did not exist before v3. Never promote an injected legacy field.
+            archivedProjects = emptyList(),
+        )
+
+    private companion object {
+        const val ARCHIVED_PROJECTS_FIELD_NAME = "archivedProjects"
+    }
 }
 
 /**
@@ -181,7 +211,7 @@ internal class ProjectCatalogPersistence(
         }
 
         val decodedCatalog = try {
-            codec.decode(document)
+            codec.decode(migrator.documentForDecode(document))
         } catch (error: SerializationException) {
             throw ProjectStorageException(
                 "The local catalog could not be parsed. The original file was preserved.",
