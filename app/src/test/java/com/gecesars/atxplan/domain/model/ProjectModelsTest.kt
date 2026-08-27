@@ -14,9 +14,9 @@ import org.junit.Test
 
 class ProjectModelsTest {
     @Test
-    fun `new catalogs use schema 4`() {
-        assertEquals(4, PROJECT_CATALOG_SCHEMA_VERSION)
-        assertEquals(4, ProjectCatalog().schemaVersion)
+    fun `new catalogs use schema 5`() {
+        assertEquals(5, PROJECT_CATALOG_SCHEMA_VERSION)
+        assertEquals(5, ProjectCatalog().schemaVersion)
         assertTrue(ProjectCatalog().archivedProjects.isEmpty())
     }
 

@@ -304,7 +304,7 @@ class DeleteProjectUseCaseTest {
     }
 
     @Test
-    fun `schema 4 JSON round trip preserves the deletion result catalog`() {
+    fun `schema 5 JSON round trip preserves the deletion result catalog`() {
         val first = richProject(id = "project-first", name = "First")
         val target = richProject(id = "project-target", name = "Target")
         val result = useCase(
@@ -317,7 +317,7 @@ class DeleteProjectUseCaseTest {
             json.encodeToString(result.catalog),
         )
 
-        assertEquals(4, restored.schemaVersion)
+        assertEquals(5, restored.schemaVersion)
         assertEquals(result.catalog, restored)
         assertEquals(first.id, restored.selectedProjectId)
         assertEquals(listOf(first), restored.projects)

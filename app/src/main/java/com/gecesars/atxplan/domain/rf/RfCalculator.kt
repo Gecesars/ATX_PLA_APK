@@ -1,8 +1,10 @@
 package com.gecesars.atxplan.domain.rf
 
+import kotlinx.serialization.Serializable
 import kotlin.math.log10
 import kotlin.math.sqrt
 
+@Serializable
 data class LinkBudgetInput(
     val frequencyMHz: Double,
     val distanceKm: Double,
@@ -17,11 +19,13 @@ data class LinkBudgetInput(
     val receiverNoiseFigureDb: Double,
 )
 
+@Serializable
 enum class LinkBudgetExecutionMode {
     LOCAL,
     REMOTE,
 }
 
+@Serializable
 data class LinkBudgetProvenance(
     val modelId: String,
     val modelLabel: String,
@@ -31,6 +35,8 @@ data class LinkBudgetProvenance(
     val dataProvenance: String,
     val methodology: String,
     val limitations: String,
+    val modelEdition: String = "",
+    val referenceUrl: String? = null,
 ) {
     init {
         require(modelId.isNotBlank()) { "The calculation model requires an ID." }
@@ -40,9 +46,13 @@ data class LinkBudgetProvenance(
         require(dataProvenance.isNotBlank()) { "Calculation data provenance must be explicit." }
         require(methodology.isNotBlank()) { "The calculation methodology must be explicit." }
         require(limitations.isNotBlank()) { "The calculation limitations must be explicit." }
+        require(referenceUrl == null || referenceUrl.startsWith("https://")) {
+            "A calculation reference URL must use HTTPS."
+        }
     }
 }
 
+@Serializable
 data class LinkBudgetResult(
     val freeSpacePathLossDb: Double,
     val eirpDbm: Double,
@@ -55,23 +65,66 @@ data class LinkBudgetResult(
 )
 
 object RfCalculator {
+    const val CURRENT_IMPLEMENTATION_ID = "atx-plan-kotlin-fspl-v2"
+
+    val PROVENANCE: LinkBudgetProvenance = RfCalculatorVersion2.provenance
+
+    fun linkBudget(input: LinkBudgetInput): LinkBudgetResult =
+        linkBudgetForImplementation(CURRENT_IMPLEMENTATION_ID, input)
+
+    /** Keeps durable study records bound to the exact implementation that created them. */
+    internal fun linkBudgetForImplementation(
+        implementationId: String,
+        input: LinkBudgetInput,
+    ): LinkBudgetResult = when (implementationId) {
+        RfCalculatorVersion2.implementationId -> RfCalculatorVersion2.linkBudget(input)
+        else -> throw IllegalArgumentException(
+            "The RF calculation implementation '$implementationId' is not supported.",
+        )
+    }
+
+    fun freeSpacePathLossDb(frequencyMHz: Double, distanceKm: Double): Double =
+        RfCalculatorVersion2.freeSpacePathLossDb(frequencyMHz, distanceKm)
+
+    fun firstFresnelRadiusM(
+        frequencyMHz: Double,
+        totalDistanceKm: Double,
+        pathFraction: Double,
+    ): Double = RfCalculatorVersion2.firstFresnelRadiusM(
+        frequencyMHz = frequencyMHz,
+        totalDistanceKm = totalDistanceKm,
+        pathFraction = pathFraction,
+    )
+
+    fun thermalNoiseFloorDbm(bandwidthHz: Double, receiverNoiseFigureDb: Double): Double =
+        RfCalculatorVersion2.thermalNoiseFloorDbm(bandwidthHz, receiverNoiseFigureDb)
+}
+
+/** Frozen implementation used by persisted schema-5 link studies. Add a new object for new math. */
+private object RfCalculatorVersion2 {
+    const val implementationId = "atx-plan-kotlin-fspl-v2"
     private const val SPEED_OF_LIGHT_M_PER_S = 299_792_458.0
     private const val FSPL_KM_MHZ_CONSTANT_DB = 32.447783
     private const val THERMAL_NOISE_DENSITY_DBM_HZ = -174.0
 
-    val PROVENANCE = LinkBudgetProvenance(
-        modelId = "itu-r-p525-fspl",
-        modelLabel = "P.525/FSPL",
-        implementationId = "atx-plan-kotlin-fspl-v1",
-        implementationLabel = "ATX Plan Kotlin RF engine v1",
+    val provenance = LinkBudgetProvenance(
+        modelId = "itu-r-p525-5-fspl",
+        modelLabel = "ITU-R P.525-5 / FSPL",
+        implementationId = implementationId,
+        implementationLabel = "ATX Plan Kotlin RF engine v2",
         executionMode = LinkBudgetExecutionMode.LOCAL,
         dataProvenance = "No external datasets",
+        modelEdition = "Recommendation ITU-R P.525-5 (11/2024)",
+        referenceUrl = "https://www.itu.int/rec/R-REC-P.525-5-202411-I/en",
         methodology =
             "FSPL = 32.447783 + 20·log₁₀(f MHz) + 20·log₁₀(d km). " +
-                "The displayed radius is the first Fresnel zone at the path midpoint.",
+                "Noise = -174 dBm/Hz + 10·log₁₀(B Hz) + receiver NF, using the nominal " +
+                "290 K engineering approximation. The displayed radius is the first Fresnel " +
+                "zone at the path midpoint with c = 299792458 m/s.",
         limitations =
-            "This baseline does not include terrain, Earth curvature, clutter, antenna patterns, " +
-                "or variability. These terms are never assumed silently.",
+            "This baseline does not include terrain, Earth-curvature clearance, effective-Earth " +
+                "propagation, clutter, antenna patterns, or variability. These terms are never " +
+                "assumed silently.",
     )
 
     fun linkBudget(input: LinkBudgetInput): LinkBudgetResult {
@@ -96,7 +149,7 @@ object RfCalculator {
             ),
             noiseFloorDbm = noiseFloorDbm,
             signalToNoiseDb = receivedPowerDbm - noiseFloorDbm,
-            provenance = PROVENANCE,
+            provenance = provenance,
         )
     }
 

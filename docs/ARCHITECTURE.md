@@ -1,6 +1,6 @@
 # Android Architecture
 
-> Architecture baseline and target as of August 27, 2026. The repository contains a working Compose application, typed/saveable Navigation 3 routes, explicit UDF and use-case boundaries, a transactional schema-4 project store with a small atomic index and immutable SHA-256 project documents, explicit 1→2→3→4, 2→3→4, and 3→4 migrations, a content-addressed artifact-store foundation, validated RF-domain models, transactional project lifecycle operations, independent RF-entity CRUD, a combined Add RF Path editor, a bounded RF calculator, and a separate feature ViewModel/repository for the bundled verified IBGE 2022 attribute index. Sections labeled Target or Planned describe the next architecture and must not be read as delivered functionality.
+> Architecture baseline and target as of August 27, 2026. The repository contains a working Compose application, typed/saveable Navigation 3 routes, explicit UDF and use-case boundaries, a transactional schema-5 project store with a small atomic index and immutable SHA-256 project documents, explicit 1→2→3→4→5, 2→3→4→5, 3→4→5, and indexed 4→5 migrations, a content-addressed artifact-store foundation, validated RF-domain models, transactional project lifecycle operations, independent RF-entity CRUD, a combined Add RF Path editor, a bounded RF calculator, a persisted project-linked ITU-R P.525-5 study, and a separate feature ViewModel/repository for the bundled verified IBGE 2022 attribute index. Sections labeled Target or Planned describe the next architecture and must not be read as delivered functionality; the project-link slice is not terrain-aware analysis or complete RadioPlanner parity.
 
 ## 1. Architecture goals
 
@@ -40,11 +40,13 @@ flowchart TD
     PROJECTS --> DELETE[Delete Project dialog]
     VM --> USE[AppUseCases]
     USE --> PORT[ProjectRepository]
-    USE --> RF[RfCalculator]
+    USE --> LINK[ProjectLinkStudyEngine]
+    LINK --> RF[RfCalculator]
+    USE --> RF
     USE --> DOMAIN[Project domain models]
     PORT --> FILE[FileProjectRepository]
-    FILE --> PERSIST[ProjectCatalogPersistence]
-    PERSIST --> JSON[(Schema-4 index and immutable project documents)]
+    FILE --> PERSIST[ProjectStorePersistence]
+    PERSIST --> JSON[(Store-schema-1 index and schema-5 immutable project documents)]
     DVM --> IPORT[IbgeDatasetRepository]
     IPORT --> IREPO[BundledIbgeDatasetRepository]
     IREPO --> IASSET[(Manifest, NOTICE, content-addressed asset)]
@@ -61,15 +63,15 @@ flowchart TD
 | Navigation 3 | Foundation | Serializable stable-ID `AtxRoute` keys, a saveable typed back stack, safe unknown-route fallback, and nested RF-path and project-name editors have saved-instance-state tests. | Deep links, deleted-ID UX, route ownership, and true process-death/rotation/device-matrix flows remain. |
 | State management | Foundation | Immutable state, explicit actions/effects, structured problems/recovery, injected use cases/dispatchers, an explicit mutation-completion counter, cancellation, and ViewModel tests. `DataCatalogViewModel` separately owns IBGE preparation, retry, debounced search, stale-query rejection, and selection state. Serialized project-catalog mutations rebase generically on the latest repository catalog and publish only after persistence; rejected/no-op outcomes return that latest catalog without writing. | Most project/RF screens still share `AppViewModel`; cross-instance catalog observation, DI/scoping, durable jobs, broader observability, accessibility, and system recovery remain. |
 | Repository boundary | Delivered | `ProjectRepository` separates project state from file persistence, and `IbgeDatasetRepository` separates the Data Catalog from the packaged SQLite implementation. | Generic user/acquired datasets, map sources, elevation, studies, and exchange still need their target ports. |
-| Project persistence | Delivered baseline | Strict UTF-8 schema-4 JSON uses a 5 MiB atomic control index and immutable, independently verified project documents bounded to a conservative 8 MiB each. Explicit 1→2→3→4, 2→3→4, and 3→4 migration writes and verifies documents before publishing the index. A process mutex protects latest-catalog read-transform-write transactions; migration, fault, no-op, corruption, and reuse tests are present. | Unreadable/future-store recovery/export, reachability cleanup, backup, multi-process policy, storage-exhaustion/interruption system evidence, lazy document loading, and the long-term operational-store decision remain. |
-| Artifact persistence | Foundation | A private streaming content-addressed store validates operation limits and optional expected SHA-256, syncs and promotes immutable blobs, deduplicates verified content, and reports available, missing, or corrupt states. | No import/attachment UI, document-reference transaction, export, ownership policy, garbage collection, or study-result workflow consumes this store yet. |
-| Domain | Foundation | Schema-4 active/archive invariants, `ArchivedProject`, project/network/site/sector/receiver/study models, expanded RP3-parity carrier fields, scenario/GIS/antenna/coverage/regulatory records, artifact references, import provenance, engineering value types, and cross-reference validation are implemented. Separate dataset-domain models describe the delivered global IBGE package and municipality summaries. | Project GIS/coverage records remain persistence foundations, not delivered parsers, sector geometry, propagation results, or regulatory conclusions. The release-managed IBGE reference index is not a project GIS layer. Remaining legacy primitive entity fields still need staged migration. |
+| Project persistence | Delivered baseline | Strict UTF-8 project-schema-5 JSON uses a 5 MiB atomic store-schema-1 control index and immutable, independently verified project documents bounded to a conservative 8 MiB each. Explicit 1→2→3→4→5, 2→3→4→5, and 3→4→5 project migrations are present. Indexed project-schema-4 migration writes and verifies all replacement project-schema-5 documents before atomically publishing a replacement store-schema-1 index declaring project schema 5; failure leaves the previous index declaring project schema 4 authoritative. A process mutex protects latest-catalog read-transform-write transactions; migration, fault, no-op, corruption, and reuse tests are present. | Unreadable/future-store recovery/export, reachability cleanup, backup, multi-process policy, storage-exhaustion/interruption system evidence, lazy document loading, and the long-term operational-store decision remain. |
+| Artifact persistence | Foundation | A private streaming content-addressed store validates operation limits and optional expected SHA-256, syncs and promotes immutable blobs, deduplicates verified content, and reports available, missing, or corrupt states. | No import/attachment UI, document-reference transaction, export, ownership policy, garbage collection, or artifact-backed study-result workflow consumes this store yet. The bounded project-link result is stored inside its immutable-addressed project document. |
+| Domain | Foundation | Schema-5 active/archive invariants, `ArchivedProject`, project/network/site/sector/receiver/study models, expanded RP3-parity carrier fields, scenario/GIS/antenna/coverage/regulatory records, artifact references, import provenance, engineering value types, and cross-reference validation are implemented. `ProjectLinkStudyRecord` holds immutable project/network/endpoint/effective-input snapshots, bounded geometry, P.525-5 results/provenance, warnings, and a canonical SHA-256 fingerprint and must match one completed point-to-point summary. Separate dataset-domain models describe the delivered global IBGE package and municipality summaries. | Project GIS/coverage records remain persistence foundations, not delivered parsers, sector geometry, terrain-aware propagation results, or regulatory conclusions. The release-managed IBGE reference index is not a project GIS layer. Remaining legacy primitive entity fields still need staged migration. |
 | Project workflow | Delivered bounded slices | Create/select/rename/duplicate/archive/restore/delete use cases operate through repository transactions. Archive retains the complete aggregate with its timestamp/original index while excluding it from active selection/metrics; restore reinserts it deterministically and selects it. Complete reviewed snapshots protect archive, restore, and logical hard delete from stale concurrent state. | Local archive is not backup/export/sync or hard-delete recovery. Unreadable/future-store recovery, physical orphan cleanup, and source-lineage/duplication-provenance remain. |
-| RF entity workflow | Delivered bounded slice | A project-scoped compact manager creates, edits, and deletes networks, sites, sectors, and receivers independently. Exact entity snapshots reject stale edits/deletes; referenced network deletion is blocked with sector/receiver counts, site-sector cascade requires explicit confirmation, and preserved per-network receiver profiles are surfaced as read-only compatibility references. The combined Add RF Path flow remains available. | Individual compatibility-profile editing/removal, terrain link studies, bulk editing/import, artifact workflows, and full process-death/device-matrix proof remain. |
-| RF engine | Delivered | Pure Kotlin FSPL, EIRP, received power, margin, midpoint Fresnel radius, noise floor, and SNR; results carry explicit in-memory model and implementation provenance. | Synchronous bounded calculation only; no terrain, geodesy, patterns, or persisted execution manifest. |
+| RF entity workflow | Delivered bounded slice | A project-scoped compact manager creates, edits, and deletes networks, sites, sectors, and receivers independently. Exact entity snapshots reject stale edits/deletes; referenced network deletion is blocked with sector/receiver counts, site-sector cascade requires explicit confirmation, and preserved per-network receiver profiles are surfaced as read-only compatibility references. The combined Add RF Path flow remains available, and the Studies screen can select a stored sector plus a network-compatible stored receiver. | Individual compatibility-profile editing/removal, terrain-aware link studies, bulk editing/import, artifact workflows, and full process-death/device-matrix proof remain. |
+| RF engine | Delivered bounded slice | Pure Kotlin `RfCalculator` implements ITU-R P.525-5 free-space loss, EIRP, received power, margin, midpoint Fresnel radius, noise floor, and SNR with explicit provenance. `ProjectLinkStudyEngine` adds fixed-radius mean-Earth great-circle endpoint distance/bearing, relative azimuth/elevation, and an inclined distance based only on the AGL antenna-height difference, then creates a persisted immutable fingerprinted record. | The stored transmitter-site ground elevation is snapshotted but not evaluated; receiver ground elevation, DEM sampling, and a terrain profile are not delivered. Earth-curvature clearance/effective-Earth propagation, LOS, Fresnel clearance, diffraction, clutter, directional patterns, coverage, export, `.rp3`, and full RadioPlanner parity are also absent. |
 | Engineering map | Foundation | Compose renders an offline Web Mercator coordinate grid using pure domain camera math, project fit, pan, anchored pinch zoom, metric scale, site selection, active azimuth rays, an accessible site list, and a coordinate-only durable site move. The UI explicitly distinguishes stored elevation from `NoData` and states that movement does not resample it. | No basemap package, third-party tiles, DEM sampling, terrain, IBGE polygon/map integration, GIS features, receiver move, or map performance gate is delivered. It is not a cartographic basemap or GIS engine. |
 | Dataset catalog | Delivered bounded slice | The screen prepares and verifies one release-managed national IBGE package, reports checking/installing/validating/ready/failed state, exposes retry, and performs normalized offline municipality queries with explicit source, CRS, storage, hash, `NoData`, licensing, and geometry limits. | No arbitrary inventory, user import, remote acquisition, removal, rollback, sector polygons, exact containment, map rendering, or population-by-coverage exists. |
-| Tests | Delivered baseline | The current 233 JVM tests and 62 Android 16/API 36 emulator instrumented tests pass. They cover domain/RF/geographic/dataset validation, indexed migration/document/artifact faults, project lifecycle and independent RF CRUD conflicts, location-only site moves, forms, ViewModel behavior including separate Data Catalog state, Kotlin/XML/JSON/TXT language rules, real IBGE asset installation/query/recovery/storage behavior, compact Catalog/RF-assets reachability, Engineering Map interaction/restoration, unavailable targets, validation, draft protection, and Activity recreation. | A fresh physical run of the expanded instrumented suite, API 23 dataset execution, broader accessibility automation, performance, export, true system-reclaim process death, and a formal device matrix remain. |
+| Tests | Delivered baseline | The current 252 JVM tests pass with no failures or skips. They include mean-Earth/antimeridian/AGL-only geometry, compatibility profiles, fingerprint/round-trip/result invariants and tolerances, use-case rejection paths, duplication history, persist-before-publish and failed-save behavior, and indexed schema-4-to-5 migration ordering/failure preservation. The complete 68-test Android 16/API 36 emulator suite is green at system font scale 1.30, including 5 Studies Compose cases and 1 real-storage schema-4-to-5 migration/integrity/reopen test. | A fresh physical run, API 23 dataset execution, broader accessibility automation, performance, export, true system-reclaim process death, and a formal device matrix remain. |
 | Build automation | Delivered baseline | CI runs unit tests, lint, and debug/test APK assembly; current local lint has 0 errors and 12 dependency/tooling warnings. | Connected test and signed release are outside current CI. |
 | Product language | Delivered baseline | Production UI/errors/demo/tests are English and a unit test scans Kotlin, XML, JSON, and text production resources for common Portuguese terms while allowing official identifiers. | The blacklist is partial and must cover every future user-visible resource type. |
 
@@ -149,11 +151,11 @@ ATX Plan is an information-dense engineering tool, so compact layout is a functi
 
 The current compact pass is measured on a physical Android 16 phone at approximately 394 dp portrait width and `fontScale = 1.15`. Responsive fallbacks were also inspected in portrait at `fontScale = 1.30`, after which the original setting was restored. Baseline landscape checks verified the short-height navigation rail, wide feature layouts, and the resized project-name editor with the IME before rotation was restored. This physical evidence remains bounded to one reference device.
 
-The compact adaptive Duplicate Project and Delete Project dialogs were separately validated on an Android 16/API 36 emulator at 1080 × 2400 pixels and 420 dpi, at `fontScale = 1.0` and `fontScale = 1.30`, in portrait and short landscape with Gboard open and closed. Archive Project/actions and the archived-project card were reachable in portrait at font scales 1.0, 1.30, and 2.0 and in landscape at 1.30. Manage RF Assets has an automated 360 × 480 dp/font-scale-1.30 check for horizontal tabs, a scrollable long editor, persistent actions, and blocked reference deletion, plus a 1080 × 2400 visual inspection. The Data Catalog has a separate 360 × 480 dp/font-scale-1.30 test for Ready/search/selection/limitations and preparation/failure/query states; a fresh 1080 × 2400/font-scale-1.30 manual run verified dense metrics, source/limitation text, unaccented search, four visible results, and selected envelope details. The exact `DELETE` field remained fully visible, and actions remained reachable through bounded responsive/scroll layouts. No system font-scale override or clamp was used. These observations are not a complete accessibility or device matrix.
+The compact adaptive Duplicate Project and Delete Project dialogs were separately validated on an Android 16/API 36 emulator at 1080 × 2400 pixels and 420 dpi, at `fontScale = 1.0` and `fontScale = 1.30`, in portrait and short landscape with Gboard open and closed. Archive Project/actions and the archived-project card were reachable in portrait at font scales 1.0, 1.30, and 2.0 and in landscape at 1.30. Manage RF Assets has an automated 360 × 480 dp/font-scale-1.30 check for horizontal tabs, a scrollable long editor, persistent actions, and blocked reference deletion, plus a 1080 × 2400 visual inspection. The Data Catalog has a separate 360 × 480 dp/font-scale-1.30 test for Ready/search/selection/limitations and preparation/failure/query states; a fresh 1080 × 2400/font-scale-1.30 manual run verified dense metrics, source/limitation text, unaccented search, four visible results, and selected envelope details. Five project-link cases at 360 × 480 dp/font-scale-1.30 cover searchable selectors and save action, complete saved details, lazy timestamp-ordered history, collision-safe sector identity, and the incompatible-receiver empty state. The exact `DELETE` field remained fully visible, and actions remained reachable through bounded responsive/scroll layouts. No system font-scale override or clamp was used. These observations are not a complete accessibility or device matrix.
 
-A bounded manual force-stop/relaunch retained an archived record. After restore, a second force-stop/relaunch retained that project as active and selected. This confirms the observed legacy schema-3 path that is now an input to schema-4 migration; it is not proof of Android Backup, schema-4 interruption recovery at every checkpoint, system-reclaim restoration, every process-death timing, or broader device support.
+A bounded manual force-stop/relaunch retained an archived record. After restore, a second force-stop/relaunch retained that project as active and selected. This confirms the previously observed legacy schema-3 source path; current code chains it through schema 4 to schema 5. It is not proof of Android Backup, schema-5 interruption recovery at every checkpoint, system-reclaim restoration, every process-death timing, or broader device support.
 
-A separate API 36 cold-launch check placed the schema-2 fixture in private app storage and observed its promotion to a schema-4 index and immutable project document while retaining project identity, receiver, and network references. Interruption behavior is covered by JVM fault injection, not by this bounded manual check.
+A separate historical API 36 cold-launch check placed the schema-2 fixture in private app storage and observed its promotion to a schema-4 index and immutable project document while retaining project identity, receiver, and network references. A current real-storage instrumentation test promotes an indexed project-schema-4 fixture to project schema 5 and verifies integrity, injected-field stripping, absence of `AtomicFile` sidecar residue, and stable reopen while intentionally retaining the immutable legacy document. JVM fault injection covers document-before-index ordering and failed publication.
 
 ### Domain/application layer
 
@@ -330,24 +332,25 @@ Adoption closes only after rotation, process death, invalid deep link, and phone
 
 The current pure Kotlin/serialization domain includes:
 
-- schema-4 `ProjectCatalog` with active and archived collections, selected active-project ID, uniqueness across both collections, and stale-selection fallback that never selects an archived project;
+- schema-5 `ProjectCatalog` with active and archived collections, selected active-project ID, uniqueness across both collections, and stale-selection fallback that never selects an archived project;
 - `ArchivedProject`, which retains one unchanged `PlannerProject` aggregate plus a non-negative archive timestamp and original active-list index used as a bounded restoration hint;
-- `PlannerProject` with identity, name, customer, notes, timestamps, demo flag, networks, sites, receivers, study summaries, antenna/GIS/scenario/coverage/regulatory records, artifact references, and optional import provenance;
+- `PlannerProject` with identity, name, customer, notes, timestamps, demo flag, networks, sites, receivers, study summaries, bounded project-link records, antenna/GIS/scenario/coverage/regulatory records, artifact references, and optional import provenance;
 - `RfNetwork` with system, active state, downlink/uplink configuration, duplex/threshold/channel-plan/technology carrier fields, and legacy payload retention;
 - `RadioSystem` values for generic, FM, TV, LTE, 5G NR, land mobile, FWA, and air-to-ground;
 - `RadioSite` with validated location, optional elevation/tower height, and unique sectors;
 - `GeoPoint` latitude/longitude validation;
 - `Sector` with active flag, azimuth, electrical tilt, transmit/receive chain fields, antenna-pattern references, equipment metadata, frequency, and a backward-compatible nullable network reference;
 - `Receiver`/CPE with typed coordinate, height, gain, system loss, sensitivity, noise figure, azimuth/tilt, equipment metadata, per-network profiles, and a required project-local network reference;
-- aggregate duplicate and referential-integrity validation for RF entities, antenna patterns, scenarios, project records, and artifacts;
+- aggregate duplicate and referential-integrity validation for RF entities, antenna patterns, scenarios, project records, and artifacts, including unique project-link IDs and an exact matching completed point-to-point summary for every project-link record;
 - a validated `DuplicateProjectCommand`/result/use case that reads the latest durable source inside the transaction, generates a fresh route-safe root project ID and root timestamps, preserves the project-scoped nested graph and references, appends the copy, and selects it without changing the source;
 - an `ArchiveProjectCommand`/result/status/use case that treats the complete reviewed active aggregate as an optimistic conflict token, retains it unchanged with an archive timestamp/original index, removes it from active selection/metrics, and selects the next, previous, or empty active state deterministically;
 - a `RestoreProjectCommand`/result/status/use case that compares the complete reviewed archive record, reinserts its unchanged aggregate at the original index clamped to the latest active list, removes the archive record, and selects the restored project;
 - a `DeleteProjectCommand`/result/status/use case that treats the complete reviewed aggregate as an optimistic conflict token, compares it structurally with the latest durable project, returns unchanged stale/missing outcomes, and atomically removes only an unchanged target while preserving other aggregate instances/order and choosing the next, previous, or empty selection deterministically;
 - a validated `AddRfPathCommand`/result/use case that generates stable IDs and creates one linked network, site/sector, and receiver as one immutable catalog transition;
 - typed independent RF mutation commands/results for all network/site/sector/receiver create, update, and delete operations, with immutable IDs, exact-snapshot conflict detection, project-local reference validation, network deletion impact, and explicitly confirmed site-sector cascade;
-- versioned carrier records for antenna patterns, GIS layers, study scenarios, coverage snapshots, regulatory records, project artifacts, and import provenance; these are storage/domain foundations and do not claim that parsers, datasets, studies, or regulatory decisions exist;
-- `StudySummary`, study types, and lifecycle statuses;
+- versioned carrier records for antenna patterns, GIS layers, study scenarios, coverage snapshots, regulatory records, project artifacts, and import provenance; these are storage/domain foundations and do not claim that their parsers, datasets, engines, or regulatory decisions exist;
+- `ProjectLinkStudyRecord`, which immutably stores project/network/endpoint/effective-link-budget snapshots, mean-Earth geometry, the P.525-5 result/provenance, warnings, terrain `NO_DATA`, and a canonical lowercase SHA-256 fingerprint over the input and geometry;
+- `StudySummary`, study types, and lifecycle statuses, including the matching completed point-to-point summary persisted with each bounded project-link record;
 - factory-created user projects and a synthetic demonstration project.
 
 An enum entry or summary does not mean the corresponding study engine exists.
@@ -377,7 +380,7 @@ Delivered engineering value objects:
 
 They validate construction and deserialization and retain primitive numeric JSON representation. The combined Add RF Path command uses them at the UI/domain boundary. Existing legacy `RfNetwork`, `GeoPoint`, and `Sector` persisted fields remain primitive `Double` values and require staged migration rather than an incompatible rewrite.
 
-Still-planned unit/domain types include linear power, dBW, elevation angle, a complete CRS/NoData policy, engine ID/version, and executable study/result provenance values.
+Still-planned unit/domain types include linear power, dBW, a reusable elevation-angle type, a complete CRS/NoData policy, and generalized engine/request/result/manifest provenance values beyond the bounded project-link record.
 
 Target conventions:
 
@@ -392,40 +395,54 @@ Target conventions:
 - NoData, below threshold, not computed, and failed are distinct;
 - grids preserve CRS, transform, extent, resolution, NoData, and resampling policy.
 
-Study inputs reference immutable snapshots. Recalculation creates a new execution/result and preserves prior evidence.
+The delivered project-link input is an immutable snapshot and each successful run appends a new record instead of overwriting prior evidence. That behavior is not yet generalized to other study types or exported artifact manifests.
 
 ## 10. RF computation
 
-### Delivered calculator
+### Delivered calculator and bounded project-link engine
 
-`RfCalculator` is pure Kotlin and validates finite/positive operational inputs. It currently computes:
+`RfCalculator` is pure Kotlin and validates finite/positive operational inputs. Its provenance identifies Recommendation ITU-R P.525-5 (11/2024). It computes:
 
 ```text
 FSPL = 32.447783 + 20 log10(f_MHz) + 20 log10(d_km)
 EIRP = TX power - TX loss + TX antenna gain
 Received = EIRP - FSPL - additional loss + RX gain - RX loss
-Noise = -174 + 10 log10(bandwidth_Hz) + receiver noise figure
+Noise = -174 dBm/Hz + 10 log10(bandwidth_Hz) + receiver noise figure
 Margin = received power - receiver sensitivity
 SNR = received power - noise floor
-Fresnel radius = sqrt(lambda * d1 * d2 / total distance)
+Fresnel radius = sqrt(lambda * d1 * d2 / total distance), lambda = 299,792,458 m/s / f_Hz
 ```
 
-The current screen calculates the first Fresnel radius at the path midpoint. Tests cover the 900 MHz/10 km FSPL baseline, explicit signs, invalid physical inputs, thermal-noise bandwidth conversion, and result terms.
+The `-174 dBm/Hz` thermal-noise density is an explicit nominal-290 K approximation. The manual screen calculates the first Fresnel radius at the path midpoint; this scalar is not a clearance result. Tests cover the 900 MHz/10 km FSPL baseline, explicit signs, invalid physical inputs, thermal-noise bandwidth conversion, result terms, and P.525-5 provenance.
 
-### Not delivered by the calculator
+`ProjectLinkStudyEngine` is the delivered bounded project-linked adapter:
 
-- endpoint coordinate distance or geodesy;
-- Earth curvature or effective-Earth factor;
-- terrain profile, LOS, or Fresnel clearance;
+- it accepts a selected stored project/site/sector and a stored receiver that directly references, or has a compatibility profile for, the sector network;
+- it snapshots project/network names and IDs, endpoint coordinates/names/IDs, stored transmitter ground elevation without evaluating it, sector azimuth/tilt, AGL antenna heights, compatibility-profile presence, actual non-null overrides, and all effective link-budget values;
+- `MeanEarthGeodesy` calculates spherical great-circle horizontal distance and initial bearing from the endpoint coordinates using the fixed 6,371,008.8 m mean-Earth radius;
+- relative azimuth and elevation angle are derived from that endpoint geometry;
+- inclined distance is `hypot(horizontalDistance, receiverAgl - transmitterAgl)`, so site elevation, receiver ground elevation, DEM data, terrain, and Earth-curvature clearance do not enter the distance;
+- the inclined distance becomes the P.525-5 distance, with zero additional path loss; midpoint Fresnel radius remains a scalar radius, not a clearance computation;
+- the immutable record stores the result/provenance, `NO_DATA` terrain state, warnings, and a canonical SHA-256 input/geometry fingerprint. Construction recomputes geometry, the fingerprint, and the RF result to reject inconsistent serialized records.
+
+`RunProjectLinkStudyUseCase` compares the complete reviewed project with the latest project, rejects missing endpoints, incompatible networks, and ID collisions, and atomically appends the record plus one matching completed point-to-point summary. `AppViewModel` runs this through the repository transaction, blocks a concurrent project-link save, publishes the committed catalog only after persistence, and retains the previous durable catalog on storage failure.
+
+### Not delivered by the bounded RF slice
+
+- ellipsoidal or terrain-sampled path geodesy beyond the delivered fixed-radius endpoint inverse;
+- DEM/site-ground-elevation geometry or a terrain profile;
+- Earth-curvature clearance or effective-Earth factor;
+- LOS or Fresnel clearance along a path;
 - clutter/building/indoor loss derived from datasets;
 - HRP/VRP or directional antenna gain;
 - diffraction, troposcatter, fading, time/location variability;
 - Hata, 3GPP, ITM, P.1812, P.1546, P.528, or FCC curves;
-- persisted request/result, engine edition, provenance manifest, or parity bench.
+- portable/exported request/result package, artifact-backed manifest, or desktop/RadioPlanner parity bench;
+- coverage calculation, `.rp3` interchange, or full RadioPlanner parity.
 
 ### Application use cases
 
-Delivered use cases load and transactionally update the catalog, create/select/rename/duplicate/archive/restore/delete projects, add the combined RF path, and calculate the bounded link budget. `RenameProjectUseCase` changes the validated name, may advance the update timestamp, preserves project identity and its nested graph, and rejects a command whose expected durable name is stale. `DuplicateProjectUseCase` intentionally resolves the source from the latest durable catalog inside the repository transaction. It normalizes and validates the requested name, creates a fresh route-safe root ID and fresh root creation/update timestamps, deep-copies the aggregate containers while retaining project-scoped nested IDs, references, data, order, demonstration flag, and study timestamps, leaves the source unchanged, appends the copy, and selects it. It does not yet record source-project lineage or a duplication-provenance marker.
+Delivered use cases load and transactionally update the catalog, create/select/rename/duplicate/archive/restore/delete projects, add the combined RF path, calculate the manual bounded link budget, and run/persist the bounded project-linked P.525-5 study described above. `RenameProjectUseCase` changes the validated name, may advance the update timestamp, preserves project identity and its nested graph, and rejects a command whose expected durable name is stale. `DuplicateProjectUseCase` intentionally resolves the source from the latest durable catalog inside the repository transaction. It normalizes and validates the requested name, creates a fresh route-safe root ID and fresh root creation/update timestamps, deep-copies the aggregate containers while retaining project-scoped nested IDs, references, data, order, demonstration flag, and study timestamps, leaves the source unchanged, appends the copy, and selects it. Existing immutable project-link records keep their original snapshotted source project ID/name and are not rewritten to the new root ID. That preserves calculation history but does not create a separate aggregate-level source-project lineage or duplication-provenance marker.
 
 `ArchiveProjectUseCase` compares the complete reviewed active aggregate with the latest durable aggregate. A successful transition moves that unchanged aggregate into `archivedProjects` with an injected archive timestamp and its original active index, removes it from active selection and metrics, and applies the same deterministic next/previous/empty selection policy used by permanent deletion. `RestoreProjectUseCase` compares the complete reviewed `ArchivedProject` record with the latest durable record, reinserts the unchanged aggregate at its original index clamped to the latest active-list size, removes the archive record, and selects the restored project. Stale, already-archived/already-active, and missing outcomes are typed no-ops. The UI publishes archive/restore success only when the committed catalog makes it observable.
 
@@ -437,11 +454,10 @@ Remaining target use cases include:
 
 ```text
 UpdateProjectMetadata
-Create/Edit/Delete Network, Site, Sector, and Receiver
 InstallUserDatasetPackage
 BuildTerrainProfile
 ImportAntennaPattern
-RunLinkStudy
+RunTerrainAwareLinkStudy
 RunCoverageStudy
 CompareSnapshots
 ImportMeasurements
@@ -455,26 +471,27 @@ Use cases accept domain commands, define transaction boundaries, return typed pr
 
 ### Current repository
 
-`ProjectRepository` exposes `loadCatalog()` and `updateCatalog(transform)`. The compatibility view remains one complete in-memory `ProjectCatalog`, while schema-4 persistence splits its physical ownership by project. The update contract loads the latest durable view, applies one pure transform, avoids storage writes when the result is equal, writes only changed project documents, and publishes a replacement index only after every referenced document is durable. `AppViewModel` uses this generic rebase boundary for project operations, Add RF Path, and independent RF mutations; it publishes only the repository-returned catalog after persistence succeeds.
+`ProjectRepository` exposes `loadCatalog()` and `updateCatalog(transform)`. The compatibility view remains one complete in-memory `ProjectCatalog`, while schema-5 persistence splits its physical ownership by project. The update contract loads the latest durable view, applies one pure transform, avoids storage writes when the result is equal, writes only changed project documents, and publishes a replacement index only after every referenced document is durable. `AppViewModel` uses this generic rebase boundary for project operations, Add RF Path, independent RF mutations, and the bounded project-link study; it publishes only the repository-returned catalog after persistence succeeds.
 
 `FileProjectRepository` also implements `ProjectArtifactRepository`. The Android-independent `ProjectStorePersistence`, legacy migrator, document codecs, and content-addressed artifact store:
 
-- retain `atx_project_catalog_v1.json` as the control filename so installed schema-1/2/3 catalogs are discovered, but schema 4 stores a small index there;
+- retain `atx_project_catalog_v1.json` as the control filename so installed project-schema-1/2/3 catalogs and indexed project-schema-4 stores are discovered, while the current format stores a small store-schema-1 index declaring project schema 5 there;
 - store immutable project documents under hash-only `atx_project_documents/sha256/<prefix>/<digest>.json` paths;
 - store immutable artifact blobs under hash-only `atx_project_artifacts/sha256/<prefix>/<digest>.blob` paths and use a private staging directory;
-- use strict UTF-8 and reject unknown keys for schema-4 index/documents; the bounded legacy decoder tolerates historical unknown keys only after version-aware sanitization;
+- use strict UTF-8 and reject unknown keys for the current store-schema-1 index and project-schema-5 documents; the bounded legacy decoder tolerates historical unknown keys only after version-aware sanitization;
 - seed the demonstration catalog only when no control payload exists;
 - bound the index/legacy input to 5 MiB and each project document to 8 MiB; artifact calls require an explicit streaming limit no greater than 512 MiB;
 - reject future or malformed store/document schemas, invalid UTF-8/JSON, unknown store discriminators, identity mismatch, byte-length mismatch, and SHA-256 mismatch without repairing or overwriting the committed index;
-- explicitly migrate schema 1 through 2 and 3 to 4, schema 2 through 3 to 4, or schema 3 directly to 4;
-- remove fields that did not belong to each legacy contract before decode so untrusted old input cannot inject schema-4 content;
+- explicitly migrate schema 1 through 2, 3, and 4 to 5; schema 2 through 3 and 4 to 5; schema 3 through 4 to 5; or schema 4 directly to 5;
+- remove fields that did not belong to each legacy contract before decode so untrusted old input cannot inject current-schema content;
+- when an existing indexed project-schema-4 store is loaded, write and verify every migrated project-schema-5 immutable document first and publish the replacement store-schema-1 index declaring project schema 5 only as the final atomic commit point;
 - write, sync, read back, and verify immutable project documents before atomically publishing the index; a failure can leave only an unreachable immutable file while the prior control bytes remain authoritative;
 - reuse unchanged document references for selection, archive, restore, and other index-only transitions;
 - validate and optionally match expected artifact hashes, deduplicate only verified content, and distinguish available, missing, and corrupt artifact states;
 - use `AtomicFile.startWrite/finishWrite/failWrite` plus `fd.sync` for the control index and project documents;
 - share a process-wide mutex across repository instances and run storage work through the injected storage dispatcher.
 
-Automated storage tests cover legacy 1/2/3 migration, hostile legacy-field injection, failed document/index publication, unknown/future discriminators, stale selection, missing/corrupt documents, hash and size checks, immutable-document reuse, no-op writes, artifact limits/deduplication/corruption, and latest-catalog transactions. `AtomicFile` and immutable addressing protect the in-process Android path; the mutex is not a multi-process locking policy, and no reachability garbage collector is delivered.
+Automated storage tests cover legacy 1/2/3/4 migration to schema 5, indexed schema-4 document-before-index ordering and failed-promotion preservation, hostile legacy-field injection, failed document/index publication, unknown/future discriminators, stale selection, missing/corrupt documents, hash and size checks, immutable-document reuse, no-op writes, artifact limits/deduplication/corruption, and latest-catalog transactions. `AtomicFile` and immutable addressing protect the in-process Android path; the mutex is not a multi-process locking policy, and no reachability garbage collector is delivered.
 
 ### Current bundled IBGE repository
 
@@ -532,11 +549,12 @@ private no-backup files/
   datasets/ibge/<database-sha256>.sqlite
 ```
 
-The control file is the schema-4 project commit point. Project documents and artifact blobs are immutable content-addressed files. The separate IBGE manifest is the release-time asset commit point, and its content-addressed payload installs as a recomputable read-only database. These formats support current project aggregates, bounded artifacts, and one global reference dataset; they are not a lazy project database, job store, portable project container, or general user/acquired raster/dataset lifecycle.
+The control file is a store-schema-1 index carrying project schema 5 and is the current project commit point. Project documents and artifact blobs are immutable content-addressed files. The bounded project-link record is serialized inside its project document; it is not a separate artifact or portable export. The separate IBGE manifest is the release-time asset commit point, and its content-addressed payload installs as a recomputable read-only database. These formats support current project aggregates, bounded artifacts, and one global reference dataset; they are not a lazy project database, job store, portable project container, or general user/acquired raster/dataset lifecycle.
 
 ### Current guarantees
 
-- schema 4 is serialized, with fixture-backed 1→2→3→4, 2→3→4, and 3→4 migration;
+- schema 5 is serialized, with fixture-backed 1→2→3→4→5, 2→3→4→5, 3→4→5, and 4→5 migration;
+- indexed project-schema-4 promotion makes every migrated project-schema-5 document durable before publishing the replacement store-schema-1 index declaring project schema 5, and a failed promotion preserves the old authoritative index;
 - changed documents are written, synced, and verified before the atomic index commit;
 - complete read-transform-write catalog mutations are serialized in-process and evaluated against the latest durable catalog;
 - invalid UTF-8, malformed/invalid JSON, unknown/future schema, integrity failure, and failed migration promotion do not replace committed control bytes;
@@ -546,6 +564,7 @@ The control file is the schema-4 project commit point. Project documents and art
 - archive records retain the complete project aggregate, archive timestamp, and original active-list index; archived projects are excluded from active selection/metrics;
 - restore reinserts an unchanged aggregate at a deterministic bounded index and selects it;
 - the ViewModel publishes only the repository-committed catalog, rebases rejected/no-op outcomes without writing, and exposes structured recovery state on storage failure;
+- a successful bounded project-link transaction persists one immutable record and one matching completed point-to-point summary; save failure retains the previous catalog without exposing the uncommitted result;
 - project hard deletion is a complete logical index transition; a failed write retains the previous reachable project aggregate and selection, while physical orphan cleanup is intentionally deferred;
 - the pinned IBGE asset/database identity, counts, source hashes, CRS, attribution, limitations, and sizes are checked before the dataset becomes queryable;
 - bundled-dataset extraction is output-bounded and streamed through a synced staging file with compressed and database hashes before atomic promotion;
@@ -558,7 +577,7 @@ The control file is the schema-4 project commit point. Project documents and art
 - no multi-process locking or external-writer conflict policy;
 - no durable job/checkpoint store;
 - no artifact attachment/import UI, reachability garbage collection, portable export, or external-file ownership/recovery policy;
-- no immutable executable study result consumes the artifact-store foundation;
+- no study result consumes the artifact-store foundation or provides a portable/exported manifest; the bounded project-link result is local project-document data only;
 - project loading still materializes every document into the compatibility catalog view;
 - no approved transition plan for project/job JSON versus Room/SQLite;
 - no selective backup policy because backup is disabled;
@@ -817,7 +836,9 @@ Private Android storage alone is not a claim of application-level encryption. En
 
 ## 21. Reproducibility manifest
 
-Persisted study executions target a manifest such as:
+The delivered schema-5 `ProjectLinkStudyRecord` is an immutable local result record. It contains endpoint/effective-RF snapshots, mean-Earth/AGL-only geometry, engine ID, P.525-5 result provenance and terms, terrain `NO_DATA`, warnings, and a canonical SHA-256 input/geometry fingerprint. Record construction verifies that the fingerprint, geometry, link-budget distance, and recomputed result agree. It does not contain a portable application/build manifest, artifact references, DEM/dataset hashes, export schema, or RadioPlanner parity evidence.
+
+Portable exported study executions still target a manifest such as:
 
 ```json
 {
@@ -843,17 +864,18 @@ Canonical serialization is versioned. Irrelevant timestamps and local paths do n
 
 ### Current evidence
 
-The current automated baseline contains 233 passing JVM tests and 62 passing Android 16/API 36 emulator instrumented tests. The connected run completed on `Medium_Phone_API_36.1` at font scale 1.30 with no failures or skips. Local lint reports 0 errors and 12 dependency/tooling warnings.
+The current JVM baseline contains 252 passing tests with no failures or skips. The complete connected baseline contains 68 Android 16/API 36 emulator tests; that run completed on `Medium_Phone_API_36.1` at system font scale 1.30 with no failures or skips. It includes all 5 `StudiesScreenTest` cases and 1 real-storage `FileProjectRepositoryMigrationTest`. Local lint reports 0 errors and 12 dependency/tooling warnings, and debug/test APK assembly succeeds.
 
-- project/domain tests cover schema-4 defaults, active/archive uniqueness, archive lifecycle metadata, expanded record/reference validation, engineering-value boundaries, legacy compatibility, and exact round trips;
-- application tests cover transactional project lifecycle operations, independent RF-entity create/update/delete, exact-snapshot conflict handling, linked-deletion impact, deterministic Add RF Path success, atomic failure, references, and JSON precision;
-- persistence tests cover 1/2/3→4 migration, hostile legacy-field removal, failed document/index publication, malformed/invalid/future/unknown store data, strict UTF-8, integrity and size limits, immutable-document reuse, artifact deduplication/corruption, atomic write failure, no-op writes, and latest-catalog repository transactions;
-- ViewModel tests cover load/create/select/rename/duplicate/archive/restore/delete/Add RF Path/independent RF mutation transitions, persist-before-publish behavior and RF receipts, generic latest-catalog rebase, structured failures/retry, mutation-completion accounting, ordering/concurrency, stale/repeated/missing outcomes without writes, invalid mutations, calculation cancellation, and stale-result suppression;
-- RF and form tests cover implemented formulas, invalid physical inputs, unit parsing, defaults, and typed command conversion;
+- project/domain tests cover schema-5 defaults, active/archive uniqueness, archive lifecycle metadata, project-link record/summary invariants, engineering-value boundaries, legacy compatibility, canonical fingerprints, and exact round trips;
+- application tests cover transactional project lifecycle operations, independent RF-entity create/update/delete, exact-snapshot conflict handling, linked-deletion impact, deterministic Add RF Path success, and project-link success/stale/missing/incompatible/id-collision outcomes;
+- persistence tests cover 1/2/3/4→5 migration, indexed schema-4 document-before-index promotion and failed-promotion preservation, hostile legacy-field removal, failed document/index publication, malformed/invalid/future/unknown store data, strict UTF-8, integrity and size limits, immutable-document reuse, artifact deduplication/corruption, atomic write failure, no-op writes, and latest-catalog repository transactions;
+- ViewModel tests cover load/create/select/rename/duplicate/archive/restore/delete/Add RF Path/independent RF/project-link mutation transitions, persist-before-publish behavior and failed project-link storage, RF receipts, generic latest-catalog rebase, structured failures/retry, mutation-completion accounting, ordering/concurrency, stale/repeated/missing outcomes without writes, invalid mutations, calculation cancellation, and stale-result suppression;
+- RF and form tests cover implemented formulas, P.525-5 provenance, mean-Earth endpoint/antimeridian geometry, AGL-only inclined distance, invalid physical inputs, unit parsing, defaults, and typed command conversion;
 - the English-only source test scans production Kotlin, XML, JSON, and text resources for common Portuguese terms while allowing pinned official identifiers;
-- the current 62-test instrumented suite passes on an Android 16/API 36 emulator and covers the Dashboard-to-Studies smoke path, saved-instance-state restoration for supported, unknown, malformed, nested RF-path, nested project-name, and nested RF-assets routes, explicit mutation-completion and transient pending-save recovery, project lifecycle behavior, deterministic selection, create-project → persist-RF-path → Activity recreation, compact RF-assets reachability/reference impact, Engineering Map selection and coordinate editing, stale-write/isolation, draft recovery, inaccessible targets, validation, discard protection, save retry, real IBGE extraction/hash/schema/query/corruption/storage/update behavior, and compact Catalog state/reachability; the preceding 18-test revision passed on the physical Android 16 reference phone;
+- the green complete 68-test instrumented baseline on an Android 16/API 36 emulator covers the Dashboard-to-Studies smoke path, saved-instance-state restoration for supported, unknown, malformed, nested RF-path, nested project-name, and nested RF-assets routes, explicit mutation-completion and transient pending-save recovery, project lifecycle behavior, deterministic selection, create-project → persist-RF-path → Activity recreation, compact RF-assets reachability/reference impact, Engineering Map selection and coordinate editing, stale-write/isolation, draft recovery, inaccessible targets, validation, discard protection, save retry, real IBGE extraction/hash/schema/query/corruption/storage/update behavior, compact Catalog state/reachability, 5 project-link Studies cases, and the real-storage schema-4-to-5 migration; the preceding 18-test revision passed on the physical Android 16 reference phone;
 - manual API 36 emulator checks cover Duplicate Project/Delete Project at font scales 1.0/1.30 in portrait and short landscape with Gboard open/closed, plus Archive Project/actions and the archived-project card in portrait at font scales 1.0/1.30/2.0 and landscape at 1.30;
 - a bounded manual force-stop/relaunch retained the archived record, and a second cycle after restore retained that project as active and selected; this is not Android Backup or system-reclaim restoration proof and does not establish every process-death timing or a support matrix;
+- a bounded manual font-scale-1.30 project-link run saved one stored endpoint result and reopened the same scalar terms, P.525-5/geodesy identities, warnings, and fingerprint after force-stop/relaunch; this is one local-storage observation, not broad process-death or device proof;
 - lint/build evidence remains part of the debug baseline, but accessibility automation, performance, broader device/system flows, and release validation remain open.
 
 ### Target matrix
@@ -898,7 +920,7 @@ Until measured targets exist, absolute requirements are:
 |---|---|---|
 | ADR-A001 | Product license, privacy, English-only policy, device matrix | G0 |
 | ADR-A002 | Navigation 3 deep links, feature ownership, deleted-ID recovery, and system process restoration | G2 |
-| ADR-A003 | Post-schema-4 operational store, Room criteria, reachability cleanup, unreadable/future-store recovery/export, backup, and migration | G3 |
+| ADR-A003 | Post-schema-5 operational store, Room criteria, reachability cleanup, unreadable/future-store recovery/export, backup, and migration | G3 |
 | ADR-A004 | Geographic renderer and offline map format | G4 |
 | ADR-A005 | Managed user/remote dataset acquisition, update, ownership, and removal beyond the bundled IBGE slice | G4 |
 | ADR-A006 | Compute contract and scheduler | G5/G6 |
@@ -934,12 +956,12 @@ Until measured targets exist, absolute requirements are:
 3. split the application-wide ViewModel into feature contracts and introduce durable job/effect/problem contracts as flows grow;
 4. complete deep-link/deleted-ID handling and prove navigation plus durable selection through true process death, rotation, accessibility, and the device matrix;
 5. harden the delivered independent network/site/sector/receiver CRUD with true process-death/device-matrix evidence, then add hard-delete recovery/export and source-lineage policy while staging remaining primitive-field migration;
-6. decide the long-term operational store, artifact ownership/recovery and reachability cleanup, unreadable/future-store recovery/export, backup, and multi-process policy beyond schema 4;
-7. turn the delivered scenario/provenance/artifact carrier records into explicit editors, import adapters, immutable study requests/results, and verified artifact-reference transactions;
+6. decide the long-term operational store, artifact ownership/recovery and reachability cleanup, unreadable/future-store recovery/export, backup, and multi-process policy beyond schema 5;
+7. generalize the delivered bounded project-link snapshot/result and the scenario/provenance/artifact carrier records into explicit editors, other immutable study requests/results, and verified artifact-reference transactions;
 8. place an authorized offline basemap behind an approved package/renderer adapter while retaining the coordinate viewport as the no-data fallback;
 9. add general/user package inventory and acquisition lifecycle, DEM, and an optional licensed census-sector geometry package without overstating the existing attribute index;
-10. extend the current Kotlin RF baseline to project-linked terrain-aware studies;
-11. persist executable study manifests and attach their verified artifacts to project records;
+10. extend the delivered project-linked P.525-5 baseline with DEM-backed ground elevations, terrain sampling, Earth-curvature clearance, LOS/Fresnel clearance, and approved diffraction/clutter/pattern terms;
+11. add portable executable study manifests/exports and attach their verified artifacts to project records; do not treat the local schema-5 record as that exported package;
 12. benchmark before coverage, native code, or an optional service;
 13. extract Gradle modules only after boundaries are proven.
 

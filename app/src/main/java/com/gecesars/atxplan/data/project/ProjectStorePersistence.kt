@@ -84,15 +84,20 @@ internal class ProjectStorePersistence(
             )
         }
 
-        val active = index.projects.map(::loadProject)
+        val active = index.projects.map { reference ->
+            loadProject(reference, index.projectSchemaVersion)
+        }
         val archived = index.archivedProjects.map { archivedReference ->
             ArchivedProject(
-                project = loadProject(archivedReference.project),
+                project = loadProject(
+                    archivedReference.project,
+                    index.projectSchemaVersion,
+                ),
                 archivedAtEpochMillis = archivedReference.archivedAtEpochMillis,
                 originalProjectIndex = archivedReference.originalProjectIndex,
             )
         }
-        val catalog = try {
+        val sourceCatalog = try {
             ProjectCatalog(
                 schemaVersion = index.projectSchemaVersion,
                 selectedProjectId = index.selectedProjectId,
@@ -111,15 +116,37 @@ internal class ProjectStorePersistence(
                 put(archivedReference.project.projectId, archivedReference.project)
             }
         }
-        return LoadedProjectStore(
-            catalog = catalog,
-            reusableDocuments = (active + archived.map(ArchivedProject::project)).associate { project ->
+        val sourceReusableDocuments =
+            (active + archived.map(ArchivedProject::project)).associate { project ->
                 project.id to ReusableProjectDocument(project, references.getValue(project.id))
-            },
+            }
+        if (index.projectSchemaVersion == PROJECT_CATALOG_SCHEMA_VERSION) {
+            return LoadedProjectStore(
+                catalog = sourceCatalog,
+                reusableDocuments = sourceReusableDocuments,
+            )
+        }
+        val migratedCatalog = try {
+            legacyMigrator.migrate(sourceCatalog, index.projectSchemaVersion)
+        } catch (error: Exception) {
+            throw ProjectStorageException(
+                "The indexed project schema is not supported. Existing files were preserved.",
+                error,
+            )
+        }
+        // A previous-schema document cannot be reused under a current-schema index. Write every
+        // migrated immutable document first, then publish the replacement index as the commit point.
+        val migratedDocuments = persistCatalogLocked(migratedCatalog, emptyMap())
+        return LoadedProjectStore(
+            catalog = migratedCatalog,
+            reusableDocuments = migratedDocuments,
         )
     }
 
-    private fun loadProject(reference: ProjectDocumentReference): PlannerProject {
+    private fun loadProject(
+        reference: ProjectDocumentReference,
+        expectedProjectSchemaVersion: Int,
+    ): PlannerProject {
         val payload = try {
             documentStorage.read(reference, MAX_PROJECT_DOCUMENT_BYTES)
         } catch (error: Exception) {
@@ -139,6 +166,11 @@ internal class ProjectStorePersistence(
             throw ProjectStorageException(
                 "Project '${reference.projectId}' contains an invalid document. The index was preserved.",
                 error,
+            )
+        }
+        if (document.projectSchemaVersion != expectedProjectSchemaVersion) {
+            throw ProjectStorageException(
+                "Project '${reference.projectId}' does not match the index project schema.",
             )
         }
         if (document.project.id != reference.projectId) {

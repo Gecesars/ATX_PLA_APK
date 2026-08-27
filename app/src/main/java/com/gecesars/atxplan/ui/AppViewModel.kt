@@ -18,6 +18,8 @@ import com.gecesars.atxplan.domain.application.RenameProjectCommand
 import com.gecesars.atxplan.domain.application.RenameProjectStatus
 import com.gecesars.atxplan.domain.application.RestoreProjectCommand
 import com.gecesars.atxplan.domain.application.RestoreProjectStatus
+import com.gecesars.atxplan.domain.application.RunProjectLinkStudyCommand
+import com.gecesars.atxplan.domain.application.RunProjectLinkStudyStatus
 import com.gecesars.atxplan.domain.application.RfAssetKind
 import com.gecesars.atxplan.domain.application.RfAssetMutationCommand
 import com.gecesars.atxplan.domain.application.RfAssetMutationReceipt
@@ -55,6 +57,8 @@ sealed interface AppUiAction {
 
     data class CalculateLinkBudget(val input: LinkBudgetInput) : AppUiAction
 
+    data class RunProjectLinkStudy(val command: RunProjectLinkStudyCommand) : AppUiAction
+
     data class AddRfPath(val command: AddRfPathCommand) : AppUiAction
 
     data class MutateRfAsset(val command: RfAssetMutationCommand) : AppUiAction
@@ -91,6 +95,7 @@ data class AppUiState(
     val isSavingCatalog: Boolean = false,
     val catalogMutationCompletionCount: Long = 0L,
     val isCalculating: Boolean = false,
+    val isRunningProjectLinkStudy: Boolean = false,
     val catalog: ProjectCatalog = ProjectCatalog(),
     val pendingEffect: AppUiEffect? = null,
     val storageProblem: AppProblem? = null,
@@ -143,6 +148,7 @@ class AppViewModel(
             is AppUiAction.DeleteProject -> handleDeleteProject(action.command)
             is AppUiAction.SelectProject -> handleSelectProject(action.projectId)
             is AppUiAction.CalculateLinkBudget -> handleCalculateLinkBudget(action.input)
+            is AppUiAction.RunProjectLinkStudy -> handleRunProjectLinkStudy(action.command)
             is AppUiAction.AddRfPath -> handleAddRfPath(action.command)
             is AppUiAction.MutateRfAsset -> handleRfAssetMutation(action.command)
             AppUiAction.RetryLoad -> loadCatalog()
@@ -180,6 +186,10 @@ class AppViewModel(
 
     fun calculateLinkBudget(input: LinkBudgetInput) {
         onAction(AppUiAction.CalculateLinkBudget(input))
+    }
+
+    fun runProjectLinkStudy(command: RunProjectLinkStudyCommand) {
+        onAction(AppUiAction.RunProjectLinkStudy(command))
     }
 
     fun addRfPath(command: AddRfPathCommand) {
@@ -484,6 +494,62 @@ class AppViewModel(
         }
     }
 
+    private fun handleRunProjectLinkStudy(command: RunProjectLinkStudyCommand) {
+        val current = mutableState.value
+        if (current.isRunningProjectLinkStudy) {
+            mutableState.update {
+                it.copy(
+                    pendingEffect = AppUiEffect.ShowNotice(
+                        "Another project link study is still being saved.",
+                    ),
+                )
+            }
+            return
+        }
+        mutableState.update { it.copy(isRunningProjectLinkStudy = true) }
+        persistCatalogMutation(projectLinkStudy = true) { catalog ->
+            val mutation = useCases.runProjectLinkStudy(catalog, command)
+            when (mutation.status) {
+                RunProjectLinkStudyStatus.CREATED -> CatalogMutation(
+                    updatedCatalog = mutation.catalog,
+                    successEffect = AppUiEffect.ShowNotice(
+                        "Project link study \"${mutation.record?.name}\" was calculated and saved locally.",
+                    ),
+                )
+                RunProjectLinkStudyStatus.PROJECT_NOT_FOUND -> CatalogMutation(
+                    updatedCatalog = mutation.catalog,
+                    noChangeEffect = AppUiEffect.ShowNotice(
+                        "The selected project no longer exists in local storage.",
+                    ),
+                )
+                RunProjectLinkStudyStatus.STALE -> CatalogMutation(
+                    updatedCatalog = mutation.catalog,
+                    noChangeEffect = AppUiEffect.ShowNotice(
+                        "The project or an endpoint changed in local storage. Review the latest values and run the study again.",
+                    ),
+                )
+                RunProjectLinkStudyStatus.ENDPOINT_NOT_FOUND -> CatalogMutation(
+                    updatedCatalog = mutation.catalog,
+                    noChangeEffect = AppUiEffect.ShowNotice(
+                        "The selected transmitter or receiver no longer exists.",
+                    ),
+                )
+                RunProjectLinkStudyStatus.INCOMPATIBLE_NETWORK -> CatalogMutation(
+                    updatedCatalog = mutation.catalog,
+                    noChangeEffect = AppUiEffect.ShowNotice(
+                        "Select a sector and receiver with a compatible project network.",
+                    ),
+                )
+                RunProjectLinkStudyStatus.ID_COLLISION -> CatalogMutation(
+                    updatedCatalog = mutation.catalog,
+                    noChangeEffect = AppUiEffect.ShowNotice(
+                        "A study ID collision was detected. Run the study again.",
+                    ),
+                )
+            }
+        }
+    }
+
     private fun handleCalculateLinkBudget(input: LinkBudgetInput) {
         calculationJob?.cancel()
         mutableState.update {
@@ -529,6 +595,7 @@ class AppViewModel(
 
     private fun persistCatalogMutation(
         rfRequestId: String? = null,
+        projectLinkStudy: Boolean = false,
         mutation: (ProjectCatalog) -> CatalogMutation?,
     ) {
         viewModelScope.launch {
@@ -544,6 +611,11 @@ class AppViewModel(
                                 it.catalogMutationCompletionCount + 1L,
                             activeRfMutationRequestId = it.activeRfMutationRequestId
                                 .clearedIfCompleted(rfRequestId),
+                            isRunningProjectLinkStudy = if (projectLinkStudy) {
+                                false
+                            } else {
+                                it.isRunningProjectLinkStudy
+                            },
                         )
                     }
                     return@withLock
@@ -598,6 +670,11 @@ class AppViewModel(
                                     committed.rfMutationReceipt ?: it.lastRfMutationReceipt,
                                 activeRfMutationRequestId = it.activeRfMutationRequestId
                                     .clearedIfCompleted(rfRequestId),
+                                isRunningProjectLinkStudy = if (projectLinkStudy) {
+                                    false
+                                } else {
+                                    it.isRunningProjectLinkStudy
+                                },
                             )
                         }
                     }
@@ -615,6 +692,11 @@ class AppViewModel(
                                     ),
                                     activeRfMutationRequestId = it.activeRfMutationRequestId
                                         .clearedIfCompleted(rfRequestId),
+                                    isRunningProjectLinkStudy = if (projectLinkStudy) {
+                                        false
+                                    } else {
+                                        it.isRunningProjectLinkStudy
+                                    },
                                 )
                             }
                         } else {
@@ -630,6 +712,11 @@ class AppViewModel(
                                     ),
                                     activeRfMutationRequestId = it.activeRfMutationRequestId
                                         .clearedIfCompleted(rfRequestId),
+                                    isRunningProjectLinkStudy = if (projectLinkStudy) {
+                                        false
+                                    } else {
+                                        it.isRunningProjectLinkStudy
+                                    },
                                 )
                             }
                         }

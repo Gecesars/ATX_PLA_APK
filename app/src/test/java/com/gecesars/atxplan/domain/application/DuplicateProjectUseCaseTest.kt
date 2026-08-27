@@ -22,6 +22,7 @@ import com.gecesars.atxplan.domain.model.StudyStatus
 import com.gecesars.atxplan.domain.model.StudySummary
 import com.gecesars.atxplan.domain.model.StudyType
 import com.gecesars.atxplan.domain.model.TiltDegrees
+import com.gecesars.atxplan.domain.study.ProjectLinkStudyEngine
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotSame
@@ -122,6 +123,47 @@ class DuplicateProjectUseCaseTest {
         assertEquals(2, result.duplicatedProject.networks.size)
         assertEquals(10_000L, result.duplicatedProject.createdAtEpochMillis)
         assertEquals(10_000L, result.duplicatedProject.updatedAtEpochMillis)
+    }
+
+    @Test
+    fun `duplicate preserves immutable study origin instead of rebasing its source snapshot`() {
+        val base = richProject()
+        val site = base.sites.single()
+        val record = ProjectLinkStudyEngine.calculate(
+            id = "link-study-origin",
+            name = "Origin Study",
+            createdAtEpochMillis = 900L,
+            projectId = base.id,
+            projectName = base.name,
+            network = base.networks.single(),
+            site = site,
+            sector = site.sectors.single(),
+            receiver = base.receivers.single(),
+        )
+        val source = base.copy(
+            updatedAtEpochMillis = record.createdAtEpochMillis,
+            studies = base.studies + StudySummary(
+                id = record.id,
+                name = record.name,
+                type = StudyType.POINT_TO_POINT,
+                status = StudyStatus.COMPLETED,
+                updatedAtEpochMillis = record.createdAtEpochMillis,
+            ),
+            linkStudies = listOf(record),
+        )
+
+        val duplicate = useCase(DUPLICATED_PROJECT_ID, 1_000L)(
+            ProjectCatalog(selectedProjectId = source.id, projects = listOf(source)),
+            DuplicateProjectCommand(source.id, "Study Origin Copy"),
+        ).duplicatedProject
+
+        assertEquals(source.linkStudies, duplicate.linkStudies)
+        assertEquals(SOURCE_PROJECT_ID, duplicate.linkStudies.single().input.projectId)
+        assertEquals("Source RF Project", duplicate.linkStudies.single().input.projectName)
+        assertEquals(
+            duplicate.linkStudies.single().createdAtEpochMillis,
+            duplicate.studies.single { it.id == record.id }.updatedAtEpochMillis,
+        )
     }
 
     @Test
@@ -307,7 +349,7 @@ class DuplicateProjectUseCaseTest {
     }
 
     @Test
-    fun `schema 4 JSON round trip preserves the duplicated aggregate`() {
+    fun `schema 5 JSON round trip preserves the duplicated aggregate`() {
         val source = richProject()
         val result = useCase(DUPLICATED_PROJECT_ID, 8_000L)(
             ProjectCatalog(selectedProjectId = source.id, projects = listOf(source)),
@@ -318,7 +360,7 @@ class DuplicateProjectUseCaseTest {
         val restored = json.decodeFromString<ProjectCatalog>(json.encodeToString(result.catalog))
         val restoredCopy = restored.projects.last()
 
-        assertEquals(4, restored.schemaVersion)
+        assertEquals(5, restored.schemaVersion)
         assertEquals(result.catalog, restored)
         assertEquals(DUPLICATED_PROJECT_ID, restored.selectedProjectId)
         assertEquals(source.networks, restoredCopy.networks)

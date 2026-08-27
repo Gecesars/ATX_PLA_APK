@@ -7,6 +7,7 @@ import kotlinx.serialization.Serializable
 internal const val PROJECT_STORE_FORMAT = "atx-project-index"
 internal const val PROJECT_STORE_SCHEMA_VERSION = 1
 internal const val PROJECT_DOCUMENT_SCHEMA_VERSION = 1
+internal const val MIN_INDEXED_PROJECT_SCHEMA_VERSION = 4
 internal const val MAX_PROJECT_DOCUMENT_BYTES: Int = 8 * 1024 * 1024
 
 @Serializable
@@ -23,7 +24,7 @@ internal data class ProjectCatalogIndex(
         require(storeSchemaVersion == PROJECT_STORE_SCHEMA_VERSION) {
             "The project index schema is not supported."
         }
-        require(projectSchemaVersion == PROJECT_CATALOG_SCHEMA_VERSION) {
+        require(projectSchemaVersion in MIN_INDEXED_PROJECT_SCHEMA_VERSION..PROJECT_CATALOG_SCHEMA_VERSION) {
             "The project document schema is not supported."
         }
         val activeIds = projects.map(ProjectDocumentReference::projectId)
@@ -81,7 +82,7 @@ internal data class ProjectDocument(
         require(documentSchemaVersion == PROJECT_DOCUMENT_SCHEMA_VERSION) {
             "The project document format is not supported."
         }
-        require(projectSchemaVersion == PROJECT_CATALOG_SCHEMA_VERSION) {
+        require(projectSchemaVersion in MIN_INDEXED_PROJECT_SCHEMA_VERSION..PROJECT_CATALOG_SCHEMA_VERSION) {
             "The project document schema is not supported."
         }
     }

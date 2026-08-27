@@ -9,10 +9,12 @@ import com.gecesars.atxplan.domain.application.DeleteProjectCommand
 import com.gecesars.atxplan.domain.application.DuplicateProjectCommand
 import com.gecesars.atxplan.domain.application.EpochMillisClock
 import com.gecesars.atxplan.domain.application.LinkBudgetCalculator
+import com.gecesars.atxplan.domain.application.LinkStudyRecordIdGenerator
 import com.gecesars.atxplan.domain.application.ProjectCreator
 import com.gecesars.atxplan.domain.application.ProjectDuplicationIdGenerator
 import com.gecesars.atxplan.domain.application.RenameProjectCommand
 import com.gecesars.atxplan.domain.application.RestoreProjectCommand
+import com.gecesars.atxplan.domain.application.RunProjectLinkStudyCommand
 import com.gecesars.atxplan.domain.application.RfAssetMutationCommand
 import com.gecesars.atxplan.domain.application.RfAssetMutationStatus
 import com.gecesars.atxplan.domain.application.RfEntityIdGenerator
@@ -1143,6 +1145,82 @@ class AppViewModelTest {
         }
 
     @Test
+    fun `project link study is published only after its immutable project write commits`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val initial = catalogWithProjects("Stored Link Project")
+            val repository = FakeProjectRepository(initial)
+            val viewModel = createViewModel(
+                repository = repository,
+                linkStudyRecordIdGenerator = LinkStudyRecordIdGenerator { "link-study-view-model" },
+            )
+            advanceUntilIdle()
+            viewModel.addRfPath(RfPathDraft().toCommand(initial.selectedProjectId.orEmpty()).getOrThrow())
+            advanceUntilIdle()
+            repository.saveDelayMillis = 50L
+            val project = viewModel.state.value.selectedProject!!
+            val site = project.sites.single()
+            val sector = site.sectors.single()
+            val receiver = project.receivers.single()
+
+            viewModel.runProjectLinkStudy(
+                RunProjectLinkStudyCommand(
+                    requestId = "link-study-request",
+                    expectedProject = project,
+                    name = "Stored Project Link",
+                    siteId = site.id,
+                    sectorId = sector.id,
+                    receiverId = receiver.id,
+                ),
+            )
+            runCurrent()
+
+            assertTrue(viewModel.state.value.isRunningProjectLinkStudy)
+            assertTrue(viewModel.state.value.selectedProject!!.linkStudies.isEmpty())
+
+            advanceUntilIdle()
+
+            val state = viewModel.state.value
+            assertFalse(state.isRunningProjectLinkStudy)
+            assertEquals("link-study-view-model", state.selectedProject!!.linkStudies.single().id)
+            assertEquals(state.catalog, repository.catalogToLoad)
+            assertTrue(state.notice.orEmpty().contains("calculated and saved locally"))
+        }
+
+    @Test
+    fun `project link study storage failure keeps the previous durable project visible`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val initial = catalogWithProjects("Failed Link Project")
+            val repository = FakeProjectRepository(initial)
+            val viewModel = createViewModel(repository)
+            advanceUntilIdle()
+            viewModel.addRfPath(RfPathDraft().toCommand(initial.selectedProjectId.orEmpty()).getOrThrow())
+            advanceUntilIdle()
+            val durableBeforeStudy = repository.catalogToLoad
+            val project = durableBeforeStudy.selectedProject!!
+            val site = project.sites.single()
+            repository.saveError = ProjectStorageException("Study storage is unavailable.")
+
+            viewModel.runProjectLinkStudy(
+                RunProjectLinkStudyCommand(
+                    requestId = "failed-link-study-request",
+                    expectedProject = project,
+                    name = "Unsaved Project Link",
+                    siteId = site.id,
+                    sectorId = site.sectors.single().id,
+                    receiverId = project.receivers.single().id,
+                ),
+            )
+            advanceUntilIdle()
+
+            val state = viewModel.state.value
+            assertFalse(state.isRunningProjectLinkStudy)
+            assertEquals(durableBeforeStudy, state.catalog)
+            assertEquals(durableBeforeStudy, repository.catalogToLoad)
+            assertTrue(state.selectedProject!!.linkStudies.isEmpty())
+            assertEquals("Study storage is unavailable.", state.storageError)
+        }
+
+    @Test
     fun `independent RF mutation publishes its receipt only after durable commit`() =
         runTest(mainDispatcherRule.dispatcher) {
             val initial = catalogWithProjects("RF Asset Project")
@@ -1435,6 +1513,8 @@ class AppViewModelTest {
         },
         clock: EpochMillisClock = EpochMillisClock { 10_000L },
         projectDuplicationIdGenerator: ProjectDuplicationIdGenerator? = null,
+        linkStudyRecordIdGenerator: LinkStudyRecordIdGenerator =
+            LinkStudyRecordIdGenerator { "link-study-test" },
         rfEntityIdGenerator: RfEntityIdGenerator = RfEntityIdGenerator { kind ->
             "${kind.idPrefix}-test"
         },
@@ -1459,6 +1539,7 @@ class AppViewModelTest {
                         duplicationSequence += 1
                         "duplicate-test-$duplicationSequence"
                     },
+                linkStudyRecordIdGenerator = linkStudyRecordIdGenerator,
                 rfEntityIdGenerator = rfEntityIdGenerator,
                 clock = clock,
             ),

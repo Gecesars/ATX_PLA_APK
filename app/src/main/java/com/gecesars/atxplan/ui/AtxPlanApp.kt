@@ -122,6 +122,7 @@ fun AtxPlanApp() {
         onDeleteProject = viewModel::deleteProject,
         onSelectProject = viewModel::selectProject,
         onCalculateLink = viewModel::calculateLinkBudget,
+        onRunProjectLinkStudy = viewModel::runProjectLinkStudy,
         onSaveRfPath = viewModel::addRfPath,
         onMutateRfAsset = viewModel::mutateRfAsset,
         onRetryLoad = viewModel::retryLoad,
@@ -141,6 +142,7 @@ private fun AtxPlanShell(
     onDeleteProject: (com.gecesars.atxplan.domain.application.DeleteProjectCommand) -> Unit,
     onSelectProject: (String) -> Unit,
     onCalculateLink: (com.gecesars.atxplan.domain.rf.LinkBudgetInput) -> Unit,
+    onRunProjectLinkStudy: (com.gecesars.atxplan.domain.application.RunProjectLinkStudyCommand) -> Unit,
     onSaveRfPath: (com.gecesars.atxplan.domain.application.AddRfPathCommand) -> Unit,
     onMutateRfAsset: (com.gecesars.atxplan.domain.application.RfAssetMutationCommand) -> Unit,
     onRetryLoad: () -> Unit,
@@ -353,7 +355,12 @@ private fun AtxPlanShell(
                                         result = currentUiState.value.linkBudgetResult,
                                         calculatorError = currentUiState.value.calculatorError,
                                         isCalculating = currentUiState.value.isCalculating,
+                                        isRunningProjectLinkStudy =
+                                            currentUiState.value.isRunningProjectLinkStudy,
+                                        canSaveProjectStudy = currentUiState.value.isCatalogWritable &&
+                                            !currentUiState.value.isSavingCatalog,
                                         onCalculate = onCalculateLink,
+                                        onRunProjectLinkStudy = onRunProjectLinkStudy,
                                     )
                                 }
                                 CatalogRoute -> NavEntry(route) { DataCatalogRouteContent() }

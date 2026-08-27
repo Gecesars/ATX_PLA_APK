@@ -20,6 +20,7 @@ internal const val MAX_PROJECT_CATALOG_BYTES: Int = 5 * 1024 * 1024
 private const val LEGACY_PROJECT_CATALOG_SCHEMA_VERSION = 1
 private const val RF_REFERENCE_PROJECT_CATALOG_SCHEMA_VERSION = 2
 private const val ARCHIVE_PROJECT_CATALOG_SCHEMA_VERSION = 3
+private const val TRANSACTIONAL_PROJECT_CATALOG_SCHEMA_VERSION = 4
 
 /**
  * Byte-oriented storage boundary. Implementations must either replace the complete payload or
@@ -110,7 +111,7 @@ internal class ProjectCatalogMigrator {
         }
         return document.copy(
             jsonElement = if (document.schemaVersion < PROJECT_CATALOG_SCHEMA_VERSION) {
-                sanitizePreVersion4Root(
+                sanitizeLegacyRoot(
                     root = JsonObject(sanitizedRoot),
                     sourceSchemaVersion = document.schemaVersion,
                 )
@@ -123,12 +124,18 @@ internal class ProjectCatalogMigrator {
     fun migrate(catalog: ProjectCatalog, sourceSchemaVersion: Int): ProjectCatalog =
         when (sourceSchemaVersion) {
             LEGACY_PROJECT_CATALOG_SCHEMA_VERSION ->
-                migrateVersion3ToVersion4(
-                    migrateVersion2ToVersion3(migrateVersion1ToVersion2(catalog)),
+                migrateVersion4ToVersion5(
+                    migrateVersion3ToVersion4(
+                        migrateVersion2ToVersion3(migrateVersion1ToVersion2(catalog)),
+                    ),
                 )
             RF_REFERENCE_PROJECT_CATALOG_SCHEMA_VERSION ->
-                migrateVersion3ToVersion4(migrateVersion2ToVersion3(catalog))
-            ARCHIVE_PROJECT_CATALOG_SCHEMA_VERSION -> migrateVersion3ToVersion4(catalog)
+                migrateVersion4ToVersion5(
+                    migrateVersion3ToVersion4(migrateVersion2ToVersion3(catalog)),
+                )
+            ARCHIVE_PROJECT_CATALOG_SCHEMA_VERSION ->
+                migrateVersion4ToVersion5(migrateVersion3ToVersion4(catalog))
+            TRANSACTIONAL_PROJECT_CATALOG_SCHEMA_VERSION -> migrateVersion4ToVersion5(catalog)
             PROJECT_CATALOG_SCHEMA_VERSION -> catalog
             else -> throw IllegalArgumentException(
                 "No catalog migration exists from schema $sourceSchemaVersion.",
@@ -152,9 +159,12 @@ internal class ProjectCatalogMigrator {
         )
 
     private fun migrateVersion3ToVersion4(catalog: ProjectCatalog): ProjectCatalog =
+        catalog.copy(schemaVersion = TRANSACTIONAL_PROJECT_CATALOG_SCHEMA_VERSION)
+
+    private fun migrateVersion4ToVersion5(catalog: ProjectCatalog): ProjectCatalog =
         catalog.copy(schemaVersion = PROJECT_CATALOG_SCHEMA_VERSION)
 
-    private fun sanitizePreVersion4Root(
+    private fun sanitizeLegacyRoot(
         root: JsonObject,
         sourceSchemaVersion: Int,
     ): JsonObject = JsonObject(
@@ -203,20 +213,35 @@ internal class ProjectCatalogMigrator {
         sourceSchemaVersion: Int,
     ): JsonElement {
         val project = value as? JsonObject ?: return value
-        val fieldsToRemove = if (sourceSchemaVersion < RF_REFERENCE_PROJECT_CATALOG_SCHEMA_VERSION) {
-            VERSION_4_PROJECT_FIELDS + VERSION_2_PROJECT_FIELDS
-        } else {
-            VERSION_4_PROJECT_FIELDS
+        val fieldsToRemove = buildSet {
+            addAll(VERSION_5_PROJECT_FIELDS)
+            if (sourceSchemaVersion < TRANSACTIONAL_PROJECT_CATALOG_SCHEMA_VERSION) {
+                addAll(VERSION_4_PROJECT_FIELDS)
+            }
+            if (sourceSchemaVersion < RF_REFERENCE_PROJECT_CATALOG_SCHEMA_VERSION) {
+                addAll(VERSION_2_PROJECT_FIELDS)
+            }
         }
         val base = project.filterKeys { it !in fieldsToRemove }
         return JsonObject(
             base.mapValues { (key, nestedValue) ->
                 when (key) {
-                    NETWORKS_FIELD_NAME -> sanitizeObjectArray(nestedValue, VERSION_4_NETWORK_FIELDS)
+                    NETWORKS_FIELD_NAME -> sanitizeObjectArray(
+                        nestedValue,
+                        if (sourceSchemaVersion < TRANSACTIONAL_PROJECT_CATALOG_SCHEMA_VERSION) {
+                            VERSION_4_NETWORK_FIELDS
+                        } else {
+                            emptySet()
+                        },
+                    )
                     SITES_FIELD_NAME -> sanitizeSites(nestedValue, sourceSchemaVersion)
                     RECEIVERS_FIELD_NAME -> sanitizeObjectArray(
                         nestedValue,
-                        VERSION_4_RECEIVER_FIELDS,
+                        if (sourceSchemaVersion < TRANSACTIONAL_PROJECT_CATALOG_SCHEMA_VERSION) {
+                            VERSION_4_RECEIVER_FIELDS
+                        } else {
+                            emptySet()
+                        },
                     )
                     else -> nestedValue
                 }
@@ -232,16 +257,21 @@ internal class ProjectCatalogMigrator {
             kotlinx.serialization.json.JsonArray(
                 sites.map { siteElement ->
                     val site = siteElement as? JsonObject ?: return@map siteElement
-                    val base = site.filterKeys { it !in VERSION_4_SITE_FIELDS }
+                    val base = if (sourceSchemaVersion < TRANSACTIONAL_PROJECT_CATALOG_SCHEMA_VERSION) {
+                        site.filterKeys { it !in VERSION_4_SITE_FIELDS }
+                    } else {
+                        site
+                    }
                     JsonObject(
                         base.mapValues { (key, nestedValue) ->
                             if (key == SECTORS_FIELD_NAME) {
-                                val fieldsToRemove = if (
-                                    sourceSchemaVersion < RF_REFERENCE_PROJECT_CATALOG_SCHEMA_VERSION
-                                ) {
-                                    VERSION_4_SECTOR_FIELDS + VERSION_2_SECTOR_FIELDS
-                                } else {
-                                    VERSION_4_SECTOR_FIELDS
+                                val fieldsToRemove = buildSet {
+                                    if (sourceSchemaVersion < TRANSACTIONAL_PROJECT_CATALOG_SCHEMA_VERSION) {
+                                        addAll(VERSION_4_SECTOR_FIELDS)
+                                    }
+                                    if (sourceSchemaVersion < RF_REFERENCE_PROJECT_CATALOG_SCHEMA_VERSION) {
+                                        addAll(VERSION_2_SECTOR_FIELDS)
+                                    }
                                 }
                                 sanitizeObjectArray(nestedValue, fieldsToRemove)
                             } else {
@@ -284,6 +314,7 @@ internal class ProjectCatalogMigrator {
             "artifacts",
             "importProvenance",
         )
+        val VERSION_5_PROJECT_FIELDS = setOf("linkStudies")
         val VERSION_2_PROJECT_FIELDS = setOf("receivers")
         val VERSION_4_NETWORK_FIELDS = setOf(
             "active",

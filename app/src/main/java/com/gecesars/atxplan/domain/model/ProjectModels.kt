@@ -1,9 +1,10 @@
 package com.gecesars.atxplan.domain.model
 
+import com.gecesars.atxplan.domain.study.ProjectLinkStudyRecord
 import kotlinx.serialization.Serializable
 import java.util.UUID
 
-const val PROJECT_CATALOG_SCHEMA_VERSION = 4
+const val PROJECT_CATALOG_SCHEMA_VERSION = 5
 
 @Serializable
 data class ProjectCatalog(
@@ -58,6 +59,7 @@ data class PlannerProject(
     val networks: List<RfNetwork> = emptyList(),
     val sites: List<RadioSite> = emptyList(),
     val studies: List<StudySummary> = emptyList(),
+    val linkStudies: List<ProjectLinkStudyRecord> = emptyList(),
     val receivers: List<Receiver> = emptyList(),
     val antennaPatterns: List<AntennaPatternRecord> = emptyList(),
     val gisLayers: List<GisLayerRecord> = emptyList(),
@@ -118,6 +120,7 @@ data class PlannerProject(
         requireUniqueIds("antenna pattern", antennaPatterns.map(AntennaPatternRecord::id))
         requireUniqueIds("GIS layer", gisLayers.map(GisLayerRecord::id))
         requireUniqueIds("study scenario", studyScenarios.map(StudyScenarioRecord::id))
+        requireUniqueIds("project link study", linkStudies.map(ProjectLinkStudyRecord::id))
         requireUniqueIds("coverage snapshot", coverageSnapshots.map(CoverageSnapshotRecord::id))
         requireUniqueIds("regulatory study", regulatoryStudies.map(RegulatoryStudyRecord::id))
         requireUniqueIds("artifact", artifacts.map(ProjectArtifactReference::id))
@@ -159,6 +162,22 @@ data class PlannerProject(
         }.filterNot(artifactIds::contains).distinct().sorted()
         require(missingArtifactReferences.isEmpty()) {
             "Project records reference missing artifacts: ${missingArtifactReferences.joinToString()}."
+        }
+        require(linkStudies.size <= MAX_PROJECT_LINK_STUDIES) {
+            "The project contains too many persisted link studies."
+        }
+        val studySummariesById = studies.groupBy(StudySummary::id)
+        val invalidLinkStudySummaries = linkStudies.filter { linkStudy ->
+            val summary = studySummariesById[linkStudy.id]?.singleOrNull()
+            summary == null ||
+                summary.name != linkStudy.name ||
+                summary.type != StudyType.POINT_TO_POINT ||
+                summary.status != StudyStatus.COMPLETED ||
+                summary.updatedAtEpochMillis != linkStudy.createdAtEpochMillis
+        }.map(ProjectLinkStudyRecord::id).sorted()
+        require(invalidLinkStudySummaries.isEmpty()) {
+            "Persisted link studies require matching completed point-to-point summaries: " +
+                "${invalidLinkStudySummaries.joinToString()}."
         }
     }
 }
@@ -646,6 +665,7 @@ private val SHA256_PATTERN = Regex("^[0-9a-f]{64}$")
 private const val MAX_OPAQUE_JSON_CHARS = 1_000_000
 private const val MAX_IMPORT_NOTICES = 2_000
 private const val MAX_IMPORT_NOTICE_CHARS = 2_000
+private const val MAX_PROJECT_LINK_STUDIES = 2_000
 
 @Serializable
 data class StudySummary(

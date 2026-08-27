@@ -57,8 +57,8 @@ class RfCalculatorTest {
         )
 
         assertEquals(RfCalculator.PROVENANCE, result.provenance)
-        assertEquals("itu-r-p525-fspl", result.provenance.modelId)
-        assertEquals("P.525/FSPL", result.provenance.modelLabel)
+        assertEquals("itu-r-p525-5-fspl", result.provenance.modelId)
+        assertEquals("ITU-R P.525-5 / FSPL", result.provenance.modelLabel)
         assertEquals(LinkBudgetExecutionMode.LOCAL, result.provenance.executionMode)
         assertEquals("No external datasets", result.provenance.dataProvenance)
     }

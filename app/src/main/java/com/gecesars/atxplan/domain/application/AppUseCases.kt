@@ -99,6 +99,7 @@ data class AppUseCases(
     val addRfPath: AddRfPathUseCase,
     val mutateRfAsset: RfAssetCrudUseCase,
     val calculateLinkBudget: CalculateLinkBudgetUseCase,
+    val runProjectLinkStudy: RunProjectLinkStudyUseCase,
 ) {
     companion object {
         fun create(
@@ -115,6 +116,8 @@ data class AppUseCases(
             },
             projectDuplicationIdGenerator: ProjectDuplicationIdGenerator =
                 ProjectDuplicationIdGenerator { "project-${UUID.randomUUID()}" },
+            linkStudyRecordIdGenerator: LinkStudyRecordIdGenerator =
+                LinkStudyRecordIdGenerator { "link-study-${UUID.randomUUID()}" },
             clock: EpochMillisClock = EpochMillisClock { System.currentTimeMillis() },
         ): AppUseCases = AppUseCases(
             loadProjectCatalog = LoadProjectCatalogUseCase(repository, dispatchers.storage),
@@ -131,6 +134,10 @@ data class AppUseCases(
             calculateLinkBudget = CalculateLinkBudgetUseCase(
                 calculator = linkBudgetCalculator,
                 dispatcher = dispatchers.computation,
+            ),
+            runProjectLinkStudy = RunProjectLinkStudyUseCase(
+                idGenerator = linkStudyRecordIdGenerator,
+                clock = clock,
             ),
         )
     }

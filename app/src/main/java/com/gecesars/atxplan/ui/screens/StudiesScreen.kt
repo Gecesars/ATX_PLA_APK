@@ -11,8 +11,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -22,8 +24,10 @@ import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -37,21 +41,29 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import com.gecesars.atxplan.domain.application.RunProjectLinkStudyCommand
 import com.gecesars.atxplan.domain.model.PlannerProject
+import com.gecesars.atxplan.domain.model.RadioSite
+import com.gecesars.atxplan.domain.model.Receiver
+import com.gecesars.atxplan.domain.model.Sector
 import com.gecesars.atxplan.domain.rf.LinkBudgetExecutionMode
 import com.gecesars.atxplan.domain.rf.LinkBudgetInput
 import com.gecesars.atxplan.domain.rf.LinkBudgetProvenance
 import com.gecesars.atxplan.domain.rf.LinkBudgetResult
+import com.gecesars.atxplan.domain.study.ProjectLinkStudyRecord
 import com.gecesars.atxplan.ui.components.ScreenHeader
 import com.gecesars.atxplan.ui.components.StatusPill
 import com.gecesars.atxplan.ui.components.StatusTone
 import com.gecesars.atxplan.ui.theme.AtxAmber
 import com.gecesars.atxplan.ui.theme.AtxSignal
 import java.util.Locale
+import java.util.UUID
 
 @Composable
 fun StudiesScreen(
@@ -60,7 +72,10 @@ fun StudiesScreen(
     result: LinkBudgetResult?,
     calculatorError: String?,
     isCalculating: Boolean,
+    isRunningProjectLinkStudy: Boolean,
+    canSaveProjectStudy: Boolean,
     onCalculate: (LinkBudgetInput) -> Unit,
+    onRunProjectLinkStudy: (RunProjectLinkStudyCommand) -> Unit,
 ) {
     var frequency by rememberSaveable { mutableStateOf("900") }
     var distance by rememberSaveable { mutableStateOf("10") }
@@ -74,6 +89,14 @@ fun StudiesScreen(
     var bandwidth by rememberSaveable { mutableStateOf("10") }
     var noiseFigure by rememberSaveable { mutableStateOf("6") }
     var formError by rememberSaveable { mutableStateOf<String?>(null) }
+    var showOlderSavedStudies by rememberSaveable(project?.id) { mutableStateOf(false) }
+    val orderedProjectStudies = project?.linkStudies
+        ?.sortedWith(
+            compareByDescending<ProjectLinkStudyRecord> { it.createdAtEpochMillis }
+                .thenByDescending { it.id },
+        )
+        .orEmpty()
+    val olderProjectStudies = orderedProjectStudies.drop(1)
     val currentInput = linkBudgetInputOrNull(
         frequency = frequency,
         distance = distance,
@@ -91,16 +114,14 @@ fun StudiesScreen(
     val currentProvenance = result?.takeIf { resultMatchesCurrentInput }?.provenance
 
     LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
+        modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp).testTag("studies_list"),
         contentPadding = PaddingValues(top = 2.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         item {
             ScreenHeader(
-                title = "Link Budget",
-                subtitle = currentProvenance?.let { provenance ->
-                    "${provenance.modelLabel} result with explicit terms and verifiable units."
-                } ?: "Calculation provenance is recorded with every completed result.",
+                title = "Link Studies",
+                subtitle = "Use stored project endpoints or run the independent manual calculator.",
             )
         }
         item {
@@ -109,7 +130,8 @@ fun StudiesScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 if (currentProvenance == null) {
-                    StatusPill("Awaiting Calculation", StatusTone.INFO)
+                    StatusPill("${project?.linkStudies?.size ?: 0} Saved", StatusTone.INFO)
+                    StatusPill("Manual Ready", StatusTone.INFO)
                 } else {
                     StatusPill(currentProvenance.modelLabel, StatusTone.INFO)
                     StatusPill(
@@ -129,6 +151,24 @@ fun StudiesScreen(
                 Text(
                     "Workspace: ${it.name}",
                     style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        item {
+            ProjectLinkStudyComposer(
+                project = project,
+                canSave = canSaveProjectStudy,
+                isRunning = isRunningProjectLinkStudy,
+                onRun = onRunProjectLinkStudy,
+            )
+        }
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("Manual Calculator", style = MaterialTheme.typography.titleLarge)
+                Text(
+                    "Manual inputs and their current result remain in memory and are not added to the project.",
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -212,8 +252,719 @@ fun StudiesScreen(
             item { ResultSection(linkResult) }
         }
         item { ProvenanceCard(currentProvenance) }
+        if (olderProjectStudies.isNotEmpty()) {
+            item {
+                OutlinedButton(
+                    onClick = { showOlderSavedStudies = !showOlderSavedStudies },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .testTag("saved_study_history_toggle"),
+                ) {
+                    Text(
+                        if (showOlderSavedStudies) {
+                            "Hide Older Saved Studies"
+                        } else {
+                            "Show ${olderProjectStudies.size} Older Saved " +
+                                if (olderProjectStudies.size == 1) "Study" else "Studies"
+                        },
+                    )
+                }
+            }
+            if (showOlderSavedStudies) {
+                items(
+                    items = olderProjectStudies,
+                    key = { study -> "saved-history-${study.id}" },
+                ) { study ->
+                    SavedProjectStudy(study)
+                }
+            }
+        }
     }
 }
+
+private data class SectorChoice(
+    val site: RadioSite,
+    val sector: Sector,
+) {
+    val key: String = "${site.id.length}:${site.id}${sector.id.length}:${sector.id}"
+    val label: String = "${site.name} / ${sector.name}"
+}
+
+@Composable
+private fun ProjectLinkStudyComposer(
+    project: PlannerProject?,
+    canSave: Boolean,
+    isRunning: Boolean,
+    onRun: (RunProjectLinkStudyCommand) -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag("project_link_study"),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("Project-linked P.525 Study", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Select stored endpoints. Effective RF values and the completed result are snapshotted, fingerprinted, and saved locally.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (project == null) {
+                Text(
+                    "Create or select an active project before running a project-linked study.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                ProjectStudyLimits()
+                return@Column
+            }
+
+            val sectorChoices = project.sites.flatMap { site ->
+                site.sectors.map { sector -> SectorChoice(site, sector) }
+            }
+            var selectedSectorKey by rememberSaveable(project.id) { mutableStateOf("") }
+            var selectedReceiverId by rememberSaveable(project.id) { mutableStateOf("") }
+            var studyName by rememberSaveable(project.id) { mutableStateOf("") }
+            val selectedSector = sectorChoices.firstOrNull { it.key == selectedSectorKey }
+                ?: sectorChoices.singleOrNull()
+            val networkId = selectedSector?.sector?.networkId
+            val compatibleReceivers = if (networkId == null) {
+                emptyList()
+            } else {
+                project.receivers.filter { receiver -> receiver.supportsNetwork(networkId) }
+            }
+            val selectedReceiver = compatibleReceivers.firstOrNull { it.id == selectedReceiverId }
+                ?: compatibleReceivers.singleOrNull()
+
+            CompactDropdown(
+                label = "Transmitter sector",
+                selectedLabel = selectedSector?.label ?: "Select a site and sector",
+                entries = sectorChoices.map { it.key to it.label },
+                enabled = sectorChoices.isNotEmpty() && !isRunning,
+                testTag = "project_sector_selector",
+                onSelect = { key ->
+                    selectedSectorKey = key
+                    selectedReceiverId = ""
+                    studyName = ""
+                },
+            )
+            if (sectorChoices.isEmpty()) {
+                InlineNotice("No project sectors are available. Add an RF path or sector first.")
+            } else if (selectedSector != null && networkId == null) {
+                InlineNotice("The selected sector has no network reference and cannot run a project study.")
+            }
+
+            CompactDropdown(
+                label = "Compatible receiver",
+                selectedLabel = selectedReceiver?.name ?: "Select a receiver",
+                entries = compatibleReceivers.map { it.id to it.name },
+                enabled = selectedSector != null && compatibleReceivers.isNotEmpty() && !isRunning,
+                testTag = "project_receiver_selector",
+                onSelect = { id ->
+                    selectedReceiverId = id
+                    studyName = ""
+                },
+            )
+            if (selectedSector != null && networkId != null && compatibleReceivers.isEmpty()) {
+                InlineNotice("No receiver supports the selected sector network.")
+            }
+
+            if (selectedSector != null && selectedReceiver != null) {
+                val defaultName = "${selectedSector.sector.name} to ${selectedReceiver.name}"
+                val effectiveStudyName = studyName.trim().ifEmpty { defaultName }.take(80)
+                val invalidStudyName = effectiveStudyName.length !in 2..80
+                OutlinedTextField(
+                    value = studyName,
+                    onValueChange = { studyName = it.take(80) },
+                    label = { Text("Study name") },
+                    placeholder = { Text(defaultName) },
+                    singleLine = true,
+                    isError = invalidStudyName,
+                    supportingText = if (invalidStudyName) {
+                        { Text("Use a study name between 2 and 80 characters.") }
+                    } else {
+                        null
+                    },
+                    enabled = !isRunning,
+                    modifier = Modifier.fillMaxWidth().testTag("project_study_name"),
+                )
+                ProjectEndpointSummary(project, selectedSector, selectedReceiver)
+                Button(
+                    onClick = {
+                        onRun(
+                            RunProjectLinkStudyCommand(
+                                requestId = UUID.randomUUID().toString(),
+                                expectedProject = project,
+                                name = effectiveStudyName,
+                                siteId = selectedSector.site.id,
+                                sectorId = selectedSector.sector.id,
+                                receiverId = selectedReceiver.id,
+                            ),
+                        )
+                    },
+                    enabled = canSave && !isRunning && !invalidStudyName,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .testTag("run_project_link_study"),
+                    shape = RoundedCornerShape(16.dp),
+                ) {
+                    Icon(Icons.Outlined.Calculate, contentDescription = null)
+                    Spacer(Modifier.padding(horizontal = 4.dp))
+                    Text(if (isRunning) "Calculating and Saving..." else "Calculate and Save Study")
+                }
+                if (!canSave && !isRunning) {
+                    Text(
+                        "Project storage is currently read-only or busy.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            ProjectStudyLimits()
+            project.linkStudies.maxWithOrNull(
+                compareBy<ProjectLinkStudyRecord> { it.createdAtEpochMillis }.thenBy { it.id },
+            )?.let { latestStudy ->
+                Text("Latest Saved Study", style = MaterialTheme.typography.titleSmall)
+                SavedProjectStudy(latestStudy)
+                if (project.linkStudies.size > 1) {
+                    Text(
+                        "Older saved studies remain available below the manual calculator.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CompactDropdown(
+    label: String,
+    selectedLabel: String,
+    entries: List<Pair<String, String>>,
+    enabled: Boolean,
+    testTag: String,
+    onSelect: (String) -> Unit,
+) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    var query by rememberSaveable(label) { mutableStateOf("") }
+    val filteredEntries = entries.filter { (_, entryLabel) ->
+        query.isBlank() || entryLabel.contains(query.trim(), ignoreCase = true)
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(label, style = MaterialTheme.typography.labelMedium)
+        OutlinedButton(
+            onClick = { expanded = true },
+            enabled = enabled,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag(testTag),
+        ) {
+            Text(selectedLabel, maxLines = 2, modifier = Modifier.weight(1f))
+        }
+        if (expanded) {
+            Dialog(
+                onDismissRequest = {
+                    expanded = false
+                    query = ""
+                },
+            ) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text("Select $label", style = MaterialTheme.typography.titleMedium)
+                        OutlinedTextField(
+                            value = query,
+                            onValueChange = { query = it.take(120) },
+                            label = { Text("Search $label") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        LazyColumn(
+                            modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp),
+                        ) {
+                            items(filteredEntries, key = { (id, _) -> id }) { (id, entryLabel) ->
+                                DropdownMenuItem(
+                                    text = { Text(entryLabel) },
+                                    onClick = {
+                                        expanded = false
+                                        query = ""
+                                        onSelect(id)
+                                    },
+                                )
+                            }
+                        }
+                        if (filteredEntries.isEmpty()) {
+                            Text(
+                                "No stored option matches this search.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                expanded = false
+                                query = ""
+                            },
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        ) {
+                            Text("Cancel")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProjectEndpointSummary(
+    project: PlannerProject,
+    transmitter: SectorChoice,
+    receiver: Receiver,
+) {
+    val network = project.networks.firstOrNull { it.id == transmitter.sector.networkId }
+    val compatibilityProfile = receiver.networkProfiles.firstOrNull { it.networkId == network?.id }
+    Column(
+        modifier = Modifier.fillMaxWidth().testTag("project_endpoint_summary"),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        CompactValue("Network", network?.name ?: "Missing reference")
+        CompactValue(
+            "TX coordinate",
+            formatCoordinatePair(transmitter.site.location.latitude, transmitter.site.location.longitude),
+        )
+        CompactValue(
+            "RX coordinate",
+            formatCoordinatePair(
+                receiver.location.latitude.value,
+                receiver.location.longitude.value,
+            ),
+        )
+        CompactValue(
+            "Endpoint geometry",
+            String.format(
+                Locale.US,
+                "TX %.2f m AGL at %.2f° azimuth / %.2f° tilt · RX %.2f m AGL",
+                transmitter.sector.antennaHeightM,
+                transmitter.sector.azimuthDegrees,
+                transmitter.sector.electricalTiltDegrees,
+                receiver.antennaHeightM.value,
+            ),
+        )
+        CompactValue(
+            "Stored TX ground",
+            transmitter.site.groundElevationM?.let { elevation ->
+                String.format(Locale.US, "%.2f m (not evaluated)", elevation)
+            } ?: "NoData",
+        )
+        CompactValue(
+            "RF chain",
+            String.format(
+                Locale.US,
+                "%.3f MHz · %.2f dBm TX · %.2f/%.2f dBi gain · %.2f/%.2f dB loss",
+                transmitter.sector.frequencyMHz,
+                transmitter.sector.transmitPowerDbm,
+                transmitter.sector.antennaGainDbi,
+                compatibilityProfile?.antennaGainDbi ?: receiver.antennaGainDbi.value,
+                transmitter.sector.feederLossDb,
+                compatibilityProfile?.systemLossDb ?: receiver.systemLossDb.value,
+            ),
+        )
+        CompactValue(
+            "Receiver",
+            String.format(
+                Locale.US,
+                "%.2f dBm sensitivity · %.3f MHz bandwidth · %.2f dB NF",
+                compatibilityProfile?.sensitivityDbm ?: receiver.sensitivityDbm.value,
+                network?.bandwidthMHz ?: Double.NaN,
+                receiver.noiseFigureDb.value,
+            ),
+        )
+        CompactValue(
+            "Compatibility",
+            when {
+                compatibilityProfile == null -> "primary receiver network"
+                compatibilityProfile.antennaGainDbi != null ||
+                    compatibilityProfile.systemLossDb != null ||
+                    compatibilityProfile.sensitivityDbm != null ->
+                    "network profile; available receive-chain overrides will be applied"
+                else -> "network profile; compatibility only, with no overrides supplied"
+            },
+        )
+        CompactValue(
+            "Source state",
+            listOf(
+                if (transmitter.sector.active) "active sector" else "inactive sector",
+                if (network?.active == true) "active network" else "inactive network",
+                if (transmitter.sector.transmitAntennaPatternId == null) {
+                    "no TX pattern reference"
+                } else {
+                    "TX pattern referenced but not evaluated"
+                },
+            ).joinToString(" · "),
+        )
+        if (
+            network != null &&
+            kotlin.math.abs(transmitter.sector.frequencyMHz - network.downlinkFrequencyMHz) > 1e-9
+        ) {
+            CompactValue(
+                "Frequency note",
+                String.format(
+                    Locale.US,
+                    "Sector %.3f MHz is used; network downlink is %.3f MHz",
+                    transmitter.sector.frequencyMHz,
+                    network.downlinkFrequencyMHz,
+                ),
+            )
+        }
+    }
+}
+
+@Composable
+private fun CompactValue(label: String, value: String) {
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val stackValue = label.length >= 16 ||
+            maxWidth < 280.dp ||
+            LocalDensity.current.fontScale >= 1.5f
+        if (stackValue) {
+            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                Text(
+                    "$label:",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    value,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        } else {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                Text(
+                    "$label:",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    value,
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun InlineNotice(message: String) {
+    Text(
+        message,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+@Composable
+private fun ProjectStudyLimits() {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            "Mean-Earth great-circle distance: ${String.format(Locale.US, "%,.1f", com.gecesars.atxplan.domain.study.EARTH_MEAN_RADIUS_M)} m radius.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            "Terrain profile is NoData and stored site elevation is not evaluated. No Earth-curvature clearance, effective-Earth propagation, LOS, Fresnel clearance, diffraction, clutter, buildings, vegetation, atmospheric gas, rain, variability, or antenna-pattern attenuation is calculated.",
+            style = MaterialTheme.typography.bodySmall,
+            color = AtxAmber,
+        )
+    }
+}
+
+@Composable
+private fun SavedProjectStudy(study: ProjectLinkStudyRecord) {
+    var showDetails by rememberSaveable(study.id) { mutableStateOf(false) }
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag("saved_project_study_${study.id}"),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = RoundedCornerShape(14.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            Text(study.name, style = MaterialTheme.typography.titleSmall)
+            Text(
+                "${study.input.transmitter.siteName} / ${study.input.transmitter.sectorName} → ${study.input.receiver.receiverName}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                SavedMetric("Inclined path", study.geometry.inclinedDistanceM / 1_000.0, "km")
+                SavedMetric("Initial bearing", study.geometry.initialBearingDegrees, "°")
+                SavedMetric("FSPL", study.result.freeSpacePathLossDb, "dB")
+                SavedMetric("RX", study.result.receivedPowerDbm, "dBm")
+                SavedMetric("Margin", study.result.fadeMarginDb, "dB")
+                SavedMetric("SNR", study.result.signalToNoiseDb, "dB")
+            }
+            Text(
+                "${study.result.provenance.modelLabel} · ${study.geometry.geodesyId} · fingerprint ${study.inputFingerprintSha256.take(12)}…",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedButton(
+                onClick = { showDetails = !showDetails },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .testTag("saved_project_study_details_${study.id}"),
+            ) {
+                Text(if (showDetails) "Hide Complete Details" else "Show Complete Details")
+            }
+            if (showDetails) {
+                Text("Source Snapshot", style = MaterialTheme.typography.labelLarge)
+                CompactValue(
+                    "Source project",
+                    "${study.input.projectName} (${study.input.projectId})",
+                )
+                CompactValue(
+                    "Network",
+                    "${study.input.networkName} (${study.input.networkId})",
+                )
+                CompactValue(
+                    "TX source IDs",
+                    "${study.input.transmitter.siteId} / ${study.input.transmitter.sectorId}",
+                )
+                CompactValue("RX source ID", study.input.receiver.receiverId)
+                CompactValue(
+                    "TX coordinate",
+                    formatCoordinatePair(
+                        study.input.transmitter.location.latitudeDegrees,
+                        study.input.transmitter.location.longitudeDegrees,
+                    ),
+                )
+                CompactValue(
+                    "RX coordinate",
+                    formatCoordinatePair(
+                        study.input.receiver.location.latitudeDegrees,
+                        study.input.receiver.location.longitudeDegrees,
+                    ),
+                )
+                CompactValue(
+                    "Endpoint heights",
+                    String.format(
+                        Locale.US,
+                        "TX %.3f m AGL · RX %.3f m AGL · Δh %.3f m",
+                        study.input.transmitter.antennaHeightAglM,
+                        study.input.receiver.antennaHeightAglM,
+                        study.geometry.heightDeltaM,
+                    ),
+                )
+                CompactValue(
+                    "Stored TX ground",
+                    study.input.transmitter.storedSiteGroundElevationM?.let { elevation ->
+                        String.format(Locale.US, "%.3f m (not evaluated)", elevation)
+                    } ?: "NoData",
+                )
+                CompactValue(
+                    "Source state",
+                    listOf(
+                        if (study.input.transmitter.sectorActive) "active sector" else "inactive sector",
+                        if (study.input.networkActive) "active network" else "inactive network",
+                        if (study.input.transmitter.directionalPatternReferenced) {
+                            "TX pattern referenced but not evaluated"
+                        } else {
+                            "no TX pattern reference"
+                        },
+                    ).joinToString(" · "),
+                )
+                CompactValue(
+                    "Receiver profile",
+                    when {
+                        study.input.receiverCompatibilityOverridesApplied ->
+                            "compatibility declared; available overrides applied"
+                        study.input.receiverCompatibilityProfilePresent ->
+                            "compatibility declared; no overrides supplied"
+                        else -> "primary receiver network"
+                    },
+                )
+
+                Text("Geometry", style = MaterialTheme.typography.labelLarge)
+                CompactValue(
+                    "Distances",
+                    String.format(
+                        Locale.US,
+                        "horizontal %.6f km · inclined %.6f km",
+                        study.geometry.horizontalDistanceM / 1_000.0,
+                        study.geometry.inclinedDistanceM / 1_000.0,
+                    ),
+                )
+                CompactValue(
+                    "Angles",
+                    String.format(
+                        Locale.US,
+                        "initial %.6f° · relative %.6f° · elevation %.6f°",
+                        study.geometry.initialBearingDegrees,
+                        study.geometry.relativeAzimuthDegrees,
+                        study.geometry.elevationAngleDegrees,
+                    ),
+                )
+                CompactValue(
+                    "Sector pointing",
+                    String.format(
+                        Locale.US,
+                        "azimuth %.6f° · electrical tilt %.6f°",
+                        study.input.transmitter.sectorAzimuthDegrees,
+                        study.input.transmitter.electricalTiltDegrees,
+                    ),
+                )
+                CompactValue(
+                    "Mean-Earth radius",
+                    String.format(Locale.US, "%.1f m", study.geometry.earthMeanRadiusM),
+                )
+
+                Text("Effective RF Input", style = MaterialTheme.typography.labelLarge)
+                CompactValue(
+                    "Frequency / distance",
+                    String.format(
+                        Locale.US,
+                        "%.6f MHz / %.9f km",
+                        study.input.linkBudget.frequencyMHz,
+                        study.input.linkBudget.distanceKm,
+                    ),
+                )
+                CompactValue(
+                    "Network baseline",
+                    String.format(
+                        Locale.US,
+                        "%.6f MHz downlink · %.6f MHz bandwidth",
+                        study.input.networkDownlinkFrequencyMHz,
+                        study.input.networkBandwidthMHz,
+                    ),
+                )
+                CompactValue(
+                    "TX chain",
+                    String.format(
+                        Locale.US,
+                        "%.6f dBm power · %.6f dBi gain · %.6f dB loss",
+                        study.input.linkBudget.transmitPowerDbm,
+                        study.input.linkBudget.transmitAntennaGainDbi,
+                        study.input.linkBudget.transmitLossDb,
+                    ),
+                )
+                CompactValue(
+                    "RX chain",
+                    String.format(
+                        Locale.US,
+                        "%.6f dBi gain · %.6f dB loss · %.6f dBm sensitivity · %.6f dB NF",
+                        study.input.linkBudget.receiveAntennaGainDbi,
+                        study.input.linkBudget.receiveLossDb,
+                        study.input.linkBudget.receiverSensitivityDbm,
+                        study.input.linkBudget.receiverNoiseFigureDb,
+                    ),
+                )
+                CompactValue(
+                    "Additional path loss",
+                    String.format(Locale.US, "%.6f dB", study.input.linkBudget.additionalPathLossDb),
+                )
+
+                Text("Complete Scalar Result", style = MaterialTheme.typography.labelLarge)
+                CompactValue(
+                    "Power",
+                    String.format(
+                        Locale.US,
+                        "EIRP %.6f dBm · RX %.6f dBm · margin %.6f dB",
+                        study.result.eirpDbm,
+                        study.result.receivedPowerDbm,
+                        study.result.fadeMarginDb,
+                    ),
+                )
+                CompactValue(
+                    "Noise",
+                    String.format(
+                        Locale.US,
+                        "floor %.6f dBm · SNR %.6f dB",
+                        study.result.noiseFloorDbm,
+                        study.result.signalToNoiseDb,
+                    ),
+                )
+                CompactValue(
+                    "P.525 / Fresnel",
+                    String.format(
+                        Locale.US,
+                        "FSPL %.6f dB · midpoint F1 %.6f m",
+                        study.result.freeSpacePathLossDb,
+                        study.result.firstFresnelMidpointRadiusM,
+                    ),
+                )
+
+                Text("Identity and Provenance", style = MaterialTheme.typography.labelLarge)
+                CompactValue("Study record ID", study.id)
+                CompactValue("Created epoch ms", study.createdAtEpochMillis.toString())
+                CompactValue("Study engine", study.engineId)
+                CompactValue("Terrain state", "NoData")
+                CompactValue("Model", study.result.provenance.modelLabel)
+                CompactValue("Model ID", study.result.provenance.modelId)
+                CompactValue(
+                    "RF implementation",
+                    study.result.provenance.implementationLabel,
+                )
+                CompactValue("RF implementation ID", study.result.provenance.implementationId)
+                CompactValue(
+                    "Execution mode",
+                    executionModeLabel(study.result.provenance.executionMode),
+                )
+                CompactValue("Data provenance", study.result.provenance.dataProvenance)
+                CompactValue("Geodesy", study.geometry.geodesyId)
+                CompactValue("Model edition", study.result.provenance.modelEdition)
+                CompactValue("Methodology", study.result.provenance.methodology)
+                CompactValue("Limitations", study.result.provenance.limitations)
+                CompactValue("Input fingerprint SHA-256", study.inputFingerprintSha256)
+                study.result.provenance.referenceUrl?.let { reference ->
+                    CompactValue("Reference", reference)
+                }
+            }
+            study.warnings.forEach { warning ->
+                Text(
+                    "• $warning",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AtxAmber,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SavedMetric(label: String, value: Double, unit: String) {
+    Text(
+        String.format(Locale.US, "%s %.2f %s", label, value, unit),
+        style = MaterialTheme.typography.labelMedium,
+    )
+}
+
+private fun Receiver.supportsNetwork(networkId: String): Boolean =
+    this.networkId == networkId || networkProfiles.any { it.networkId == networkId }
+
+private fun formatCoordinatePair(latitude: Double, longitude: Double): String =
+    String.format(Locale.US, "%.6f, %.6f", latitude, longitude)
 
 @Composable
 private fun ProvenanceCard(provenance: LinkBudgetProvenance?) {
@@ -242,11 +993,17 @@ private fun ProvenanceCard(provenance: LinkBudgetProvenance?) {
                 )
             } else {
                 ProvenanceText("Model ID: ${provenance.modelId}")
+                provenance.modelEdition.takeIf(String::isNotBlank)?.let { edition ->
+                    ProvenanceText("Edition: $edition")
+                }
                 ProvenanceText(provenance.methodology)
                 ProvenanceText(provenance.limitations)
                 ProvenanceText("Implementation: ${provenance.implementationLabel}")
                 ProvenanceText("Implementation ID: ${provenance.implementationId}")
                 ProvenanceText("Data provenance: ${provenance.dataProvenance}")
+                provenance.referenceUrl?.let { reference ->
+                    ProvenanceText("Reference: $reference")
+                }
             }
         }
     }

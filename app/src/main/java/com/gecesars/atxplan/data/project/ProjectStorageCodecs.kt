@@ -1,9 +1,11 @@
 package com.gecesars.atxplan.data.project
 
+import com.gecesars.atxplan.domain.model.PROJECT_CATALOG_SCHEMA_VERSION
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import java.nio.ByteBuffer
 import java.nio.charset.CharacterCodingException
@@ -56,7 +58,20 @@ internal class ProjectDocumentCodec(
     fun decode(payload: ByteArray): ProjectDocument {
         val root = parseObject(json, payload, "project document")
         requirePersistedFields(root, PROJECT_DOCUMENT_REQUIRED_FIELDS, "project document")
-        return json.decodeFromJsonElement(ProjectDocument.serializer(), root)
+        val projectSchemaVersion = root["projectSchemaVersion"]
+            ?.jsonPrimitive
+            ?.intOrNull
+            ?: throw SerializationException("The project document schema version is invalid.")
+        val sanitizedRoot = if (projectSchemaVersion < PROJECT_CATALOG_SCHEMA_VERSION) {
+            val project = root["project"] as? JsonObject
+                ?: throw SerializationException("The project document is missing its project object.")
+            JsonObject(
+                root + ("project" to JsonObject(project.filterKeys { key -> key != "linkStudies" })),
+            )
+        } else {
+            root
+        }
+        return json.decodeFromJsonElement(ProjectDocument.serializer(), sanitizedRoot)
     }
 
     fun encode(document: ProjectDocument): ByteArray =

@@ -37,7 +37,7 @@ class ProjectStorePersistenceTest {
 
         val migrated = persistence.loadCatalog()
 
-        assertEquals(4, migrated.schemaVersion)
+        assertEquals(5, migrated.schemaVersion)
         assertEquals(activeB.id, migrated.selectedProjectId)
         assertEquals(listOf(activeA.id, activeB.id), migrated.projects.map { it.id })
         assertEquals(archived, migrated.archivedProjects.single().project)
@@ -67,11 +67,91 @@ class ProjectStorePersistenceTest {
             val documents = MemoryDocumentStorage()
             val migrated = persistence(control, documents).loadCatalog()
 
-            assertEquals(4, migrated.schemaVersion)
+            assertEquals(5, migrated.schemaVersion)
             assertEquals(expectedProjectName, migrated.selectedProject?.name)
             assertEquals(1, documents.payloads.size)
             assertEquals(PROJECT_STORE_FORMAT, indexCodec.decode(control.snapshot()).format)
         }
+    }
+
+    @Test
+    fun `schema 4 indexed store migrates documents before publishing a schema 5 index`() = runBlocking {
+        val sourceProject = project("project-schema-4", "Indexed Schema 4", 40L)
+        val documentCodec = ProjectDocumentCodec()
+        val encoded = documentCodec.encode(
+            ProjectDocument(
+                projectSchemaVersion = 4,
+                project = sourceProject,
+            ),
+        ).toString(Charsets.UTF_8)
+        assertTrue(encoded.contains("\"linkStudies\":[]"))
+        val sourceDocument = encoded.replace(
+            "\"linkStudies\":[]",
+            "\"linkStudies\":[{\"untrusted\":true}]",
+        ).toByteArray(Charsets.UTF_8)
+        val sourceReference = ProjectDocumentReference(
+            projectId = sourceProject.id,
+            sha256 = sha256Hex(sourceDocument),
+            byteLength = sourceDocument.size.toLong(),
+        )
+        val sourceIndex = indexCodec.encode(
+            ProjectCatalogIndex(
+                projectSchemaVersion = 4,
+                selectedProjectId = sourceProject.id,
+                projects = listOf(sourceReference),
+            ),
+        )
+        val control = MemoryControlStorage(sourceIndex)
+        val documents = MemoryDocumentStorage().apply {
+            payloads[sourceReference.sha256] = sourceDocument
+        }
+        val persistence = persistence(control, documents)
+
+        val migrated = persistence.loadCatalog()
+
+        assertEquals(5, migrated.schemaVersion)
+        assertEquals(sourceProject, migrated.selectedProject)
+        assertTrue(migrated.selectedProject!!.linkStudies.isEmpty())
+        assertEquals(1, control.writeAttempts)
+        assertEquals(1, documents.writeAttempts)
+        assertEquals(2, documents.payloads.size)
+        assertEquals(5, indexCodec.decode(control.snapshot()).projectSchemaVersion)
+
+        assertEquals(migrated, persistence.loadCatalog())
+        assertEquals(1, control.writeAttempts)
+        assertEquals(1, documents.writeAttempts)
+    }
+
+    @Test
+    fun `failed schema 4 indexed migration preserves the previous authoritative index`() {
+        val sourceProject = project("project-schema-4-failure", "Schema 4 Failure", 41L)
+        val sourceDocument = ProjectDocumentCodec().encode(
+            ProjectDocument(projectSchemaVersion = 4, project = sourceProject),
+        )
+        val sourceReference = ProjectDocumentReference(
+            projectId = sourceProject.id,
+            sha256 = sha256Hex(sourceDocument),
+            byteLength = sourceDocument.size.toLong(),
+        )
+        val sourceIndex = indexCodec.encode(
+            ProjectCatalogIndex(
+                projectSchemaVersion = 4,
+                projects = listOf(sourceReference),
+            ),
+        )
+        val control = MemoryControlStorage(sourceIndex)
+        val documents = MemoryDocumentStorage().apply {
+            payloads[sourceReference.sha256] = sourceDocument
+            failNextWrite = true
+        }
+
+        assertThrows(ProjectStorageException::class.java) {
+            runBlocking { persistence(control, documents).loadCatalog() }
+        }
+
+        assertArrayEquals(sourceIndex, control.snapshot())
+        assertEquals(0, control.writeAttempts)
+        assertEquals(1, documents.writeAttempts)
     }
 
     @Test
@@ -297,7 +377,7 @@ class ProjectStorePersistenceTest {
     @Test
     fun `future index schema is rejected without a repair write`() {
         val future = """
-            {"format":"$PROJECT_STORE_FORMAT","storeSchemaVersion":2,"projectSchemaVersion":4,
+            {"format":"$PROJECT_STORE_FORMAT","storeSchemaVersion":2,"projectSchemaVersion":5,
              "selectedProjectId":null,"projects":[],"archivedProjects":[]}
         """.trimIndent().toByteArray()
         val control = MemoryControlStorage(future)
@@ -331,7 +411,7 @@ class ProjectStorePersistenceTest {
     }
 
     @Test
-    fun `schema 4 monolithic catalog with unknown data is rejected without replacement`() {
+    fun `schema 5 monolithic catalog with unknown data is rejected without replacement`() {
         val catalog = ProjectCatalog(
             projects = listOf(project("project-a", "Active Project", 10L)),
         )
@@ -369,11 +449,11 @@ class ProjectStorePersistenceTest {
         val unsupportedPayloads = listOf(
             """
                 {"format":"another-project-store","storeSchemaVersion":1,
-                 "projectSchemaVersion":4,"selectedProjectId":null,
+                 "projectSchemaVersion":5,"selectedProjectId":null,
                  "projects":[],"archivedProjects":[]}
             """.trimIndent().toByteArray(),
             """
-                {"storeSchemaVersion":1,"projectSchemaVersion":4,
+                {"storeSchemaVersion":1,"projectSchemaVersion":5,
                  "selectedProjectId":null,"projects":[],"archivedProjects":[]}
             """.trimIndent().toByteArray(),
         )

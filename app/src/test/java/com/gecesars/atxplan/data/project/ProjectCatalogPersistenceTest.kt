@@ -1,8 +1,38 @@
 package com.gecesars.atxplan.data.project
 
 import com.gecesars.atxplan.domain.model.ArchivedProject
+import com.gecesars.atxplan.domain.model.AntennaPatternRecord
+import com.gecesars.atxplan.domain.model.AzimuthDegrees
+import com.gecesars.atxplan.domain.model.ChannelPlanPoint
+import com.gecesars.atxplan.domain.model.CoverageSnapshotRecord
+import com.gecesars.atxplan.domain.model.DuplexMode
+import com.gecesars.atxplan.domain.model.GainDbi
+import com.gecesars.atxplan.domain.model.GeoCoordinate
+import com.gecesars.atxplan.domain.model.GeoPoint
+import com.gecesars.atxplan.domain.model.GisGeometryType
+import com.gecesars.atxplan.domain.model.GisLayerRecord
+import com.gecesars.atxplan.domain.model.HeightM
+import com.gecesars.atxplan.domain.model.ImportProvenance
+import com.gecesars.atxplan.domain.model.LatitudeDegrees
+import com.gecesars.atxplan.domain.model.LongitudeDegrees
+import com.gecesars.atxplan.domain.model.LossDb
+import com.gecesars.atxplan.domain.model.PlannerProject
+import com.gecesars.atxplan.domain.model.PowerDbm
+import com.gecesars.atxplan.domain.model.ProjectArtifactReference
+import com.gecesars.atxplan.domain.model.ProjectArtifactRole
 import com.gecesars.atxplan.domain.model.ProjectCatalog
 import com.gecesars.atxplan.domain.model.ProjectFactory
+import com.gecesars.atxplan.domain.model.RadioSite
+import com.gecesars.atxplan.domain.model.RadioSystem
+import com.gecesars.atxplan.domain.model.RadioTechnologyProfile
+import com.gecesars.atxplan.domain.model.Receiver
+import com.gecesars.atxplan.domain.model.ReceiverNetworkProfile
+import com.gecesars.atxplan.domain.model.RegulatoryRecordStatus
+import com.gecesars.atxplan.domain.model.RegulatoryStudyRecord
+import com.gecesars.atxplan.domain.model.RfNetwork
+import com.gecesars.atxplan.domain.model.Sector
+import com.gecesars.atxplan.domain.model.StudyScenarioRecord
+import com.gecesars.atxplan.domain.model.TiltDegrees
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
@@ -48,10 +78,10 @@ class ProjectCatalogPersistenceTest {
     }
 
     @Test
-    fun `schema 1 fixture is migrated through schema 2 and atomically promoted to schema 4`() = runBlocking {
+    fun `schema 1 fixture is migrated through schema 2 and atomically promoted to schema 5`() = runBlocking {
         val legacyPayload = fixture("project_catalog_v1.json")
         val expected = codec.decode(codec.parse(legacyPayload)).copy(
-            schemaVersion = 4,
+            schemaVersion = 5,
             archivedProjects = emptyList(),
         )
         val storage = InMemoryCatalogStorage(legacyPayload)
@@ -60,7 +90,7 @@ class ProjectCatalogPersistenceTest {
         val migrated = persistence.loadCatalog()
 
         assertEquals(expected, migrated)
-        assertEquals(4, migrated.schemaVersion)
+        assertEquals(5, migrated.schemaVersion)
         assertEquals("legacy-project", migrated.selectedProjectId)
         assertEquals("Legacy Mountain Link", migrated.selectedProject?.name)
         assertEquals("Legacy Carrier", migrated.selectedProject?.customer)
@@ -84,7 +114,7 @@ class ProjectCatalogPersistenceTest {
         assertNull(migrated.selectedProject?.sites?.single()?.sectors?.single()?.networkId)
         assertTrue(migrated.archivedProjects.isEmpty())
         assertEquals(1, storage.writeAttempts.get())
-        assertEquals(4, codec.parse(storage.snapshot()).schemaVersion)
+        assertEquals(5, codec.parse(storage.snapshot()).schemaVersion)
         assertEquals(migrated, codec.decode(storage.snapshot()))
 
         assertEquals(migrated, persistence.loadCatalog())
@@ -109,14 +139,14 @@ class ProjectCatalogPersistenceTest {
     }
 
     @Test
-    fun `schema 2 fixture is migrated and atomically promoted to schema 4`() = runBlocking {
+    fun `schema 2 fixture is migrated and atomically promoted to schema 5`() = runBlocking {
         val schema2Payload = fixture("project_catalog_v2.json")
         val storage = InMemoryCatalogStorage(schema2Payload)
         val persistence = persistence(storage)
 
         val migrated = persistence.loadCatalog()
 
-        assertEquals(4, migrated.schemaVersion)
+        assertEquals(5, migrated.schemaVersion)
         assertEquals("schema-2-project", migrated.selectedProjectId)
         assertEquals("Schema 2 Mountain Path", migrated.selectedProject?.name)
         assertEquals(
@@ -134,10 +164,77 @@ class ProjectCatalogPersistenceTest {
         )
         assertTrue(migrated.archivedProjects.isEmpty())
         assertEquals(1, storage.writeAttempts.get())
-        assertEquals(4, codec.parse(storage.snapshot()).schemaVersion)
+        assertEquals(5, codec.parse(storage.snapshot()).schemaVersion)
         assertEquals(migrated, codec.decode(storage.snapshot()))
 
         assertEquals(migrated, persistence.loadCatalog())
+        assertEquals(1, storage.writeAttempts.get())
+    }
+
+    @Test
+    fun `schema 4 is promoted to schema 5 and cannot inject link study records`() = runBlocking {
+        val schema4Catalog = catalog(
+            name = "Schema 4 Transactional Project",
+            timestamp = 45L,
+        ).copy(schemaVersion = 4)
+        val encoded = codec.encode(schema4Catalog).toString(Charsets.UTF_8)
+        assertTrue(encoded.contains("\"linkStudies\": []"))
+        val injected = encoded.replace(
+            "\"linkStudies\": []",
+            "\"linkStudies\": [{\"untrusted\": true}]",
+        ).toByteArray(Charsets.UTF_8)
+        val storage = InMemoryCatalogStorage(injected)
+
+        val migrated = persistence(storage).loadCatalog()
+
+        assertEquals(5, migrated.schemaVersion)
+        assertEquals("Schema 4 Transactional Project", migrated.selectedProject?.name)
+        assertTrue(migrated.selectedProject?.linkStudies?.isEmpty() == true)
+        assertEquals(1, storage.writeAttempts.get())
+        assertEquals(migrated, codec.decode(storage.snapshot()))
+    }
+
+    @Test
+    fun `schema 4 promotion preserves rich active and archived carrier records`() = runBlocking {
+        val active = richSchema4Project("project-schema-4-rich", "Rich Active Project")
+        val archived = richSchema4Project("project-schema-4-archived", "Rich Archived Project")
+        val source = ProjectCatalog(
+            schemaVersion = 4,
+            selectedProjectId = active.id,
+            projects = listOf(active),
+            archivedProjects = listOf(
+                ArchivedProject(
+                    project = archived,
+                    archivedAtEpochMillis = 90L,
+                    originalProjectIndex = 2,
+                ),
+            ),
+        )
+        val storage = InMemoryCatalogStorage(codec.encode(source))
+
+        val migrated = persistence(storage).loadCatalog()
+
+        assertEquals(source.copy(schemaVersion = 5), migrated)
+        assertEquals(5, migrated.schemaVersion)
+        assertEquals(active, migrated.projects.single())
+        assertEquals(archived, migrated.archivedProjects.single().project)
+        assertEquals(2, migrated.archivedProjects.single().originalProjectIndex)
+        val restoredNetwork = migrated.selectedProject!!.networks.single()
+        val restoredSite = migrated.selectedProject!!.sites.single()
+        val restoredSector = restoredSite.sectors.single()
+        val restoredReceiver = migrated.selectedProject!!.receivers.single()
+        assertTrue(!restoredNetwork.active)
+        assertEquals(DuplexMode.FDD, restoredNetwork.duplexMode)
+        assertEquals("channel-rich", restoredNetwork.channelPlan.single().id)
+        assertEquals("NR test profile", restoredNetwork.technologyProfile?.variant)
+        assertEquals(55.5, restoredSite.towerHeightM ?: 0.0, 0.0)
+        assertEquals("pattern-rich", restoredSector.transmitAntennaPatternId)
+        assertEquals("Synthetic feeder", restoredSector.cableType)
+        assertEquals("Synthetic CPE", restoredReceiver.equipmentModel)
+        assertEquals(17.25, restoredReceiver.networkProfiles.single().antennaGainDbi ?: 0.0, 0.0)
+        assertEquals("scenario-rich", migrated.selectedProject!!.activeStudyScenarioId)
+        assertEquals("Synthetic import", migrated.selectedProject!!.importProvenance?.sourceFormat)
+        assertTrue(migrated.selectedProject!!.linkStudies.isEmpty())
         assertEquals(1, storage.writeAttempts.get())
     }
 
@@ -172,7 +269,7 @@ class ProjectCatalogPersistenceTest {
 
         val migrated = persistence.loadCatalog()
 
-        assertEquals(4, migrated.schemaVersion)
+        assertEquals(5, migrated.schemaVersion)
         assertTrue(migrated.archivedProjects.isEmpty())
         assertEquals("Schema 2 Mountain Path", migrated.selectedProject?.name)
         assertEquals(1, storage.writeAttempts.get())
@@ -192,7 +289,7 @@ class ProjectCatalogPersistenceTest {
 
         val migrated = persistence(storage).loadCatalog()
 
-        assertEquals(4, migrated.schemaVersion)
+        assertEquals(5, migrated.schemaVersion)
         assertTrue(migrated.archivedProjects.isEmpty())
         assertEquals("Legacy Mountain Link", migrated.selectedProject?.name)
         assertEquals(1, storage.writeAttempts.get())
@@ -306,7 +403,7 @@ class ProjectCatalogPersistenceTest {
     fun `future schema is rejected without replacing its payload`() {
         val futurePayload = """
             {
-              "schemaVersion": 5,
+              "schemaVersion": 6,
               "selectedProjectId": null,
               "projects": []
             }
@@ -511,6 +608,175 @@ class ProjectCatalogPersistenceTest {
         assertTrue(thrown === rejection)
         assertArrayEquals(originalPayload, storage.snapshot())
         assertEquals(0, storage.writeAttempts.get())
+    }
+
+    private fun richSchema4Project(id: String, name: String): PlannerProject {
+        val artifact = ProjectArtifactReference(
+            id = "artifact-rich",
+            role = ProjectArtifactRole.OTHER,
+            fileName = "rich-carrier.bin",
+            mediaType = "application/octet-stream",
+            sha256 = "a".repeat(64),
+            byteCount = 123L,
+            createdAtEpochMillis = 20L,
+        )
+        val pattern = AntennaPatternRecord(
+            id = "pattern-rich",
+            name = "Rich Pattern",
+            nominalFrequencyHz = 3_550_000_000.0,
+            peakGainDbi = 18.5,
+            sourceFormat = "Synthetic JSON",
+            sourceSha256 = artifact.sha256,
+            dataArtifactId = artifact.id,
+        )
+        val network = RfNetwork(
+            id = "network-rich",
+            name = "Rich Network",
+            system = RadioSystem.NR_5G,
+            downlinkFrequencyMHz = 3_550.0,
+            bandwidthMHz = 80.0,
+            active = false,
+            uplinkFrequencyMHz = 3_450.0,
+            duplexMode = DuplexMode.FDD,
+            downlinkThresholdDbm = -95.5,
+            uplinkThresholdDbm = -97.25,
+            channelPlan = listOf(
+                ChannelPlanPoint(
+                    id = "channel-rich",
+                    label = "Rich Channel",
+                    downlinkFrequencyMHz = 3_550.0,
+                    uplinkFrequencyMHz = 3_450.0,
+                ),
+            ),
+            technologyProfile = RadioTechnologyProfile(
+                variant = "NR test profile",
+                adaptiveModulation = true,
+                mimoLayers = 4,
+                downlinkLoadPercent = 72.5,
+                uplinkLoadPercent = 33.25,
+            ),
+            legacyParametersJson = "{\"legacyNetwork\":true}",
+        )
+        val sector = Sector(
+            id = "sector-rich",
+            name = "Rich Sector",
+            active = false,
+            azimuthDegrees = 123.5,
+            electricalTiltDegrees = -2.25,
+            antennaHeightM = 42.75,
+            transmitPowerDbm = 43.125,
+            antennaGainDbi = 17.875,
+            feederLossDb = 1.625,
+            frequencyMHz = 3_550.0,
+            networkId = network.id,
+            transmitAntennaPatternId = pattern.id,
+            receiveAntennaPatternId = pattern.id,
+            receiveAntennaHeightM = 12.5,
+            receiveAntennaGainDbi = 16.75,
+            receiveSystemLossDb = 1.25,
+            cableType = "Synthetic feeder",
+            cableLengthM = 31.5,
+            equipmentModel = "Synthetic radio",
+            mimoIndex = 3,
+            simulcastDelayMicros = 4.75,
+            legacyParametersJson = "{\"legacySector\":true}",
+        )
+        val site = RadioSite(
+            id = "site-rich",
+            name = "Rich Site",
+            location = GeoPoint(-23.55, -46.63),
+            groundElevationM = 760.5,
+            towerHeightM = 55.5,
+            notes = "Rich schema-4 site",
+            sectors = listOf(sector),
+        )
+        val receiver = Receiver(
+            id = "receiver-rich",
+            name = "Rich Receiver",
+            networkId = network.id,
+            location = GeoCoordinate(
+                latitude = LatitudeDegrees(-23.54),
+                longitude = LongitudeDegrees(-46.62),
+            ),
+            antennaHeightM = HeightM(12.0),
+            antennaGainDbi = GainDbi(16.0),
+            systemLossDb = LossDb(1.0),
+            sensitivityDbm = PowerDbm(-98.0),
+            noiseFigureDb = LossDb(5.0),
+            azimuthDegrees = AzimuthDegrees(300.0),
+            electricalTiltDegrees = TiltDegrees(-1.0),
+            notes = "Rich schema-4 receiver",
+            equipmentModel = "Synthetic CPE",
+            networkProfiles = listOf(
+                ReceiverNetworkProfile(
+                    networkId = network.id,
+                    antennaGainDbi = 17.25,
+                    systemLossDb = 1.125,
+                    sensitivityDbm = -99.5,
+                ),
+            ),
+        )
+        val gisLayer = GisLayerRecord(
+            id = "gis-rich",
+            name = "Rich GIS Layer",
+            geometryType = GisGeometryType.RASTER,
+            coordinateReferenceSystem = "EPSG:31983",
+            featureCount = 1L,
+            dataArtifactId = artifact.id,
+            sourceSha256 = artifact.sha256,
+        )
+        val scenario = StudyScenarioRecord(
+            id = "scenario-rich",
+            name = "Rich Scenario",
+            modelId = "synthetic-model",
+            modelEdition = "schema-4",
+            settingsJson = "{\"resolutionM\":30}",
+        )
+        val coverage = CoverageSnapshotRecord(
+            id = "coverage-rich",
+            name = "Rich Coverage",
+            scenarioId = scenario.id,
+            metricId = "rsrp",
+            unit = "dBm",
+            noDataMeaning = "No evaluated sample is available.",
+            dataArtifactId = artifact.id,
+            createdAtEpochMillis = 60L,
+        )
+        val regulatory = RegulatoryStudyRecord(
+            id = "regulatory-rich",
+            name = "Rich Screening",
+            serviceId = "land-mobile",
+            status = RegulatoryRecordStatus.INCONCLUSIVE,
+            rulesetId = "synthetic-rules-v1",
+            dataArtifactId = artifact.id,
+            updatedAtEpochMillis = 70L,
+        )
+        return PlannerProject(
+            id = id,
+            name = name,
+            customer = "Synthetic Carrier",
+            notes = "Rich schema-4 migration fixture",
+            createdAtEpochMillis = 10L,
+            updatedAtEpochMillis = 80L,
+            networks = listOf(network),
+            sites = listOf(site),
+            receivers = listOf(receiver),
+            antennaPatterns = listOf(pattern),
+            gisLayers = listOf(gisLayer),
+            studyScenarios = listOf(scenario),
+            activeStudyScenarioId = scenario.id,
+            coverageSnapshots = listOf(coverage),
+            regulatoryStudies = listOf(regulatory),
+            artifacts = listOf(artifact),
+            importProvenance = ImportProvenance(
+                sourceFormat = "Synthetic import",
+                sourceSha256 = "b".repeat(64),
+                sourceVersion = "schema-4",
+                importedAtEpochMillis = 15L,
+                warnings = listOf("Synthetic migration warning."),
+                losses = listOf("Synthetic migration loss."),
+            ),
+        )
     }
 
     private fun persistence(

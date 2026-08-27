@@ -38,17 +38,17 @@ class MainActivityTest {
     fun dashboardShowsEngineeringEntryPoint() {
         composeRule.onNodeWithText("Engineering Center").assertIsDisplayed()
         composeRule.onNodeWithText("Studies").performClick()
-        composeRule.onNodeWithText("Link Budget").assertIsDisplayed()
+        composeRule.onNodeWithText("Link Studies").assertIsDisplayed()
     }
 
     @Test
     fun selectedDestinationSurvivesActivityRecreation() {
         composeRule.onNodeWithText("Studies").performClick()
-        composeRule.onNodeWithText("Link Budget").assertIsDisplayed()
+        composeRule.onNodeWithText("Link Studies").assertIsDisplayed()
 
         composeRule.activityRule.scenario.recreate()
 
-        composeRule.onNodeWithText("Link Budget").assertIsDisplayed()
+        composeRule.onNodeWithText("Link Studies").assertIsDisplayed()
     }
 
     @Test
