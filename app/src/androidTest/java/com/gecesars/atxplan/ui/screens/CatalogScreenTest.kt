@@ -25,6 +25,15 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.gecesars.atxplan.domain.dataset.IbgeDatasetDescriptor
+import com.gecesars.atxplan.domain.anatel.AnatelBasicPlanNoDataReason
+import com.gecesars.atxplan.domain.anatel.AnatelBasicPlanArchiveProvenance
+import com.gecesars.atxplan.domain.anatel.AnatelBasicPlanOrigin
+import com.gecesars.atxplan.domain.anatel.AnatelBasicPlanRecord
+import com.gecesars.atxplan.domain.anatel.AnatelBasicPlanRecordProvenance
+import com.gecesars.atxplan.domain.anatel.AnatelBasicPlanStatus
+import com.gecesars.atxplan.domain.anatel.AnatelBroadcastService
+import com.gecesars.atxplan.domain.anatel.AnatelFrequencyOrigin
+import com.gecesars.atxplan.domain.anatel.AnatelResolvedFrequency
 import com.gecesars.atxplan.domain.dataset.IbgeDatasetPreparationPhase
 import com.gecesars.atxplan.domain.dataset.IbgeDatasetPreparationProgress
 import com.gecesars.atxplan.domain.dataset.IbgeMunicipalitySummary
@@ -35,6 +44,8 @@ import com.gecesars.atxplan.domain.dataset.RegionalDatasetSelection
 import com.gecesars.atxplan.domain.dataset.RegionalDownloadProgress
 import com.gecesars.atxplan.domain.dataset.RegionalTransferStatus
 import com.gecesars.atxplan.ui.dataset.DataCatalogUiState
+import com.gecesars.atxplan.ui.anatel.AnatelBasicPlanUiPhase
+import com.gecesars.atxplan.ui.anatel.AnatelBasicPlanUiState
 import com.gecesars.atxplan.ui.dataset.IbgeCatalogStatus
 import com.gecesars.atxplan.ui.dataset.RegionalDataUiPhase
 import com.gecesars.atxplan.ui.dataset.RegionalDataUiState
@@ -131,6 +142,88 @@ class CatalogScreenTest {
         composeRule.onNodeWithTag("retry_ibge_dataset").performClick()
 
         assertEquals(1, retries)
+    }
+
+    @Test
+    fun compactAnatelNoDataRequiresExplicitSourceReviewBeforeOnDemandDownload() {
+        val acknowledged = mutableStateOf(false)
+        var refreshes = 0
+        composeRule.setContent {
+            val deviceDensity = LocalDensity.current.density
+            CompositionLocalProvider(
+                LocalDensity provides Density(deviceDensity, fontScale = 1.3f),
+            ) {
+                AtxPlanTheme {
+                    Box(modifier = Modifier.size(width = 360.dp, height = 480.dp)) {
+                        CatalogScreen(
+                            anatelState = AnatelBasicPlanUiState(
+                                phase = AnatelBasicPlanUiPhase.NOT_ACQUIRED,
+                                noDataReason = AnatelBasicPlanNoDataReason.NOT_ACQUIRED,
+                                licenseReviewAcknowledged = acknowledged.value,
+                            ),
+                            onAnatelLicenseReviewAcknowledged = { acknowledged.value = it },
+                            onRefreshAnatelCatalog = { refreshes += 1 },
+                        )
+                    }
+                }
+            }
+        }
+
+        composeRule.onNodeWithTag("catalog_list")
+            .performScrollToNode(hasTestTag("anatel_refresh"))
+        composeRule.onNodeWithTag("anatel_refresh").assertIsNotEnabled()
+        composeRule.onNodeWithTag("catalog_list")
+            .performScrollToNode(hasTestTag("anatel_source_review"))
+        composeRule.onNodeWithTag("anatel_source_review").performClick()
+        composeRule.onNodeWithTag("anatel_refresh").assertIsEnabled().performClick()
+
+        assertEquals(true, acknowledged.value)
+        assertEquals(1, refreshes)
+        composeRule.onNodeWithTag("catalog_list")
+            .performScrollToNode(hasTestTag("anatel_no_data"))
+        composeRule.onNodeWithTag("anatel_no_data").assertIsDisplayed()
+        composeRule.onNodeWithText(
+            "No locally indexed Basic Plan snapshot is available",
+            substring = true,
+        ).assertIsDisplayed()
+    }
+
+    @Test
+    fun compactReadyAnatelPageExposesBoundedPagingAndSourceDetails() {
+        var nextPages = 0
+        composeRule.setContent {
+            val deviceDensity = LocalDensity.current.density
+            CompositionLocalProvider(
+                LocalDensity provides Density(deviceDensity, fontScale = 1.3f),
+            ) {
+                AtxPlanTheme {
+                    Box(modifier = Modifier.size(width = 360.dp, height = 480.dp)) {
+                        CatalogScreen(
+                            anatelState = AnatelBasicPlanUiState(
+                                phase = AnatelBasicPlanUiPhase.READY,
+                                records = listOf(anatelUiRecord),
+                                hasMore = true,
+                            ),
+                            onLoadMoreAnatelRecords = { nextPages += 1 },
+                        )
+                    }
+                }
+            }
+        }
+
+        composeRule.onNodeWithTag("catalog_list")
+            .performScrollToNode(hasText("Show Source Details"))
+        composeRule.onNodeWithText("Show Source Details").assertIsDisplayed().performClick()
+        composeRule.onNodeWithTag("catalog_list").performScrollToNode(
+            hasText("Antenna limitations: bearing=90|max=5.0"),
+        )
+        composeRule.onNodeWithText("Antenna limitations: bearing=90|max=5.0")
+            .assertIsDisplayed()
+        composeRule.onNodeWithTag("catalog_list")
+            .performScrollToNode(hasTestTag("anatel_load_more"))
+        composeRule.onNodeWithTag("anatel_load_more").assertIsEnabled().performClick()
+
+        assertEquals(1, nextPages)
     }
 
     @Test
@@ -332,6 +425,56 @@ private fun regionalPlan(
         ),
         selections = selections,
         reason = "instrumented catalog UI test",
+    ),
+)
+
+private val anatelUiRecord = AnatelBasicPlanRecord(
+    sourceRowId = "ui-row-1",
+    basicPlanId = "PB-1001",
+    itemNumber = 1L,
+    origin = AnatelBasicPlanOrigin.BASIC_PLAN,
+    service = AnatelBroadcastService.FM,
+    rawService = "FM",
+    status = AnatelBasicPlanStatus("SOURCE_ACTIVE"),
+    channelRaw = "258",
+    channel = 258,
+    frequency = AnatelResolvedFrequency(
+        frequencyMHz = 99.5,
+        origin = AnatelFrequencyOrigin.SOURCE_ATTRIBUTE,
+        sourceFrequencyRaw = "99.5",
+        explanation = "The exact source frequency was used.",
+    ),
+    countryCode = "BR",
+    stateCode = "SP",
+    ibgeMunicipalityCode = "3550308",
+    municipalityName = "São Paulo",
+    channelOffsetRaw = "",
+    stationClassRaw = "A1",
+    characterRaw = "P",
+    purposeRaw = "COMMERCIAL",
+    entityName = "Example Broadcaster",
+    cnpjRaw = "",
+    stationCategoryRaw = "PRIMARY",
+    latitudeDegrees = -23.55,
+    longitudeDegrees = -46.63,
+    erpKw = 10.0,
+    antennaHeightMeters = 80.0,
+    antennaLimitationsRaw = "bearing=90|max=5.0",
+    antennaPatternDbdRaw = "0|-3|-6",
+    observationsRaw = "Source fixture for compact UI testing.",
+    fistelRaw = "F-100",
+    generatorFistelRaw = "",
+    dicRaw = "D-100",
+    provenance = AnatelBasicPlanRecordProvenance(
+        archive = AnatelBasicPlanArchiveProvenance(
+            acquiredAtEpochMillis = 1_000L,
+            archiveSha256 = "a".repeat(64),
+            archiveByteCount = 1_024L,
+        ),
+        entryName = AnatelBasicPlanOrigin.BASIC_PLAN.officialArchiveEntryName,
+        origin = AnatelBasicPlanOrigin.BASIC_PLAN,
+        generationDate = "2026-08-28",
+        sourceRowNumber = 1L,
     ),
 )
 

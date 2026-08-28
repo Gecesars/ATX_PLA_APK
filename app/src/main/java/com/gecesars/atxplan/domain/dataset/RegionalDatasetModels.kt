@@ -771,6 +771,41 @@ data class RegionalArtifactResult(
     }
 }
 
+/**
+ * One artifact result together with the exact inventory record published by the same operation.
+ *
+ * [providerAttempts] counts provider requests opened by this invocation. Local cache verification
+ * and processing of an already complete resumable file therefore report zero attempts and zero
+ * network bytes. [networkBytesTransferred] counts response-body bytes accepted by the bounded
+ * transfer loop across all attempts; bytes already present in a resumable partial are not counted
+ * again.
+ */
+data class RegionalArtifactAcquisition(
+    val result: RegionalArtifactResult,
+    val committedInventoryRecord: RegionalInventoryRecord,
+    val providerAttempts: Int,
+    val networkBytesTransferred: Long,
+) {
+    init {
+        val artifact = result.artifact
+        require(
+            committedInventoryRecord.relativePath == artifact.relativePath &&
+                committedInventoryRecord.datasetId == artifact.source.datasetId,
+        ) { "A regional artifact acquisition must return its exact committed inventory identity." }
+        val maximumAttempts = when (artifact.httpMethod) {
+            RegionalHttpMethod.GET -> MAXIMUM_REPORTED_GET_ATTEMPTS
+            RegionalHttpMethod.POST -> MAXIMUM_REPORTED_POST_ATTEMPTS
+        }
+        require(providerAttempts in 0..maximumAttempts) {
+            "Regional artifact provider attempts exceed the bounded transfer policy."
+        }
+        val maximumNetworkBytes = artifact.source.maximumArtifactBytes * providerAttempts.toLong()
+        require(networkBytesTransferred in 0L..maximumNetworkBytes) {
+            "Regional artifact network bytes exceed the bounded transfer policy."
+        }
+    }
+}
+
 @Serializable
 data class RegionalDownloadResult(
     val results: List<RegionalArtifactResult>,
@@ -893,11 +928,59 @@ data class RegionalInventory(
 }
 
 interface RegionalDatasetRepository {
+    /**
+     * Progress callbacks are synchronous projections under the dataset mutex and must not re-enter
+     * this repository.
+     */
     suspend fun acquire(
         plan: RegionalDownloadPlan,
         onProgress: (RegionalDownloadProgress) -> Unit = {},
-        isCancelled: () -> Boolean = { false },
+        isCancelled: suspend () -> Boolean = { false },
     ): RegionalDownloadResult
+
+    /**
+     * Acquires and atomically records exactly one indexed artifact from a fully validated plan.
+     *
+     * The returned acquisition is published only after the inventory commit. Callers must perform
+     * job-store or scheduler effects after this suspend function returns, except for the bounded
+     * [beforeProviderAttempt] permit. That permit runs while the dataset mutex is held so its
+     * implementation must preserve the one-way dataset-to-job lock order and must never re-enter
+     * this repository. [onProgress] also runs under that mutex; it must return promptly and must not
+     * call this repository. A null [maximumProviderAttempts] uses the fixed provider policy; zero
+     * still permits local-cache or completed-partial recovery but cannot open a provider request.
+     */
+    suspend fun acquireArtifact(
+        plan: RegionalDownloadPlan,
+        artifactIndex: Int,
+        maximumProviderAttempts: Int? = null,
+        beforeProviderAttempt: suspend (attemptNumber: Int) -> Boolean = { true },
+        onProgress: (RegionalDownloadProgress) -> Unit = {},
+        isCancelled: suspend () -> Boolean = { false },
+    ): RegionalArtifactAcquisition
+
+    /**
+     * Returns the exact currently committed record only when its files and plan semantics validate.
+     *
+     * A minimum acquisition time is required to recover a forced live refresh without adopting an
+     * older snapshot that predates its durable intent. Immutable releases ignore this constraint.
+     */
+    suspend fun findCommittedArtifact(
+        plan: RegionalDownloadPlan,
+        artifactIndex: Int,
+        minimumAcquiredAtEpochMillis: Long? = null,
+    ): RegionalInventoryRecord?
+
+    /**
+     * Returns exact file-backed evidence for a previously committed outcome.
+     *
+     * Unlike [findCommittedArtifact], historical evidence does not expire with a live-cache reuse
+     * window and must never be used to authorize a new acquisition. Implementations that cannot
+     * separate those checks may conservatively return the reusable-cache result.
+     */
+    suspend fun findCommittedArtifactEvidence(
+        plan: RegionalDownloadPlan,
+        artifactIndex: Int,
+    ): RegionalInventoryRecord? = findCommittedArtifact(plan, artifactIndex)
 
     suspend fun loadInventory(): RegionalInventory
 }
@@ -1103,6 +1186,8 @@ private const val FORM_CONTENT_TYPE = "application/x-www-form-urlencoded; charse
 private const val MAX_RELATIVE_PATH_LENGTH = 240
 private const val MAX_URL_LENGTH = 2_048
 private const val DEFAULT_HTTPS_PORT = 443
+private const val MAXIMUM_REPORTED_GET_ATTEMPTS = 3
+private const val MAXIMUM_REPORTED_POST_ATTEMPTS = 2
 private const val UTC_TIMESTAMP_FORMAT = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
 private const val UTC_TIMESTAMP_LENGTH = 24
 private val UTC_TIMESTAMP_PATTERN = Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$")

@@ -70,6 +70,17 @@ class AtxRouteTest {
     }
 
     @Test
+    fun `antenna pattern route preserves a bounded project ID`() {
+        val route = AntennaPatternsRoute("project:alpha-123")
+
+        val restored = roundTrip(route) as AntennaPatternsRoute
+
+        assertEquals("project:alpha-123", restored.projectId)
+        assertEquals("${ANTENNA_PATTERNS_PREFIX}project:alpha-123", restored.stableId)
+        assertEquals(route, AtxRoute.antennaPatterns("project:alpha-123"))
+    }
+
+    @Test
     fun `malformed nested identifiers fall back safely`() {
         val malformedStableIds = listOf(
             RF_PATH_EDITOR_PREFIX,
@@ -102,12 +113,24 @@ class AtxRouteTest {
         malformedRfAssetsStableIds.forEach { stableId ->
             assertSame(DashboardRoute, AtxRoute.fromStableId(stableId).supportedOrDashboard())
         }
+        val malformedAntennaStableIds = listOf(
+            ANTENNA_PATTERNS_PREFIX,
+            "${ANTENNA_PATTERNS_PREFIX}   ",
+            "${ANTENNA_PATTERNS_PREFIX} project",
+            "$ANTENNA_PATTERNS_PREFIX${"x".repeat(MAX_RF_PATH_PROJECT_ID_LENGTH + 1)}",
+            "$ANTENNA_PATTERNS_PREFIX${"ok"}\u0000",
+        )
+        malformedAntennaStableIds.forEach { stableId ->
+            assertSame(DashboardRoute, AtxRoute.fromStableId(stableId).supportedOrDashboard())
+        }
         assertSame(DashboardRoute, AtxRoute.rfPathEditor(null))
         assertSame(DashboardRoute, AtxRoute.rfPathEditor(""))
         assertSame(DashboardRoute, AtxRoute.projectRename(null))
         assertSame(DashboardRoute, AtxRoute.projectRename(""))
         assertSame(DashboardRoute, AtxRoute.rfAssets(null))
         assertSame(DashboardRoute, AtxRoute.rfAssets(""))
+        assertSame(DashboardRoute, AtxRoute.antennaPatterns(null))
+        assertSame(DashboardRoute, AtxRoute.antennaPatterns(""))
         assertSame(
             DashboardRoute,
             RfPathEditorRoute("x".repeat(MAX_RF_PATH_PROJECT_ID_LENGTH + 1)).supportedOrDashboard(),
@@ -122,6 +145,11 @@ class AtxRouteTest {
             RfAssetsRoute("x".repeat(MAX_RF_PATH_PROJECT_ID_LENGTH + 1))
                 .supportedOrDashboard(),
         )
+        assertSame(
+            DashboardRoute,
+            AntennaPatternsRoute("x".repeat(MAX_RF_PATH_PROJECT_ID_LENGTH + 1))
+                .supportedOrDashboard(),
+        )
     }
 
     @Test
@@ -131,6 +159,7 @@ class AtxRouteTest {
         assertSame(DashboardRoute, roundTrip(RfPathEditorRoute(oversizedProjectId)))
         assertSame(DashboardRoute, roundTrip(ProjectRenameRoute(oversizedProjectId)))
         assertSame(DashboardRoute, roundTrip(RfAssetsRoute(oversizedProjectId)))
+        assertSame(DashboardRoute, roundTrip(AntennaPatternsRoute(oversizedProjectId)))
     }
 
     private fun roundTrip(route: AtxRoute): AtxRoute =

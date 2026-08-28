@@ -35,6 +35,10 @@ import com.gecesars.atxplan.domain.application.RfAssetKind
 import com.gecesars.atxplan.domain.application.RfAssetMutationCommand
 import com.gecesars.atxplan.domain.application.RfAssetMutationReceipt
 import com.gecesars.atxplan.domain.application.RfAssetMutationStatus
+import com.gecesars.atxplan.domain.contour.BroadcastService
+import com.gecesars.atxplan.domain.contour.ContourPurpose
+import com.gecesars.atxplan.domain.contour.ContourStatus
+import com.gecesars.atxplan.domain.contour.ServiceContourOverlay
 import com.gecesars.atxplan.domain.model.GeoPoint
 import com.gecesars.atxplan.domain.model.PlannerProject
 import com.gecesars.atxplan.domain.model.RadioSite
@@ -110,6 +114,68 @@ class EngineeringMapScreenTest {
                 hasText("Elevation: NoData | no stored project elevation", substring = true),
             ),
         ).assertIsDisplayed()
+    }
+
+    @Test
+    fun compactMapExposesProtectedScreeningIncompleteAndNoDataContourStates() {
+        composeRule.setContent {
+            val deviceDensity = LocalDensity.current.density
+            CompositionLocalProvider(
+                LocalDensity provides Density(deviceDensity, fontScale = 1.3f),
+            ) {
+                AtxPlanTheme {
+                    Box(
+                        modifier = Modifier
+                            .size(width = 360.dp, height = 560.dp)
+                            .testTag("compact_contour_map_host"),
+                    ) {
+                        EngineeringMapScreen(
+                            project = mapProject,
+                            serviceContours = serviceContours,
+                        )
+                    }
+                }
+            }
+        }
+
+        composeRule.onNodeWithTag("compact_contour_map_host").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription(
+            "3 service contour records",
+            substring = true,
+        ).assertIsDisplayed()
+        composeRule.onNodeWithContentDescription(
+            "1 complete geometry, 1 incomplete geometry, 1 NoData",
+            substring = true,
+        ).assertIsDisplayed()
+        composeRule.onNodeWithTag("export_service_contours_kmz").assertIsDisplayed()
+
+        composeRule.onNodeWithTag("engineering_map_screen")
+            .performScrollToNode(hasTestTag("service_contour_legend"))
+        composeRule.onNodeWithTag("service_contour_legend").assertIsDisplayed()
+        composeRule.onNodeWithText("Protected — solid; complete geometry filled").assertIsDisplayed()
+        composeRule.onNodeWithText("Statistical screening — dashed").assertIsDisplayed()
+        composeRule.onNodeWithText("Complete geometry: 1").assertIsDisplayed()
+        composeRule.onNodeWithText("Incomplete geometry: 1").assertIsDisplayed()
+        composeRule.onNodeWithText("NoData: 1").assertIsDisplayed()
+        composeRule.onNodeWithText("FM Protected").assertDoesNotExist()
+
+        composeRule.onNodeWithTag("service_contour_details_toggle")
+            .assertIsDisplayed()
+            .performClick()
+        composeRule.onNodeWithText("Hide details").assertIsDisplayed()
+        composeRule.onNodeWithText("FM Protected").assertIsDisplayed()
+
+        composeRule.onNodeWithText(
+            "NoData: no contour geometry is rendered for this result.",
+        ).performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("service_contour_details_toggle")
+            .performScrollTo()
+            .performClick()
+        composeRule.onNodeWithText("Show details (3)").assertIsDisplayed()
+        composeRule.onNodeWithText(
+            "Service-contour geometry is rendered only from supplied local results",
+            substring = true,
+        ).performScrollTo().assertIsDisplayed()
     }
 
     @Test
@@ -460,6 +526,62 @@ class EngineeringMapScreenTest {
                 name = "Valley Site",
                 location = GeoPoint(latitude = -23.60, longitude = -46.72),
             ),
+        ),
+    )
+
+    private val serviceContours = listOf(
+        ServiceContourOverlay(
+            id = "fm-protected",
+            siteId = "ridge",
+            sectorId = "ridge-fm",
+            service = BroadcastService.FM,
+            purpose = ContourPurpose.PROTECTED,
+            statisticalBasis = "E(50,50)",
+            thresholdDbuvPerM = 66.0,
+            points = listOf(
+                GeoPoint(-23.48, -46.70),
+                GeoPoint(-23.48, -46.56),
+                GeoPoint(-23.62, -46.56),
+                GeoPoint(-23.62, -46.70),
+                GeoPoint(-23.48, -46.70),
+            ),
+            status = ContourStatus.COMPLETE,
+            model = "Validated broadcast contour fixture",
+            rulesetId = "anatel-fm-fixture-v1",
+            warnings = emptyList(),
+        ),
+        ServiceContourOverlay(
+            id = "tv-screening",
+            siteId = "ridge",
+            sectorId = "ridge-tv",
+            service = BroadcastService.DIGITAL_TV,
+            purpose = ContourPurpose.SCREENING,
+            statisticalBasis = "E(50,90) = 2 × E(50,50) − E(50,10)",
+            thresholdDbuvPerM = 51.0,
+            points = listOf(
+                GeoPoint(-23.50, -46.68),
+                GeoPoint(-23.45, -46.61),
+                GeoPoint(-23.54, -46.55),
+                GeoPoint(-23.50, -46.68),
+            ),
+            status = ContourStatus.INCOMPLETE,
+            model = "Validated broadcast contour fixture",
+            rulesetId = "anatel-tvd-fixture-v1",
+            warnings = listOf("One radial reached the supported model boundary."),
+        ),
+        ServiceContourOverlay(
+            id = "tv-nodata",
+            siteId = "valley",
+            sectorId = "valley-tv",
+            service = BroadcastService.DIGITAL_TV,
+            purpose = ContourPurpose.PROTECTED,
+            statisticalBasis = "E(50,50)",
+            thresholdDbuvPerM = null,
+            points = emptyList(),
+            status = ContourStatus.NO_DATA,
+            model = "Validated broadcast contour fixture",
+            rulesetId = "anatel-tvd-fixture-v1",
+            warnings = listOf("The digital TV channel is unavailable."),
         ),
     )
 }

@@ -1,15 +1,22 @@
 package com.gecesars.atxplan.data.project
 
 import com.gecesars.atxplan.domain.model.ArchivedProject
+import com.gecesars.atxplan.domain.model.AntennaPatternCoordinateConvention
+import com.gecesars.atxplan.domain.model.AntennaPatternOrigin
+import com.gecesars.atxplan.domain.model.AntennaPatternRecord
 import com.gecesars.atxplan.domain.model.ProjectCatalog
 import com.gecesars.atxplan.domain.model.ProjectFactory
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -37,7 +44,7 @@ class ProjectStorePersistenceTest {
 
         val migrated = persistence.loadCatalog()
 
-        assertEquals(5, migrated.schemaVersion)
+        assertEquals(6, migrated.schemaVersion)
         assertEquals(activeB.id, migrated.selectedProjectId)
         assertEquals(listOf(activeA.id, activeB.id), migrated.projects.map { it.id })
         assertEquals(archived, migrated.archivedProjects.single().project)
@@ -67,7 +74,7 @@ class ProjectStorePersistenceTest {
             val documents = MemoryDocumentStorage()
             val migrated = persistence(control, documents).loadCatalog()
 
-            assertEquals(5, migrated.schemaVersion)
+            assertEquals(6, migrated.schemaVersion)
             assertEquals(expectedProjectName, migrated.selectedProject?.name)
             assertEquals(1, documents.payloads.size)
             assertEquals(PROJECT_STORE_FORMAT, indexCodec.decode(control.snapshot()).format)
@@ -75,7 +82,7 @@ class ProjectStorePersistenceTest {
     }
 
     @Test
-    fun `schema 4 indexed store migrates documents before publishing a schema 5 index`() = runBlocking {
+    fun `schema 4 indexed store migrates documents before publishing a schema 6 index`() = runBlocking {
         val sourceProject = project("project-schema-4", "Indexed Schema 4", 40L)
         val documentCodec = ProjectDocumentCodec()
         val encoded = documentCodec.encode(
@@ -109,18 +116,103 @@ class ProjectStorePersistenceTest {
 
         val migrated = persistence.loadCatalog()
 
-        assertEquals(5, migrated.schemaVersion)
+        assertEquals(6, migrated.schemaVersion)
         assertEquals(sourceProject, migrated.selectedProject)
         assertTrue(migrated.selectedProject!!.linkStudies.isEmpty())
         assertEquals(1, control.writeAttempts)
         assertEquals(1, documents.writeAttempts)
         assertEquals(2, documents.payloads.size)
-        assertEquals(5, indexCodec.decode(control.snapshot()).projectSchemaVersion)
+        assertEquals(6, indexCodec.decode(control.snapshot()).projectSchemaVersion)
 
         assertEquals(migrated, persistence.loadCatalog())
         assertEquals(1, control.writeAttempts)
         assertEquals(1, documents.writeAttempts)
     }
+
+    @Test
+    fun `schema 5 indexed document strips injected antenna calculation fields before schema 6`() =
+        runBlocking {
+            val legacyPattern = AntennaPatternRecord(
+                id = "legacy-pattern",
+                name = "Legacy Pattern",
+                sourceFormat = "PRN",
+            )
+            val sourceProject = project(
+                id = "project-schema-5-pattern",
+                name = "Indexed Schema 5 Pattern",
+                timestamp = 50L,
+            ).copy(antennaPatterns = listOf(legacyPattern))
+            val documentCodec = ProjectDocumentCodec()
+            val encodedRoot = Json.parseToJsonElement(
+                documentCodec.encode(
+                    ProjectDocument(
+                        projectSchemaVersion = 5,
+                        project = sourceProject,
+                    ),
+                ).toString(Charsets.UTF_8),
+            ).jsonObject
+            val encodedProject = encodedRoot.getValue("project").jsonObject
+            val encodedPattern = encodedProject.getValue("antennaPatterns")
+                .jsonArray
+                .single()
+                .jsonObject
+            val injectedPattern = JsonObject(
+                encodedPattern + mapOf(
+                    "sourceArtifactId" to JsonPrimitive("injected-source-artifact"),
+                    "canonicalDataVersion" to JsonPrimitive(1),
+                    "origin" to JsonPrimitive("MEASURED"),
+                    "coordinateConvention" to JsonPrimitive("INJECTED_CONVENTION"),
+                    "horizontalCut" to JsonObject(mapOf("untrusted" to JsonPrimitive(true))),
+                    "verticalCut" to JsonObject(mapOf("untrusted" to JsonPrimitive(true))),
+                    "normalizedContentSha256" to JsonPrimitive("d".repeat(64)),
+                    "warnings" to JsonArray(listOf(JsonPrimitive("Injected warning."))),
+                ),
+            )
+            val injectedProject = JsonObject(
+                encodedProject +
+                    ("antennaPatterns" to JsonArray(listOf(injectedPattern))),
+            )
+            val sourceDocument = JsonObject(
+                encodedRoot + ("project" to injectedProject),
+            ).toString().toByteArray(Charsets.UTF_8)
+            val sourceReference = ProjectDocumentReference(
+                projectId = sourceProject.id,
+                sha256 = sha256Hex(sourceDocument),
+                byteLength = sourceDocument.size.toLong(),
+            )
+            val sourceIndex = indexCodec.encode(
+                ProjectCatalogIndex(
+                    projectSchemaVersion = 5,
+                    selectedProjectId = sourceProject.id,
+                    projects = listOf(sourceReference),
+                ),
+            )
+            val control = MemoryControlStorage(sourceIndex)
+            val documents = MemoryDocumentStorage().apply {
+                payloads[sourceReference.sha256] = sourceDocument
+            }
+
+            val migrated = persistence(control, documents).loadCatalog()
+            val migratedPattern = migrated.selectedProject!!.antennaPatterns.single()
+
+            assertEquals(6, migrated.schemaVersion)
+            assertEquals("PRN", migratedPattern.sourceFormat)
+            assertNull(migratedPattern.sourceArtifactId)
+            assertNull(migratedPattern.canonicalDataVersion)
+            assertEquals(AntennaPatternOrigin.UNKNOWN, migratedPattern.origin)
+            assertEquals(
+                AntennaPatternCoordinateConvention.RELATIVE_AZIMUTH_CLOCKWISE_ELEVATION_UP,
+                migratedPattern.coordinateConvention,
+            )
+            assertNull(migratedPattern.horizontalCut)
+            assertNull(migratedPattern.verticalCut)
+            assertNull(migratedPattern.normalizedContentSha256)
+            assertTrue(migratedPattern.warnings.isEmpty())
+            assertEquals(6, indexCodec.decode(control.snapshot()).projectSchemaVersion)
+            assertEquals(1, control.writeAttempts)
+            assertEquals(1, documents.writeAttempts)
+            assertEquals(2, documents.payloads.size)
+        }
 
     @Test
     fun `failed schema 4 indexed migration preserves the previous authoritative index`() {
@@ -377,7 +469,7 @@ class ProjectStorePersistenceTest {
     @Test
     fun `future index schema is rejected without a repair write`() {
         val future = """
-            {"format":"$PROJECT_STORE_FORMAT","storeSchemaVersion":2,"projectSchemaVersion":5,
+            {"format":"$PROJECT_STORE_FORMAT","storeSchemaVersion":2,"projectSchemaVersion":6,
              "selectedProjectId":null,"projects":[],"archivedProjects":[]}
         """.trimIndent().toByteArray()
         val control = MemoryControlStorage(future)
@@ -411,7 +503,7 @@ class ProjectStorePersistenceTest {
     }
 
     @Test
-    fun `schema 5 monolithic catalog with unknown data is rejected without replacement`() {
+    fun `schema 6 monolithic catalog with unknown data is rejected without replacement`() {
         val catalog = ProjectCatalog(
             projects = listOf(project("project-a", "Active Project", 10L)),
         )
@@ -449,11 +541,11 @@ class ProjectStorePersistenceTest {
         val unsupportedPayloads = listOf(
             """
                 {"format":"another-project-store","storeSchemaVersion":1,
-                 "projectSchemaVersion":5,"selectedProjectId":null,
+                 "projectSchemaVersion":6,"selectedProjectId":null,
                  "projects":[],"archivedProjects":[]}
             """.trimIndent().toByteArray(),
             """
-                {"storeSchemaVersion":1,"projectSchemaVersion":5,
+                {"storeSchemaVersion":1,"projectSchemaVersion":6,
                  "selectedProjectId":null,"projects":[],"archivedProjects":[]}
             """.trimIndent().toByteArray(),
         )

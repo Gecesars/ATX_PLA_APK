@@ -21,6 +21,7 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.SettingsInputAntenna
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -105,6 +106,7 @@ fun RfAssetsScreen(
     activeMutationRequestId: String? = null,
     lastMutationReceipt: RfAssetMutationReceipt?,
     onMutate: (RfAssetMutationCommand) -> Unit,
+    onOpenAntennaPatterns: () -> Unit = {},
     onBack: () -> Unit,
 ) {
     var selectedTabIndex by rememberSaveable { mutableIntStateOf(0) }
@@ -232,6 +234,15 @@ fun RfAssetsScreen(
         }
         item {
             RfAssetSummary(project)
+        }
+        item {
+            OutlinedButton(
+                onClick = onOpenAntennaPatterns,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+            ) {
+                Icon(Icons.Outlined.SettingsInputAntenna, contentDescription = null)
+                Text("Antenna Pattern Lab")
+            }
         }
         item {
             Button(

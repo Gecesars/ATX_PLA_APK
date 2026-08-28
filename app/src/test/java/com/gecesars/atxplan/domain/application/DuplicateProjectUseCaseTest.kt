@@ -349,7 +349,7 @@ class DuplicateProjectUseCaseTest {
     }
 
     @Test
-    fun `schema 5 JSON round trip preserves the duplicated aggregate`() {
+    fun `schema 6 JSON round trip preserves the duplicated aggregate`() {
         val source = richProject()
         val result = useCase(DUPLICATED_PROJECT_ID, 8_000L)(
             ProjectCatalog(selectedProjectId = source.id, projects = listOf(source)),
@@ -360,7 +360,7 @@ class DuplicateProjectUseCaseTest {
         val restored = json.decodeFromString<ProjectCatalog>(json.encodeToString(result.catalog))
         val restoredCopy = restored.projects.last()
 
-        assertEquals(5, restored.schemaVersion)
+        assertEquals(6, restored.schemaVersion)
         assertEquals(result.catalog, restored)
         assertEquals(DUPLICATED_PROJECT_ID, restored.selectedProjectId)
         assertEquals(source.networks, restoredCopy.networks)

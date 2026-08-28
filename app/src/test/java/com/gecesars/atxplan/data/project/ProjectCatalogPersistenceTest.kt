@@ -1,6 +1,13 @@
 package com.gecesars.atxplan.data.project
 
+import com.gecesars.atxplan.domain.antenna.CanonicalAntennaPattern
+import com.gecesars.atxplan.domain.application.ProjectAntennaPatternIdentity
+import com.gecesars.atxplan.domain.application.hasVerifiedNormalizedContentIdentity
+import com.gecesars.atxplan.domain.application.toProjectRecord
 import com.gecesars.atxplan.domain.model.ArchivedProject
+import com.gecesars.atxplan.domain.model.AntennaPatternCoordinateConvention
+import com.gecesars.atxplan.domain.model.AntennaPatternCutAvailability
+import com.gecesars.atxplan.domain.model.AntennaPatternOrigin
 import com.gecesars.atxplan.domain.model.AntennaPatternRecord
 import com.gecesars.atxplan.domain.model.AzimuthDegrees
 import com.gecesars.atxplan.domain.model.ChannelPlanPoint
@@ -37,6 +44,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -78,10 +91,70 @@ class ProjectCatalogPersistenceTest {
     }
 
     @Test
-    fun `schema 1 fixture is migrated through schema 2 and atomically promoted to schema 5`() = runBlocking {
+    fun `schema six record without explicit cut availability stays readable and fails closed`() {
+        val base = catalog(name = "Legacy Availability", timestamp = 42L)
+        val artifact = ProjectArtifactReference(
+            id = "artifact-availability",
+            role = ProjectArtifactRole.ANTENNA_PATTERN,
+            fileName = "availability.atx-antenna.json",
+            mediaType = "application/vnd.atx-plan.antenna+json;version=1",
+            sha256 = "e".repeat(64),
+            byteCount = 1L,
+            createdAtEpochMillis = 42L,
+        )
+        val record = CanonicalAntennaPattern.isotropic(
+            nominalFrequencyHz = 99_500_000.0,
+        ).toProjectRecord(
+            ProjectAntennaPatternIdentity(
+                id = "pattern-availability",
+                name = "Legacy Availability",
+                peakGainDbi = 6.5,
+                sourceFormat = "ATX test",
+                sourceSha256 = null,
+                sourceArtifactId = null,
+                canonicalArtifactId = artifact.id,
+                origin = AntennaPatternOrigin.SYNTHESIZED,
+            ),
+        )
+        val selected = requireNotNull(base.selectedProject)
+        val source = base.copy(
+            projects = base.projects.map { project ->
+                if (project.id == selected.id) {
+                    project.copy(
+                        antennaPatterns = listOf(record),
+                        artifacts = project.artifacts + artifact,
+                    )
+                } else {
+                    project
+                }
+            },
+        )
+        val legacyText = codec.encode(source).toString(Charsets.UTF_8).replace(
+            Regex(",\\s*\"availability\"\\s*:\\s*\"AVAILABLE\""),
+            "",
+        )
+        assertFalse(legacyText.contains("\"availability\""))
+
+        val restored = codec.decode(legacyText.toByteArray())
+        val restoredPattern = requireNotNull(restored.selectedProject).antennaPatterns.single()
+
+        assertEquals(6, restored.schemaVersion)
+        assertEquals(
+            AntennaPatternCutAvailability.LEGACY_UNSPECIFIED,
+            requireNotNull(restoredPattern.horizontalCut).availability,
+        )
+        assertEquals(
+            AntennaPatternCutAvailability.LEGACY_UNSPECIFIED,
+            requireNotNull(restoredPattern.verticalCut).availability,
+        )
+        assertFalse(restoredPattern.hasVerifiedNormalizedContentIdentity())
+    }
+
+    @Test
+    fun `schema 1 fixture is migrated through schema 2 and atomically promoted to schema 6`() = runBlocking {
         val legacyPayload = fixture("project_catalog_v1.json")
         val expected = codec.decode(codec.parse(legacyPayload)).copy(
-            schemaVersion = 5,
+            schemaVersion = 6,
             archivedProjects = emptyList(),
         )
         val storage = InMemoryCatalogStorage(legacyPayload)
@@ -90,7 +163,7 @@ class ProjectCatalogPersistenceTest {
         val migrated = persistence.loadCatalog()
 
         assertEquals(expected, migrated)
-        assertEquals(5, migrated.schemaVersion)
+        assertEquals(6, migrated.schemaVersion)
         assertEquals("legacy-project", migrated.selectedProjectId)
         assertEquals("Legacy Mountain Link", migrated.selectedProject?.name)
         assertEquals("Legacy Carrier", migrated.selectedProject?.customer)
@@ -114,7 +187,7 @@ class ProjectCatalogPersistenceTest {
         assertNull(migrated.selectedProject?.sites?.single()?.sectors?.single()?.networkId)
         assertTrue(migrated.archivedProjects.isEmpty())
         assertEquals(1, storage.writeAttempts.get())
-        assertEquals(5, codec.parse(storage.snapshot()).schemaVersion)
+        assertEquals(6, codec.parse(storage.snapshot()).schemaVersion)
         assertEquals(migrated, codec.decode(storage.snapshot()))
 
         assertEquals(migrated, persistence.loadCatalog())
@@ -139,14 +212,14 @@ class ProjectCatalogPersistenceTest {
     }
 
     @Test
-    fun `schema 2 fixture is migrated and atomically promoted to schema 5`() = runBlocking {
+    fun `schema 2 fixture is migrated and atomically promoted to schema 6`() = runBlocking {
         val schema2Payload = fixture("project_catalog_v2.json")
         val storage = InMemoryCatalogStorage(schema2Payload)
         val persistence = persistence(storage)
 
         val migrated = persistence.loadCatalog()
 
-        assertEquals(5, migrated.schemaVersion)
+        assertEquals(6, migrated.schemaVersion)
         assertEquals("schema-2-project", migrated.selectedProjectId)
         assertEquals("Schema 2 Mountain Path", migrated.selectedProject?.name)
         assertEquals(
@@ -164,7 +237,7 @@ class ProjectCatalogPersistenceTest {
         )
         assertTrue(migrated.archivedProjects.isEmpty())
         assertEquals(1, storage.writeAttempts.get())
-        assertEquals(5, codec.parse(storage.snapshot()).schemaVersion)
+        assertEquals(6, codec.parse(storage.snapshot()).schemaVersion)
         assertEquals(migrated, codec.decode(storage.snapshot()))
 
         assertEquals(migrated, persistence.loadCatalog())
@@ -172,7 +245,7 @@ class ProjectCatalogPersistenceTest {
     }
 
     @Test
-    fun `schema 4 is promoted to schema 5 and cannot inject link study records`() = runBlocking {
+    fun `schema 4 is promoted to schema 6 and cannot inject link study records`() = runBlocking {
         val schema4Catalog = catalog(
             name = "Schema 4 Transactional Project",
             timestamp = 45L,
@@ -187,7 +260,7 @@ class ProjectCatalogPersistenceTest {
 
         val migrated = persistence(storage).loadCatalog()
 
-        assertEquals(5, migrated.schemaVersion)
+        assertEquals(6, migrated.schemaVersion)
         assertEquals("Schema 4 Transactional Project", migrated.selectedProject?.name)
         assertTrue(migrated.selectedProject?.linkStudies?.isEmpty() == true)
         assertEquals(1, storage.writeAttempts.get())
@@ -214,8 +287,8 @@ class ProjectCatalogPersistenceTest {
 
         val migrated = persistence(storage).loadCatalog()
 
-        assertEquals(source.copy(schemaVersion = 5), migrated)
-        assertEquals(5, migrated.schemaVersion)
+        assertEquals(source.copy(schemaVersion = 6), migrated)
+        assertEquals(6, migrated.schemaVersion)
         assertEquals(active, migrated.projects.single())
         assertEquals(archived, migrated.archivedProjects.single().project)
         assertEquals(2, migrated.archivedProjects.single().originalProjectIndex)
@@ -237,6 +310,76 @@ class ProjectCatalogPersistenceTest {
         assertTrue(migrated.selectedProject!!.linkStudies.isEmpty())
         assertEquals(1, storage.writeAttempts.get())
     }
+
+    @Test
+    fun `schema 5 antenna calculation field injection is stripped before schema 6 migration`() =
+        runBlocking {
+            val pattern = AntennaPatternRecord(
+                id = "legacy-pattern",
+                name = "Legacy Pattern",
+                sourceFormat = "PAT",
+            )
+            val project = ProjectFactory.create(
+                name = "Schema 5 Pattern Project",
+                customer = "",
+                nowEpochMillis = 50L,
+            ).copy(antennaPatterns = listOf(pattern))
+            val source = ProjectCatalog(
+                schemaVersion = 5,
+                selectedProjectId = project.id,
+                projects = listOf(project),
+            )
+            val encodedRoot = Json.parseToJsonElement(
+                codec.encode(source).toString(Charsets.UTF_8),
+            ).jsonObject
+            val encodedProjects = encodedRoot.getValue("projects").jsonArray
+            val encodedProject = encodedProjects.single().jsonObject
+            val encodedPattern = encodedProject.getValue("antennaPatterns")
+                .jsonArray
+                .single()
+                .jsonObject
+            val injectedPattern = JsonObject(
+                encodedPattern + mapOf(
+                    "sourceArtifactId" to JsonPrimitive("injected-source-artifact"),
+                    "canonicalDataVersion" to JsonPrimitive(1),
+                    "origin" to JsonPrimitive("SYNTHESIZED"),
+                    "coordinateConvention" to JsonPrimitive("INJECTED_CONVENTION"),
+                    "horizontalCut" to JsonObject(mapOf("untrusted" to JsonPrimitive(true))),
+                    "verticalCut" to JsonObject(mapOf("untrusted" to JsonPrimitive(true))),
+                    "normalizedContentSha256" to JsonPrimitive("c".repeat(64)),
+                    "warnings" to JsonArray(listOf(JsonPrimitive("Injected warning."))),
+                ),
+            )
+            val injectedProject = JsonObject(
+                encodedProject +
+                    ("antennaPatterns" to JsonArray(listOf(injectedPattern))),
+            )
+            val injectedRoot = JsonObject(
+                encodedRoot + ("projects" to JsonArray(listOf(injectedProject))),
+            )
+            val storage = InMemoryCatalogStorage(
+                injectedRoot.toString().toByteArray(Charsets.UTF_8),
+            )
+
+            val migrated = persistence(storage).loadCatalog()
+            val migratedPattern = migrated.selectedProject!!.antennaPatterns.single()
+
+            assertEquals(6, migrated.schemaVersion)
+            assertEquals("PAT", migratedPattern.sourceFormat)
+            assertNull(migratedPattern.sourceArtifactId)
+            assertNull(migratedPattern.canonicalDataVersion)
+            assertEquals(AntennaPatternOrigin.UNKNOWN, migratedPattern.origin)
+            assertEquals(
+                AntennaPatternCoordinateConvention.RELATIVE_AZIMUTH_CLOCKWISE_ELEVATION_UP,
+                migratedPattern.coordinateConvention,
+            )
+            assertNull(migratedPattern.horizontalCut)
+            assertNull(migratedPattern.verticalCut)
+            assertNull(migratedPattern.normalizedContentSha256)
+            assertTrue(migratedPattern.warnings.isEmpty())
+            assertEquals(1, storage.writeAttempts.get())
+            assertEquals(6, codec.parse(storage.snapshot()).schemaVersion)
+        }
 
     @Test
     fun `failed schema 2 promotion preserves the complete source fixture`() {
@@ -269,7 +412,7 @@ class ProjectCatalogPersistenceTest {
 
         val migrated = persistence.loadCatalog()
 
-        assertEquals(5, migrated.schemaVersion)
+        assertEquals(6, migrated.schemaVersion)
         assertTrue(migrated.archivedProjects.isEmpty())
         assertEquals("Schema 2 Mountain Path", migrated.selectedProject?.name)
         assertEquals(1, storage.writeAttempts.get())
@@ -289,7 +432,7 @@ class ProjectCatalogPersistenceTest {
 
         val migrated = persistence(storage).loadCatalog()
 
-        assertEquals(5, migrated.schemaVersion)
+        assertEquals(6, migrated.schemaVersion)
         assertTrue(migrated.archivedProjects.isEmpty())
         assertEquals("Legacy Mountain Link", migrated.selectedProject?.name)
         assertEquals(1, storage.writeAttempts.get())
@@ -367,7 +510,7 @@ class ProjectCatalogPersistenceTest {
     }
 
     @Test
-    fun `negative archive timestamp is rejected without replacing the schema 4 payload`() {
+    fun `negative archive timestamp is rejected without replacing the current payload`() {
         val archivedProject = ProjectFactory.create(
             name = "Archived Fixture",
             customer = "",
@@ -403,7 +546,7 @@ class ProjectCatalogPersistenceTest {
     fun `future schema is rejected without replacing its payload`() {
         val futurePayload = """
             {
-              "schemaVersion": 6,
+              "schemaVersion": 7,
               "selectedProjectId": null,
               "projects": []
             }

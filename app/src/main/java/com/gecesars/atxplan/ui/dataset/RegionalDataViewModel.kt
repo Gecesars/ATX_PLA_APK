@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.gecesars.atxplan.data.dataset.DefaultRegionalArtifactProcessor
 import com.gecesars.atxplan.data.dataset.FileRegionalDatasetRepository
+import com.gecesars.atxplan.data.dataset.REGIONAL_DATA_DIRECTORY
 import com.gecesars.atxplan.domain.dataset.RegionalBounds
 import com.gecesars.atxplan.domain.dataset.RegionalDatasetPlanner
 import com.gecesars.atxplan.domain.dataset.RegionalDatasetRepository
@@ -320,4 +321,3 @@ private const val DEFAULT_SOUTH = "-23.570000"
 private const val DEFAULT_EAST = "-46.640000"
 private const val DEFAULT_NORTH = "-23.540000"
 private const val MAX_COORDINATE_INPUT_LENGTH = 18
-private const val REGIONAL_DATA_DIRECTORY = "datasets/regional"

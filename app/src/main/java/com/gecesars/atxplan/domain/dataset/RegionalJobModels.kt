@@ -838,6 +838,7 @@ enum class RegionalSchedulerSnapshotAvailability {
 
 data class RegionalScheduledJobV1(
     val jobId: String,
+    val planFingerprintSha256: String,
     val schedulerKind: RegionalJobSchedulerKind,
     val schedulerGeneration: Int,
     val schedulerIdentity: String,
@@ -845,6 +846,9 @@ data class RegionalScheduledJobV1(
 ) {
     init {
         require(JOB_ID_PATTERN.matches(jobId)) { "A scheduler snapshot contains an invalid job ID." }
+        require(JOB_SHA256_PATTERN.matches(planFingerprintSha256)) {
+            "A scheduler snapshot requires a lowercase plan SHA-256."
+        }
         require(schedulerKind != RegionalJobSchedulerKind.UNASSIGNED) {
             "A scheduler snapshot requires a concrete scheduler kind."
         }
@@ -900,6 +904,7 @@ data class RegionalJobReconciliationActionV1(
     val expectedRecordSchedulerGeneration: Int?,
     val expectedRecordAbsent: Boolean = false,
     val targetSchedulerKind: RegionalJobSchedulerKind? = null,
+    val targetPlanFingerprintSha256: String? = null,
     val targetSchedulerGeneration: Int? = null,
     val targetSchedulerIdentity: String? = null,
     val problem: RegionalJobProblemV1? = null,
@@ -919,9 +924,12 @@ data class RegionalJobReconciliationActionV1(
         ) { "A reconciliation action has incomplete stale-decision guards." }
         val hasSchedulerTarget = targetSchedulerKind != null
         require(
-            hasSchedulerTarget == (targetSchedulerGeneration != null) &&
+            hasSchedulerTarget == (targetPlanFingerprintSha256 != null) &&
+                hasSchedulerTarget == (targetSchedulerGeneration != null) &&
                 hasSchedulerTarget == (targetSchedulerIdentity != null) &&
                 (targetSchedulerKind == null || targetSchedulerKind != RegionalJobSchedulerKind.UNASSIGNED) &&
+                (targetPlanFingerprintSha256 == null ||
+                    JOB_SHA256_PATTERN.matches(targetPlanFingerprintSha256)) &&
                 (targetSchedulerGeneration == null ||
                     targetSchedulerGeneration in 0..MAXIMUM_SCHEDULER_GENERATION) &&
                 (targetSchedulerIdentity == null || isBoundedSchedulerIdentity(targetSchedulerIdentity)),
@@ -964,6 +972,14 @@ data class RegionalJobReconciliationActionV1(
             expectedRevision == record.revision &&
             expectedPlanFingerprintSha256 == record.planFingerprintSha256 &&
             expectedRecordSchedulerGeneration == record.schedulerGeneration
+
+    fun matchesSchedulerTarget(target: RegionalScheduledJobV1): Boolean =
+        targetPlanFingerprintSha256 != null &&
+            jobId == target.jobId &&
+            targetSchedulerKind == target.schedulerKind &&
+            targetPlanFingerprintSha256 == target.planFingerprintSha256 &&
+            targetSchedulerGeneration == target.schedulerGeneration &&
+            targetSchedulerIdentity == target.schedulerIdentity
 
     fun isCurrentForAbsentRecord(
         readableRecords: Collection<RegionalJobRecordV1>,
@@ -1036,7 +1052,8 @@ object RegionalJobReconciler {
             }
             if (record.cancelRequested) {
                 scheduledJobs.forEach { scheduled -> actions += record.cancelSchedulerAction(scheduled) }
-                actions += record.recordAction(RegionalJobReconciliationActionKind.MARK_CANCELED)
+                // A scheduler snapshot cannot prove that a canceled worker has drained its execution.
+                // Terminalization remains pending for a runner or a future drain-aware executor.
                 return@forEach
             }
             if (!record.hasValidArtifactOutcomes(artifactOutcomeValidator)) {
@@ -1061,7 +1078,8 @@ object RegionalJobReconciler {
             }
 
             val matchingJobs = scheduledJobs.filter { scheduled ->
-                scheduled.schedulerKind == record.schedulerKind &&
+                scheduled.planFingerprintSha256 == record.planFingerprintSha256 &&
+                    scheduled.schedulerKind == record.schedulerKind &&
                     scheduled.schedulerGeneration == record.schedulerGeneration &&
                     (record.schedulerIdentity == null || scheduled.schedulerIdentity == record.schedulerIdentity)
             }.sortedWith(SCHEDULED_JOB_SELECTION_ORDER)
@@ -1327,6 +1345,7 @@ private fun RegionalJobRecordV1.recordAction(
     expectedPlanFingerprintSha256 = planFingerprintSha256,
     expectedRecordSchedulerGeneration = schedulerGeneration,
     targetSchedulerKind = schedulerTarget?.schedulerKind,
+    targetPlanFingerprintSha256 = schedulerTarget?.planFingerprintSha256,
     targetSchedulerGeneration = schedulerTarget?.schedulerGeneration,
     targetSchedulerIdentity = schedulerTarget?.schedulerIdentity,
     problem = problem,
@@ -1341,6 +1360,7 @@ private fun RegionalJobRecordV1.cancelSchedulerAction(
     expectedPlanFingerprintSha256 = planFingerprintSha256,
     expectedRecordSchedulerGeneration = schedulerGeneration,
     targetSchedulerKind = scheduled.schedulerKind,
+    targetPlanFingerprintSha256 = scheduled.planFingerprintSha256,
     targetSchedulerGeneration = scheduled.schedulerGeneration,
     targetSchedulerIdentity = scheduled.schedulerIdentity,
 )
@@ -1364,6 +1384,7 @@ private fun RegionalScheduledJobV1.externalCancelAction(): RegionalJobReconcilia
         expectedRecordSchedulerGeneration = null,
         expectedRecordAbsent = true,
         targetSchedulerKind = schedulerKind,
+        targetPlanFingerprintSha256 = planFingerprintSha256,
         targetSchedulerGeneration = schedulerGeneration,
         targetSchedulerIdentity = schedulerIdentity,
     )
@@ -1495,6 +1516,11 @@ private val REGIONAL_JOB_TRANSITIONS = mapOf(
         RegionalJobState.ENQUEUE_PENDING,
         RegionalJobState.RUNNING_DOWNLOAD,
         RegionalJobState.RUNNING_VERIFY,
+        // A restarted runner may discover that the dataset repository already atomically
+        // committed and revalidated the raw artifact before the prior process published its job
+        // milestone. In that recovery case VERIFIED_RAW is the durable verification checkpoint,
+        // so recreating a nonexistent transfer-partial checkpoint would be less truthful.
+        RegionalJobState.RUNNING_PROCESS,
         RegionalJobState.PAUSED_CONSTRAINT,
         RegionalJobState.SUCCEEDED,
         RegionalJobState.FAILED,

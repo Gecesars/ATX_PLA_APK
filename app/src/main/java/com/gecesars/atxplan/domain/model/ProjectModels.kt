@@ -4,7 +4,7 @@ import com.gecesars.atxplan.domain.study.ProjectLinkStudyRecord
 import kotlinx.serialization.Serializable
 import java.util.UUID
 
-const val PROJECT_CATALOG_SCHEMA_VERSION = 5
+const val PROJECT_CATALOG_SCHEMA_VERSION = 6
 
 @Serializable
 data class ProjectCatalog(
@@ -156,6 +156,7 @@ data class PlannerProject(
         val artifactIds = artifacts.map(ProjectArtifactReference::id).toSet()
         val missingArtifactReferences = buildList {
             antennaPatterns.mapNotNullTo(this) { it.dataArtifactId }
+            antennaPatterns.mapNotNullTo(this) { it.sourceArtifactId }
             gisLayers.mapNotNullTo(this) { it.dataArtifactId }
             coverageSnapshots.mapNotNullTo(this) { it.dataArtifactId }
             regulatoryStudies.mapNotNullTo(this) { it.dataArtifactId }
@@ -501,6 +502,101 @@ enum class ProjectArtifactRole {
 }
 
 @Serializable
+enum class AntennaPatternOrigin {
+    IMPORTED,
+    SYNTHESIZED,
+    ANALYTICAL,
+    MEASURED,
+    SIMULATED,
+    UNKNOWN,
+}
+
+@Serializable
+enum class AntennaPatternPlane {
+    HORIZONTAL,
+    VERTICAL,
+}
+
+/**
+ * Persisted engineering availability for a canonical antenna cut.
+ *
+ * The legacy default is intentionally not calculation-ready: documents written before this field
+ * existed remain readable without silently promoting an isotropic compatibility placeholder (or
+ * otherwise unknown cut) into engineering data.
+ */
+@Serializable
+enum class AntennaPatternCutAvailability {
+    AVAILABLE,
+    ISOTROPIC_DISPLAY_PLACEHOLDER,
+    LEGACY_UNSPECIFIED,
+}
+
+@Serializable
+enum class AntennaPatternCoordinateConvention {
+    /**
+     * Horizontal angles are clockwise offsets from antenna boresight. Vertical angles are
+     * positive above the local horizon. Stored cuts contain normalized field amplitude E/Emax.
+     */
+    RELATIVE_AZIMUTH_CLOCKWISE_ELEVATION_UP,
+}
+
+/**
+ * Compact, calculation-ready antenna cut stored in the project document.
+ *
+ * Imported source resolution and headers remain in the immutable pattern artifact. Project cuts
+ * are deliberately normalized to fixed one-degree grids so radial calculations stay bounded,
+ * deterministic, and available without loading an external file.
+ */
+@Serializable
+data class AntennaPatternCutRecord(
+    val plane: AntennaPatternPlane,
+    val startAngleDegrees: Double,
+    val stepDegrees: Double,
+    val normalizedField: List<Double>,
+    val phaseDegrees: List<Double> = emptyList(),
+    val availability: AntennaPatternCutAvailability =
+        AntennaPatternCutAvailability.LEGACY_UNSPECIFIED,
+) {
+    init {
+        require(startAngleDegrees.isFinite() && stepDegrees.isFinite() && stepDegrees > 0.0) {
+            "An antenna cut requires finite, increasing angular coordinates."
+        }
+        val expectedSampleCount = when (plane) {
+            AntennaPatternPlane.HORIZONTAL -> 360
+            AntennaPatternPlane.VERTICAL -> 181
+        }
+        val expectedStart = when (plane) {
+            AntennaPatternPlane.HORIZONTAL -> 0.0
+            AntennaPatternPlane.VERTICAL -> -90.0
+        }
+        require(normalizedField.size == expectedSampleCount) {
+            "A canonical ${plane.name.lowercase()} cut requires $expectedSampleCount samples."
+        }
+        require(kotlin.math.abs(startAngleDegrees - expectedStart) <= 1e-9) {
+            "A canonical ${plane.name.lowercase()} cut has an invalid start angle."
+        }
+        require(kotlin.math.abs(stepDegrees - 1.0) <= 1e-9) {
+            "A canonical antenna cut requires one-degree sample spacing."
+        }
+        require(normalizedField.all { value -> value.isFinite() && value in 0.0..1.0 }) {
+            "A canonical antenna cut requires finite E/Emax samples between zero and one."
+        }
+        require(normalizedField.any { value -> value > 0.0 }) {
+            "A canonical antenna cut cannot contain only zero field samples."
+        }
+        require(kotlin.math.abs(normalizedField.max() - 1.0) <= 1e-6) {
+            "A canonical antenna cut must be normalized to a unit peak field."
+        }
+        require(phaseDegrees.isEmpty() || phaseDegrees.size == normalizedField.size) {
+            "Antenna phase samples must be absent or align with every field sample."
+        }
+        require(phaseDegrees.all(Double::isFinite)) {
+            "Antenna phase samples must be finite."
+        }
+    }
+}
+
+@Serializable
 data class AntennaPatternRecord(
     val id: String,
     val name: String,
@@ -508,10 +604,22 @@ data class AntennaPatternRecord(
     val peakGainDbi: Double? = null,
     val sourceFormat: String = "",
     val sourceSha256: String? = null,
+    val sourceArtifactId: String? = null,
     val dataArtifactId: String? = null,
+    val canonicalDataVersion: Int? = null,
+    val origin: AntennaPatternOrigin = AntennaPatternOrigin.UNKNOWN,
+    val coordinateConvention: AntennaPatternCoordinateConvention =
+        AntennaPatternCoordinateConvention.RELATIVE_AZIMUTH_CLOCKWISE_ELEVATION_UP,
+    val horizontalCut: AntennaPatternCutRecord? = null,
+    val verticalCut: AntennaPatternCutRecord? = null,
+    val normalizedContentSha256: String? = null,
+    val warnings: List<String> = emptyList(),
 ) {
     init {
         require(id.isNotBlank() && name.isNotBlank()) { "Invalid antenna pattern record." }
+        require(name.length <= 160 && name.none(Char::isISOControl)) {
+            "The antenna pattern name must be bounded and contain no control characters."
+        }
         require(nominalFrequencyHz == null || nominalFrequencyHz > 0.0 && nominalFrequencyHz.isFinite()) {
             "The nominal antenna frequency must be positive when available."
         }
@@ -523,6 +631,43 @@ data class AntennaPatternRecord(
         }
         require(dataArtifactId == null || dataArtifactId.isNotBlank()) {
             "An antenna data artifact reference cannot be blank."
+        }
+        require(sourceArtifactId == null || sourceArtifactId.isNotBlank()) {
+            "An antenna source artifact reference cannot be blank."
+        }
+        require(sourceArtifactId == null || sourceArtifactId != dataArtifactId) {
+            "The antenna source and canonical data artifacts require distinct references."
+        }
+        require(sourceFormat.length <= 80 && sourceFormat.none(Char::isISOControl)) {
+            "The antenna source format must be bounded and contain no control characters."
+        }
+        require(canonicalDataVersion == null || canonicalDataVersion == 1) {
+            "The canonical antenna data version is not supported."
+        }
+        require(horizontalCut == null || horizontalCut.plane == AntennaPatternPlane.HORIZONTAL) {
+            "The horizontal antenna cut has the wrong plane."
+        }
+        require(verticalCut == null || verticalCut.plane == AntennaPatternPlane.VERTICAL) {
+            "The vertical antenna cut has the wrong plane."
+        }
+        require(
+            canonicalDataVersion != null ||
+                horizontalCut == null && verticalCut == null && normalizedContentSha256 == null,
+        ) {
+            "Calculation-ready antenna data requires an explicit canonical version."
+        }
+        require(normalizedContentSha256 == null || SHA256_PATTERN.matches(normalizedContentSha256)) {
+            "The normalized antenna content hash must be a lowercase SHA-256 digest."
+        }
+        require(warnings.size <= MAX_ANTENNA_PATTERN_WARNINGS) {
+            "The antenna pattern contains too many warnings."
+        }
+        require(warnings.all { warning ->
+            warning.isNotBlank() &&
+                warning.length <= MAX_ANTENNA_PATTERN_WARNING_CHARS &&
+                warning.none(Char::isISOControl)
+        }) {
+            "An antenna pattern warning is blank, too long, or contains control characters."
         }
     }
 }
@@ -666,6 +811,8 @@ private const val MAX_OPAQUE_JSON_CHARS = 1_000_000
 private const val MAX_IMPORT_NOTICES = 2_000
 private const val MAX_IMPORT_NOTICE_CHARS = 2_000
 private const val MAX_PROJECT_LINK_STUDIES = 2_000
+private const val MAX_ANTENNA_PATTERN_WARNINGS = 100
+private const val MAX_ANTENNA_PATTERN_WARNING_CHARS = 500
 
 @Serializable
 data class StudySummary(
@@ -794,6 +941,7 @@ object ProjectFactory {
                 antennaGainDbi = 8.0,
                 feederLossDb = 2.0,
                 frequencyMHz = 99.5,
+                networkId = "network-demo-fm",
             ),
         ),
     )

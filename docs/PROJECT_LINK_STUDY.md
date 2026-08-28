@@ -12,7 +12,7 @@ ATX Plan Android can calculate and durably save a point-to-point scalar link stu
 4. Calculate and save the study in one latest-durable catalog transaction.
 5. Reopen the latest result, expand its complete persisted details, or inspect older results through the lazy saved-history list.
 
-The transaction compares the complete project snapshot reviewed by the UI with the latest durable aggregate. A changed or deleted project, endpoint, network, or RF value rejects the request instead of calculating from stale data. UI state is published only after the project-schema-5 document and store-schema-1 atomic index commit succeed.
+The transaction compares the complete project snapshot reviewed by the UI with the latest durable aggregate. A changed or deleted project, endpoint, network, or RF value rejects the request instead of calculating from stale data. UI state is published only after the current project-schema-6 document and store-schema-1 atomic index commit succeed.
 
 The independent manual calculator remains available. Its result is held in memory and is not added to the project.
 
@@ -47,7 +47,7 @@ Official reference: [Recommendation ITU-R P.525-5](https://www.itu.int/rec/R-REC
 
 ## Immutable record and storage
 
-Project schema 5 adds bounded `linkStudies` records. Each record requires a matching completed point-to-point study summary and contains:
+Project schema 5 introduced bounded `linkStudies` records, and current schema 6 retains them. Each record requires a matching completed point-to-point study summary and contains:
 
 - project, network, transmitter, and receiver source IDs and names;
 - endpoint coordinates, AGL heights, sector azimuth/tilt, active states, pattern-reference state, and network downlink frequency;
@@ -61,7 +61,7 @@ Strict deserialization recalculates the fingerprint, every derived geometry term
 
 Project duplication copies existing immutable study records unchanged. Their snapshotted source project ID and name continue to identify the project in which each calculation originally ran; they are intentionally not rebased to the duplicate's new root ID. This historical identity is not a general duplication-lineage marker for the new aggregate.
 
-Existing indexed project-schema-4 stores migrate by reading and validating all referenced project-schema-4 documents, stripping fields that did not exist in that schema, writing every new immutable project-schema-5 document, and publishing a replacement store-schema-1 index declaring project schema 5 only after those documents are durable. A document or index write failure leaves the previous store-schema-1 index declaring project schema 4 authoritative. Legacy monolithic project schemas follow their ordered migration chain through project schema 5.
+Existing indexed project-schema-4 stores migrate by reading and validating all referenced project-schema-4 documents, stripping fields that did not exist in that schema, writing every required immutable schema-5 and current schema-6 document in order, and publishing a replacement store-schema-1 index declaring project schema 6 only after the current documents are durable. A document or index write failure leaves the previous store-schema-1 index declaring project schema 4 authoritative. Legacy monolithic project schemas follow their ordered migration chain through project schema 5 and finish at current project schema 6. Schema 5 remains the historical milestone that introduced link studies.
 
 ## Explicit exclusions
 
@@ -78,7 +78,7 @@ The offline IBGE attribute index is not used by this calculation. It contains no
 
 ## Verification boundary
 
-Pure JVM tests cover desktop-compatible distance vectors, cardinal bearings, antimeridian behavior, undefined endpoints, receiver-profile overrides and compatibility-only profiles, all scalar terms, strict JSON round trips, record tampering and numerical tolerances, stale source rejection, ID collision, schema migration, and interrupted publication. Five Compose instrumentation cases cover compact 360 x 480 dp operation at font scale 1.30, complete saved details, lazy chronological history, collision-safe structured sector identity, and the incompatible-receiver state. The current 72-test connected suite is green on the API 36 emulator at system font scale 1.30. A bounded manual force-stop/relaunch reopened the same saved endpoint, scalar terms, provenance, and fingerprint; this is not Android Backup or broad process-death/device-matrix evidence.
+Pure JVM tests cover desktop-compatible distance vectors, cardinal bearings, antimeridian behavior, undefined endpoints, receiver-profile overrides and compatibility-only profiles, all scalar terms, strict JSON round trips, record tampering and numerical tolerances, stale source rejection, ID collision, schema migration, and interrupted publication. Five Compose instrumentation cases cover compact 360 x 480 dp operation at font scale 1.30, complete saved details, lazy chronological history, collision-safe structured sector identity, and the incompatible-receiver state. They are included in the latest green API 36 and JVM aggregate runs. A bounded manual force-stop/relaunch also reopened the same saved endpoint, scalar terms, provenance, and fingerprint. This is not Android Backup, physical-device, or broad process-death/device-matrix evidence.
 
 Desktop behavior was mapped from:
 

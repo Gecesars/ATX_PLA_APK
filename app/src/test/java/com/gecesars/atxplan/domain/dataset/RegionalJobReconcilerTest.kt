@@ -81,6 +81,9 @@ class RegionalJobReconcilerTest {
 
         assertEquals(RegionalJobReconciliationActionKind.CANCEL_SCHEDULER_ENTRY, absenceAction.kind)
         assertTrue(absenceAction.expectedRecordAbsent)
+        assertEquals(null, absenceAction.expectedPlanFingerprintSha256)
+        assertEquals(externalTarget.planFingerprintSha256, absenceAction.targetPlanFingerprintSha256)
+        assertTrue(absenceAction.matchesSchedulerTarget(externalTarget))
         assertTrue(absenceAction.isCurrentForAbsentRecord(emptyList(), emptySet()))
         assertTrue(!absenceAction.isCurrentForAbsentRecord(listOf(record), emptySet()))
         assertTrue(!absenceAction.isCurrentForAbsentRecord(emptyList(), setOf(record.jobId)))
@@ -127,9 +130,10 @@ class RegionalJobReconcilerTest {
     @Test
     fun `pending intent is adopted when present and enqueued when absent`() {
         val record = testRegionalJob()
+        val target = scheduled(record)
         val present = RegionalJobReconciler.reconcile(
             records = listOf(record),
-            schedulerSnapshot = completeSnapshot(scheduled(record)),
+            schedulerSnapshot = completeSnapshot(target),
             unreadableJobIds = emptySet(),
         )
         val absent = RegionalJobReconciler.reconcile(
@@ -140,17 +144,23 @@ class RegionalJobReconcilerTest {
 
         assertEquals(listOf(RegionalJobReconciliationActionKind.ADOPT_AS_QUEUED), present.map { it.kind })
         assertEquals(record.schedulerKind, present.single().targetSchedulerKind)
+        assertEquals(record.planFingerprintSha256, present.single().targetPlanFingerprintSha256)
         assertEquals(record.schedulerGeneration, present.single().targetSchedulerGeneration)
         assertEquals("work-regional-1", present.single().targetSchedulerIdentity)
+        assertTrue(present.single().matchesSchedulerTarget(target))
+        assertTrue(
+            !present.single().matchesSchedulerTarget(target.copy(planFingerprintSha256 = "e".repeat(64))),
+        )
         assertEquals(listOf(RegionalJobReconciliationActionKind.ENQUEUE), absent.map { it.kind })
     }
 
     @Test
-    fun `durable cancellation cancels scheduler and marks the record canceled with stale decision guards`() {
+    fun `durable cancellation cancels scheduler and awaits drain evidence with stale decision guards`() {
         val canceled = testRegionalJob().requestCancellation(1_010L)
+        val target = scheduled(canceled)
         val present = RegionalJobReconciler.reconcile(
             records = listOf(canceled),
-            schedulerSnapshot = completeSnapshot(scheduled(canceled)),
+            schedulerSnapshot = completeSnapshot(target),
             unreadableJobIds = emptySet(),
         )
         val absent = RegionalJobReconciler.reconcile(
@@ -158,16 +168,17 @@ class RegionalJobReconcilerTest {
             schedulerSnapshot = completeSnapshot(),
             unreadableJobIds = emptySet(),
         )
-
-        assertEquals(
-            listOf(
-                RegionalJobReconciliationActionKind.CANCEL_SCHEDULER_ENTRY,
-                RegionalJobReconciliationActionKind.MARK_CANCELED,
-            ),
-            present.map { it.kind },
+        val finished = RegionalJobReconciler.reconcile(
+            records = listOf(canceled),
+            schedulerSnapshot = completeSnapshot(target.copy(state = RegionalScheduledJobState.FINISHED)),
+            unreadableJobIds = emptySet(),
         )
-        assertEquals(listOf(RegionalJobReconciliationActionKind.MARK_CANCELED), absent.map { it.kind })
-        (present + absent).forEach { action ->
+
+        assertEquals(listOf(RegionalJobReconciliationActionKind.CANCEL_SCHEDULER_ENTRY), present.map { it.kind })
+        assertTrue(absent.isEmpty())
+        assertEquals(listOf(RegionalJobReconciliationActionKind.CANCEL_SCHEDULER_ENTRY), finished.map { it.kind })
+        assertTrue(finished.none { it.kind == RegionalJobReconciliationActionKind.MARK_CANCELED })
+        present.forEach { action ->
             assertEquals(canceled.revision, action.expectedRevision)
             assertEquals(canceled.planFingerprintSha256, action.expectedPlanFingerprintSha256)
             assertEquals(canceled.schedulerGeneration, action.expectedRecordSchedulerGeneration)
@@ -175,8 +186,10 @@ class RegionalJobReconcilerTest {
         }
         val cancel = present.first()
         assertEquals(canceled.schedulerKind, cancel.targetSchedulerKind)
+        assertEquals(canceled.planFingerprintSha256, cancel.targetPlanFingerprintSha256)
         assertEquals(canceled.schedulerGeneration, cancel.targetSchedulerGeneration)
         assertEquals("work-regional-1", cancel.targetSchedulerIdentity)
+        assertTrue(cancel.matchesSchedulerTarget(target))
     }
 
     @Test
@@ -217,9 +230,10 @@ class RegionalJobReconcilerTest {
 
         listOf(pending, queued, running, processing, paused).forEach { record ->
             val canceled = record.requestCancellation(record.updatedAtEpochMillis + 1L)
+            val target = scheduled(canceled)
             val present = RegionalJobReconciler.reconcile(
                 records = listOf(canceled),
-                schedulerSnapshot = completeSnapshot(scheduled(canceled)),
+                schedulerSnapshot = completeSnapshot(target),
                 unreadableJobIds = emptySet(),
             )
             val absent = RegionalJobReconciler.reconcile(
@@ -229,16 +243,11 @@ class RegionalJobReconcilerTest {
             )
 
             assertEquals(
-                listOf(
-                    RegionalJobReconciliationActionKind.CANCEL_SCHEDULER_ENTRY,
-                    RegionalJobReconciliationActionKind.MARK_CANCELED,
-                ),
+                listOf(RegionalJobReconciliationActionKind.CANCEL_SCHEDULER_ENTRY),
                 present.map { it.kind },
             )
-            assertEquals(
-                listOf(RegionalJobReconciliationActionKind.MARK_CANCELED),
-                absent.map { it.kind },
-            )
+            assertTrue(absent.isEmpty())
+            assertTrue(present.single().matchesSchedulerTarget(target))
         }
     }
 
@@ -246,6 +255,7 @@ class RegionalJobReconcilerTest {
     fun `scheduler entry without a record and terminal entry are canceled without inferred success`() {
         val external = RegionalScheduledJobV1(
             jobId = "123e4567-e89b-42d3-a456-426614174099",
+            planFingerprintSha256 = "e".repeat(64),
             schedulerKind = RegionalJobSchedulerKind.WORK_MANAGER_FOREGROUND,
             schedulerGeneration = 0,
             schedulerIdentity = "external-work",
@@ -261,6 +271,34 @@ class RegionalJobReconcilerTest {
 
         assertEquals(2, actions.size)
         assertTrue(actions.all { it.kind == RegionalJobReconciliationActionKind.CANCEL_SCHEDULER_ENTRY })
+        assertTrue(actions.all { action ->
+            listOf(external, scheduled(succeeded)).any(action::matchesSchedulerTarget)
+        })
+    }
+
+    @Test
+    fun `scheduler entry for another plan is canceled and never adopted`() {
+        val pending = testRegionalJob()
+        val wrongPlan = scheduled(pending).copy(planFingerprintSha256 = "e".repeat(64))
+
+        val actions = RegionalJobReconciler.reconcile(
+            records = listOf(pending),
+            schedulerSnapshot = completeSnapshot(wrongPlan),
+            unreadableJobIds = emptySet(),
+        )
+
+        assertEquals(
+            listOf(
+                RegionalJobReconciliationActionKind.CANCEL_SCHEDULER_ENTRY,
+                RegionalJobReconciliationActionKind.MARK_ORPHANED,
+            ),
+            actions.map(RegionalJobReconciliationActionV1::kind),
+        )
+        assertTrue(actions.none { it.kind == RegionalJobReconciliationActionKind.ADOPT_AS_QUEUED })
+        val cancel = actions.first()
+        assertEquals(pending.planFingerprintSha256, cancel.expectedPlanFingerprintSha256)
+        assertEquals(wrongPlan.planFingerprintSha256, cancel.targetPlanFingerprintSha256)
+        assertTrue(cancel.matchesSchedulerTarget(wrongPlan))
     }
 
     @Test
@@ -302,6 +340,7 @@ class RegionalJobReconcilerTest {
         assertTrue(report.isCurrentFor(terminal))
         assertTrue(!report.expectedRecordAbsent)
         assertTrue(report.problem != null)
+        assertEquals(null, report.targetPlanFingerprintSha256)
         assertEquals(null, report.targetSchedulerIdentity)
 
         val validActions = RegionalJobReconciler.reconcile(
@@ -364,7 +403,9 @@ class RegionalJobReconcilerTest {
         }
 
         assertEquals(RegionalJobReconciliationActionKind.PREPARE_REENQUEUE, valid.single().kind)
+        assertEquals(null, valid.single().targetPlanFingerprintSha256)
         assertEquals(RegionalJobReconciliationActionKind.MARK_ORPHANED, invalid.single().kind)
+        assertEquals(null, invalid.single().targetPlanFingerprintSha256)
         assertEquals("checkpoint-invalid", invalid.single().problem?.code)
     }
 
@@ -529,13 +570,15 @@ class RegionalJobReconcilerTest {
                 artifactOutcomeValidator = RegionalJobArtifactOutcomeValidator { _, _, _ -> true },
             ).isEmpty(),
         )
+        val target = scheduled(incompatibleTerminal)
         val withScheduler = RegionalJobReconciler.reconcile(
             records = listOf(incompatibleTerminal),
-            schedulerSnapshot = completeSnapshot(scheduled(incompatibleTerminal)),
+            schedulerSnapshot = completeSnapshot(target),
             unreadableJobIds = emptySet(),
             artifactOutcomeValidator = RegionalJobArtifactOutcomeValidator { _, _, _ -> true },
         )
         assertEquals(listOf(RegionalJobReconciliationActionKind.CANCEL_SCHEDULER_ENTRY), withScheduler.map { it.kind })
+        assertTrue(withScheduler.single().matchesSchedulerTarget(target))
     }
 
     @Test
@@ -605,15 +648,19 @@ class RegionalJobReconcilerTest {
         assertTrue(cancel.isCurrentFor(record))
         assertEquals(record.schedulerGeneration, cancel.expectedRecordSchedulerGeneration)
         assertEquals(stale.schedulerKind, cancel.targetSchedulerKind)
+        assertEquals(stale.planFingerprintSha256, cancel.targetPlanFingerprintSha256)
         assertEquals(stale.schedulerGeneration, cancel.targetSchedulerGeneration)
         assertEquals(stale.schedulerIdentity, cancel.targetSchedulerIdentity)
+        assertTrue(cancel.matchesSchedulerTarget(stale))
 
         val adopt = actions.single { it.kind == RegionalJobReconciliationActionKind.ADOPT_AS_QUEUED }
         assertTrue(adopt.isCurrentFor(record))
         assertEquals(record.schedulerGeneration, adopt.expectedRecordSchedulerGeneration)
         assertEquals(current.schedulerKind, adopt.targetSchedulerKind)
+        assertEquals(current.planFingerprintSha256, adopt.targetPlanFingerprintSha256)
         assertEquals(current.schedulerGeneration, adopt.targetSchedulerGeneration)
         assertEquals(current.schedulerIdentity, adopt.targetSchedulerIdentity)
+        assertTrue(adopt.matchesSchedulerTarget(current))
     }
 
     @Test
@@ -637,6 +684,7 @@ class RegionalJobReconcilerTest {
         assertEquals(2, terminalActions.size)
         assertTrue(terminalActions.all { it.kind == RegionalJobReconciliationActionKind.CANCEL_SCHEDULER_ENTRY })
         assertTrue(terminalActions.all { it.isCurrentFor(terminal) })
+        assertTrue(terminalActions.all { action -> terminalTargets.any(action::matchesSchedulerTarget) })
         assertEquals(
             terminalTargets.map(RegionalScheduledJobV1::schedulerIdentity).toSet(),
             terminalActions.mapNotNull { it.targetSchedulerIdentity }.toSet(),
@@ -662,14 +710,12 @@ class RegionalJobReconcilerTest {
 
         assertEquals(2, cancellationCancels.size)
         assertTrue(cancellationCancels.all { it.isCurrentFor(canceled) })
+        assertTrue(cancellationCancels.all { action -> cancellationTargets.any(action::matchesSchedulerTarget) })
         assertEquals(
             cancellationTargets.map(RegionalScheduledJobV1::schedulerIdentity).toSet(),
             cancellationCancels.mapNotNull { it.targetSchedulerIdentity }.toSet(),
         )
-        assertEquals(
-            1,
-            cancellationActions.count { it.kind == RegionalJobReconciliationActionKind.MARK_CANCELED },
-        )
+        assertTrue(cancellationActions.none { it.kind == RegionalJobReconciliationActionKind.MARK_CANCELED })
     }
 
     private fun successfulRecord(): RegionalJobRecordV1 {
@@ -717,6 +763,7 @@ class RegionalJobReconcilerTest {
 
     private fun scheduled(record: RegionalJobRecordV1): RegionalScheduledJobV1 = RegionalScheduledJobV1(
         jobId = record.jobId,
+        planFingerprintSha256 = record.planFingerprintSha256,
         schedulerKind = record.schedulerKind,
         schedulerGeneration = record.schedulerGeneration,
         schedulerIdentity = record.schedulerIdentity ?: "work-regional-1",

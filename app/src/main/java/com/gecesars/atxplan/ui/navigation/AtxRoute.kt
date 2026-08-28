@@ -40,6 +40,7 @@ sealed interface AtxRoute : NavKey {
                 else -> parseRfPathEditorRoute(stableId)
                     ?: parseProjectRenameRoute(stableId)
                     ?: parseRfAssetsRoute(stableId)
+                    ?: parseAntennaPatternsRoute(stableId)
                     ?: UnsupportedRoute(stableId)
             }
         }
@@ -64,6 +65,14 @@ sealed interface AtxRoute : NavKey {
         fun rfAssets(projectId: String?): AtxRoute =
             if (projectId != null && projectId.isValidRouteProjectId()) {
                 RfAssetsRoute(projectId)
+            } else {
+                DashboardRoute
+            }
+
+        /** Creates the project-scoped antenna pattern laboratory route. */
+        fun antennaPatterns(projectId: String?): AtxRoute =
+            if (projectId != null && projectId.isValidRouteProjectId()) {
+                AntennaPatternsRoute(projectId)
             } else {
                 DashboardRoute
             }
@@ -134,6 +143,18 @@ data class RfAssetsRoute(
         get() = if (hasValidProjectId) "$RF_ASSETS_PREFIX$projectId" else DashboardRoute.stableId
 }
 
+/** Project-scoped antenna import, synthesis, assignment, and export workspace. */
+@Serializable
+data class AntennaPatternsRoute(
+    val projectId: String,
+) : AtxRoute {
+    internal val hasValidProjectId: Boolean
+        get() = projectId.isValidRouteProjectId()
+
+    override val stableId: String
+        get() = if (hasValidProjectId) "$ANTENNA_PATTERNS_PREFIX$projectId" else DashboardRoute.stableId
+}
+
 /** A bounded unknown identifier that the shell renders through its safe fallback branch. */
 class UnsupportedRoute internal constructor(
     rawStableId: String,
@@ -167,6 +188,7 @@ internal fun AtxRoute.supportedOrDashboard(): AtxRoute = when (this) {
     is RfPathEditorRoute -> if (hasValidProjectId) this else DashboardRoute
     is ProjectRenameRoute -> if (hasValidProjectId) this else DashboardRoute
     is RfAssetsRoute -> if (hasValidProjectId) this else DashboardRoute
+    is AntennaPatternsRoute -> if (hasValidProjectId) this else DashboardRoute
     is UnsupportedRoute -> DashboardRoute
 }
 
@@ -207,6 +229,7 @@ private fun AtxRoute.persistedStableId(): String = when (this) {
     is RfPathEditorRoute -> if (hasValidProjectId) stableId else DashboardRoute.stableId
     is ProjectRenameRoute -> if (hasValidProjectId) stableId else DashboardRoute.stableId
     is RfAssetsRoute -> if (hasValidProjectId) stableId else DashboardRoute.stableId
+    is AntennaPatternsRoute -> if (hasValidProjectId) stableId else DashboardRoute.stableId
     is UnsupportedRoute -> stableId
 }
 
@@ -228,6 +251,12 @@ private fun parseRfAssetsRoute(stableId: String): RfAssetsRoute? {
     return projectId.takeIf(String::isValidRouteProjectId)?.let(::RfAssetsRoute)
 }
 
+private fun parseAntennaPatternsRoute(stableId: String): AntennaPatternsRoute? {
+    if (!stableId.startsWith(ANTENNA_PATTERNS_PREFIX)) return null
+    val projectId = stableId.removePrefix(ANTENNA_PATTERNS_PREFIX)
+    return projectId.takeIf(String::isValidRouteProjectId)?.let(::AntennaPatternsRoute)
+}
+
 private fun String.isValidRouteProjectId(): Boolean =
     length in 1..MAX_RF_PATH_PROJECT_ID_LENGTH &&
         isNotBlank() &&
@@ -238,5 +267,6 @@ internal const val MAX_RF_PATH_PROJECT_ID_LENGTH = 128
 internal const val RF_PATH_EDITOR_PREFIX = "rf-path-editor:"
 internal const val PROJECT_RENAME_PREFIX = "project-rename:"
 internal const val RF_ASSETS_PREFIX = "rf-assets:"
+internal const val ANTENNA_PATTERNS_PREFIX = "antenna-patterns:"
 private const val MAX_UNKNOWN_ROUTE_ID_LENGTH = 160
 private const val MAX_PERSISTED_ROUTE_ID_LENGTH = 160

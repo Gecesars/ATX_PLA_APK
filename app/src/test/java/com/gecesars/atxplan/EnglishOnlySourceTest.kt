@@ -34,6 +34,9 @@ class EnglishOnlySourceTest {
     private fun String.withoutApprovedSourceIdentifiers(): String =
         replace(officialUrl, "")
             .replace("BR_setores_CD2022.zip", "")
+            // Exact external XML attribute names required by the official Anatel schema.
+            .replace("Frequencia", "")
+            .replace("PadraoAntena_dBd", "")
 
     private companion object {
         val portugueseUiTerm = Regex(

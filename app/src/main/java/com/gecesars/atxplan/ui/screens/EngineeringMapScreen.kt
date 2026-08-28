@@ -1,5 +1,8 @@
 package com.gecesars.atxplan.ui.screens
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -29,6 +32,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.EditLocationAlt
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.LocationOn
 import androidx.compose.material.icons.outlined.MyLocation
@@ -59,6 +63,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -86,6 +92,10 @@ import com.gecesars.atxplan.domain.application.RfAssetKind
 import com.gecesars.atxplan.domain.application.RfAssetMutationCommand
 import com.gecesars.atxplan.domain.application.RfAssetMutationReceipt
 import com.gecesars.atxplan.domain.application.RfAssetMutationStatus
+import com.gecesars.atxplan.domain.contour.BroadcastService
+import com.gecesars.atxplan.domain.contour.ContourPurpose
+import com.gecesars.atxplan.domain.contour.ContourStatus
+import com.gecesars.atxplan.domain.contour.ServiceContourOverlay
 import com.gecesars.atxplan.domain.geo.GeographicCamera
 import com.gecesars.atxplan.domain.geo.GeographicViewport
 import com.gecesars.atxplan.domain.geo.ScreenPointPx
@@ -124,6 +134,7 @@ import kotlin.math.sin
 @Composable
 fun EngineeringMapScreen(
     project: PlannerProject?,
+    serviceContours: List<ServiceContourOverlay> = emptyList(),
     isCatalogWritable: Boolean = false,
     isSaving: Boolean = false,
     catalogMutationCompletionCount: Long = 0L,
@@ -131,6 +142,7 @@ fun EngineeringMapScreen(
     activeMutationRequestId: String? = null,
     lastMutationReceipt: RfAssetMutationReceipt? = null,
     onMoveSite: (RfAssetMutationCommand.MoveSite) -> Unit = {},
+    onExportServiceContours: (Uri) -> Unit = {},
 ) {
     val sites = project?.sites.orEmpty()
     val density = LocalDensity.current
@@ -161,6 +173,9 @@ fun EngineeringMapScreen(
     var pendingMutationSessionId by rememberSaveable { mutableStateOf<String?>(null) }
     var moveDialogMessage by rememberSaveable { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
+    val kmzExportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/vnd.google-earth.kmz"),
+    ) { uri -> uri?.let(onExportServiceContours) }
 
     fun currentCamera(): GeographicCamera = GeographicCamera(
         center = GeographicViewport.canonicalPoint(
@@ -193,14 +208,18 @@ fun EngineeringMapScreen(
 
     fun fitSites() {
         val viewport = currentViewport() ?: return
-        if (sites.isEmpty()) {
+        val contourPoints = serviceContours
+            .filter { contour -> contour.status != ContourStatus.NO_DATA }
+            .flatMap(ServiceContourOverlay::points)
+        val visibleGeometry = sites.map(RadioSite::location) + contourPoints
+        if (visibleGeometry.isEmpty()) {
             updateCamera(DEFAULT_GEOGRAPHIC_CAMERA)
             return
         }
         val padding = fitPaddingPx.coerceAtMost(min(viewport.width, viewport.height) * 0.28)
         updateCamera(
             GeographicViewport.fitCamera(
-                points = sites.map(RadioSite::location),
+                points = visibleGeometry,
                 viewport = viewport,
                 paddingPx = padding,
                 minZoom = MIN_MAP_UI_ZOOM,
@@ -221,6 +240,17 @@ fun EngineeringMapScreen(
 
     val siteGeometryKey = remember(sites) {
         sites.map { site -> site.id to site.location }
+    }
+    val contourGeometryKey = remember(serviceContours) {
+        serviceContours
+            .filter { contour -> contour.status != ContourStatus.NO_DATA }
+            .map { contour ->
+                ContourGeometryKey(
+                    id = contour.id,
+                    status = contour.status,
+                    points = contour.points,
+                )
+            }
     }
     val selectedSite = sites.firstOrNull { it.id == selectedSiteId }
     val movingSite = sites.firstOrNull { it.id == movingSiteId }
@@ -247,7 +277,13 @@ fun EngineeringMapScreen(
         }
     }
 
-    LaunchedEffect(project?.id, viewportSize, siteGeometryKey, hasFittedProject) {
+    LaunchedEffect(
+        project?.id,
+        viewportSize,
+        siteGeometryKey,
+        contourGeometryKey,
+        hasFittedProject,
+    ) {
         if (project == null) return@LaunchedEffect
         if (!hasFittedProject && viewportSize.width > 0 && viewportSize.height > 0) {
             fitSites()
@@ -379,7 +415,11 @@ fun EngineeringMapScreen(
             item {
                 ScreenHeader(
                     title = project?.name ?: "No Project Selected",
-                    subtitle = "Offline WGS 84 site geometry with a coordinate-grid overlay.",
+                    subtitle = if (serviceContours.isEmpty()) {
+                        "Offline WGS 84 site geometry with a coordinate-grid overlay."
+                    } else {
+                        "Offline WGS 84 site and service-contour geometry on a coordinate grid."
+                    },
                 )
             }
             item {
@@ -393,6 +433,25 @@ fun EngineeringMapScreen(
                         if (sites.isEmpty()) StatusTone.INFO else StatusTone.POSITIVE,
                     )
                     StatusPill("Pan + Pinch", StatusTone.INFO)
+                    if (serviceContours.isNotEmpty()) {
+                        StatusPill(
+                            "${serviceContours.size} ${if (serviceContours.size == 1) "Contour" else "Contours"}",
+                            if (serviceContours.any { it.status != ContourStatus.COMPLETE }) {
+                                StatusTone.WARNING
+                            } else {
+                                StatusTone.POSITIVE
+                            },
+                        )
+                        OutlinedButton(
+                            onClick = { kmzExportLauncher.launch("atx-service-contours.kmz") },
+                            modifier = Modifier
+                                .heightIn(min = 48.dp)
+                                .testTag("export_service_contours_kmz"),
+                        ) {
+                            Icon(Icons.Outlined.Download, contentDescription = null)
+                            Text("Export KMZ")
+                        }
+                    }
                     StatusPill("No Basemap Installed", StatusTone.WARNING)
                 }
             }
@@ -400,6 +459,8 @@ fun EngineeringMapScreen(
                 GeographicMapCard(
                     sites = sites,
                     siteGeometryKey = siteGeometryKey,
+                    serviceContours = serviceContours,
+                    contourGeometryKey = contourGeometryKey,
                     selectedSiteId = selectedSiteId,
                     camera = currentCamera(),
                     tileSizePx = mapTileSizePx,
@@ -432,7 +493,10 @@ fun EngineeringMapScreen(
                     )
                 }
             }
-            item { BasemapDisclosureCard() }
+            if (serviceContours.isNotEmpty()) {
+                item { ServiceContourLegendCard(serviceContours) }
+            }
+            item { BasemapDisclosureCard(hasServiceContours = serviceContours.isNotEmpty()) }
             item { Text("Project Sites", style = MaterialTheme.typography.titleLarge) }
             if (sites.isEmpty()) {
                 item { EmptySitesCard(projectSelected = project != null) }
@@ -528,6 +592,8 @@ fun EngineeringMapScreen(
 private fun GeographicMapCard(
     sites: List<RadioSite>,
     siteGeometryKey: List<Pair<String, GeoPoint>>,
+    serviceContours: List<ServiceContourOverlay>,
+    contourGeometryKey: List<ContourGeometryKey>,
     selectedSiteId: String?,
     camera: GeographicCamera,
     tileSizePx: Double,
@@ -541,6 +607,10 @@ private fun GeographicMapCard(
     val density = LocalDensity.current
     val latestCamera by rememberUpdatedState(camera)
     val latestCameraChanged by rememberUpdatedState(onCameraChanged)
+    val renderableContourCount = serviceContours.count { contour ->
+        contour.status != ContourStatus.NO_DATA && contour.points.size >= 2
+    }
+    val fitEnabled = sites.isNotEmpty() || renderableContourCount > 0
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val mapHeight = (maxWidth * 0.90f).coerceIn(340.dp, 460.dp)
         Column(
@@ -560,7 +630,7 @@ private fun GeographicMapCard(
             ) {
                 OutlinedButton(
                     onClick = onFit,
-                    enabled = sites.isNotEmpty(),
+                    enabled = fitEnabled,
                     modifier = Modifier.heightIn(min = 48.dp).testTag("fit_map_sites"),
                     colors = ButtonDefaults.outlinedButtonColors(
                         contentColor = Color.White,
@@ -581,7 +651,7 @@ private fun GeographicMapCard(
                     shape = RoundedCornerShape(10.dp),
                 ) {
                     Text(
-                        "GRID ONLY",
+                        if (renderableContourCount == 0) "GRID ONLY" else "GRID + CONTOURS",
                         modifier = Modifier.padding(horizontal = 9.dp, vertical = 7.dp),
                         color = Color.White,
                         style = MaterialTheme.typography.labelMedium,
@@ -595,7 +665,7 @@ private fun GeographicMapCard(
                     .fillMaxWidth()
                     .weight(1f)
                     .onSizeChanged(onViewportSizeChanged)
-                    .pointerInput(viewportSize, siteGeometryKey) {
+                    .pointerInput(viewportSize, siteGeometryKey, contourGeometryKey) {
                         detectTapGestures { tap ->
                             if (viewportSize.width <= 0 || viewportSize.height <= 0) {
                                 return@detectTapGestures
@@ -648,15 +718,17 @@ private fun GeographicMapCard(
                     modifier = Modifier
                         .fillMaxSize()
                         .semantics {
-                            contentDescription =
-                                "Offline geographic coordinate grid with ${sites.size} project sites. " +
-                                "No basemap is installed. Pan with one finger and pinch to zoom."
+                            contentDescription = mapCanvasDescription(
+                                siteCount = sites.size,
+                                serviceContours = serviceContours,
+                            )
                         }
                         .testTag("engineering_map_canvas"),
                 ) {
                     drawRect(AtxDarkBackground)
                     val viewport = ViewportSizePx(size.width.toDouble(), size.height.toDouble())
                     drawCoordinateGrid(camera, viewport, tileSizePx)
+                    drawServiceContours(serviceContours, camera, viewport, tileSizePx)
                     drawSiteGeometry(sites, selectedSiteId, camera, viewport, tileSizePx)
                     drawCenterCrosshair()
                 }
@@ -701,6 +773,172 @@ private fun GeographicMapCard(
                     textAlign = TextAlign.End,
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun ServiceContourLegendCard(serviceContours: List<ServiceContourOverlay>) {
+    val completeCount = serviceContours.count { it.status == ContourStatus.COMPLETE }
+    val incompleteCount = serviceContours.count { it.status == ContourStatus.INCOMPLETE }
+    val noDataCount = serviceContours.count { it.status == ContourStatus.NO_DATA }
+    var showDetails by remember(serviceContours) { mutableStateOf(false) }
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag("service_contour_legend"),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        ),
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Outlined.Layers, contentDescription = null)
+                Text(
+                    "Service Contours",
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    "${serviceContours.size} local ${if (serviceContours.size == 1) "result" else "results"}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                ContourLegendItem(
+                    color = AtxTealLight,
+                    dashed = false,
+                    label = "Protected — solid; complete geometry filled",
+                )
+                ContourLegendItem(
+                    color = AtxAmber,
+                    dashed = true,
+                    label = "Statistical screening — dashed",
+                )
+            }
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                if (completeCount > 0) {
+                    StatusPill("Complete geometry: $completeCount", StatusTone.POSITIVE)
+                }
+                if (incompleteCount > 0) {
+                    StatusPill("Incomplete geometry: $incompleteCount", StatusTone.WARNING)
+                }
+                if (noDataCount > 0) StatusPill("NoData: $noDataCount", StatusTone.NEGATIVE)
+            }
+            Text(
+                "Geometry state is not regulatory approval. Details expose each result's " +
+                    "statistical basis, threshold, model, ruleset, warnings, and NoData.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            TextButton(
+                onClick = { showDetails = !showDetails },
+                modifier = Modifier
+                    .align(Alignment.End)
+                    .testTag("service_contour_details_toggle"),
+            ) {
+                Text(if (showDetails) "Hide details" else "Show details (${serviceContours.size})")
+            }
+            if (showDetails) {
+                serviceContours.forEachIndexed { index, contour ->
+                    if (index > 0) HorizontalDivider()
+                    ServiceContourSummary(contour)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ContourLegendItem(
+    color: Color,
+    dashed: Boolean,
+    label: String,
+) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Canvas(Modifier.width(24.dp).height(8.dp)) {
+            drawLine(
+                color = color,
+                start = Offset(0f, size.height / 2f),
+                end = Offset(size.width, size.height / 2f),
+                strokeWidth = 2.dp.toPx(),
+                pathEffect = if (dashed) {
+                    PathEffect.dashPathEffect(floatArrayOf(5.dp.toPx(), 3.dp.toPx()))
+                } else {
+                    null
+                },
+            )
+        }
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun ServiceContourSummary(contour: ServiceContourOverlay) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("service_contour_${contour.id}"),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(
+            "${contourServiceLabel(contour.service)} ${contourPurposeLabel(contour.purpose)}",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+        )
+        Text(
+            "${contour.statisticalBasis} · ${contourThresholdLabel(contour.thresholdDbuvPerM)}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            "${contourStatusLabel(contour.status)} · Model ${contour.model} · Ruleset ${contour.rulesetId}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        when (contour.status) {
+            ContourStatus.COMPLETE -> Unit
+            ContourStatus.INCOMPLETE -> Text(
+                "Incomplete geometry is shown without fill and must not be read as a closed service area.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+
+            ContourStatus.NO_DATA -> Text(
+                "NoData: no contour geometry is rendered for this result.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        contour.warnings.forEach { warning ->
+            Text(
+                "Warning: $warning",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
         }
     }
 }
@@ -815,6 +1053,72 @@ private fun DrawScope.drawCoordinateGrid(
             }
         }
         latitude += latitudeStep
+    }
+}
+
+private fun DrawScope.drawServiceContours(
+    serviceContours: List<ServiceContourOverlay>,
+    camera: GeographicCamera,
+    viewport: ViewportSizePx,
+    tileSizePx: Double,
+) {
+    val protectedStrokeWidth = 2.25.dp.toPx()
+    val screeningStrokeWidth = 2.dp.toPx()
+    val screeningDash = PathEffect.dashPathEffect(
+        floatArrayOf(8.dp.toPx(), 5.dp.toPx()),
+    )
+    serviceContours.forEach { contour ->
+        if (contour.status == ContourStatus.NO_DATA || contour.points.size < 2) {
+            return@forEach
+        }
+        val drawablePoints = if (
+            contour.status == ContourStatus.INCOMPLETE &&
+            contour.points.size > 2 &&
+            contour.points.first() == contour.points.last()
+        ) {
+            contour.points.dropLast(1)
+        } else {
+            contour.points
+        }
+        val path = Path()
+        drawablePoints.forEachIndexed { index, point ->
+            val projected = GeographicViewport.toScreen(point, camera, viewport, tileSizePx)
+            if (index == 0) {
+                path.moveTo(projected.x.toFloat(), projected.y.toFloat())
+            } else {
+                path.lineTo(projected.x.toFloat(), projected.y.toFloat())
+            }
+        }
+        val complete = contour.status == ContourStatus.COMPLETE
+        if (complete) path.close()
+        val color = when (contour.purpose) {
+            ContourPurpose.PROTECTED -> AtxTealLight
+            ContourPurpose.SCREENING -> AtxAmber
+        }
+        if (
+            contour.purpose == ContourPurpose.PROTECTED &&
+            complete &&
+            contour.points.size >= 3
+        ) {
+            drawPath(path = path, color = color.copy(alpha = 0.10f))
+        }
+        drawPath(
+            path = path,
+            color = color.copy(alpha = if (complete) 0.96f else 0.82f),
+            style = Stroke(
+                width = if (contour.purpose == ContourPurpose.PROTECTED) {
+                    protectedStrokeWidth
+                } else {
+                    screeningStrokeWidth
+                },
+                cap = StrokeCap.Round,
+                pathEffect = if (contour.purpose == ContourPurpose.SCREENING) {
+                    screeningDash
+                } else {
+                    null
+                },
+            ),
+        )
     }
 }
 
@@ -973,7 +1277,7 @@ private fun SelectedSitePanel(
 }
 
 @Composable
-private fun BasemapDisclosureCard() {
+private fun BasemapDisclosureCard(hasServiceContours: Boolean) {
     Card(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.secondaryContainer,
@@ -1002,7 +1306,14 @@ private fun BasemapDisclosureCard() {
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Text(
-                    "Terrain, clutter, GIS features, and coverage results are not rendered in this view.",
+                    if (hasServiceContours) {
+                        "Service-contour geometry is rendered only from supplied local results; this " +
+                            "screen does not recalculate it. The model, ruleset, statistical basis, " +
+                            "threshold, warnings, and NoData state remain visible above. Terrain, " +
+                            "clutter, other GIS features, and raster coverage are not rendered."
+                    } else {
+                        "Terrain, clutter, GIS features, and coverage results are not rendered in this view."
+                    },
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -1357,6 +1668,47 @@ private fun MapFormMessage(message: String, isError: Boolean) {
 private fun IntSize.toGeographicViewport(): ViewportSizePx =
     ViewportSizePx(width.toDouble(), height.toDouble())
 
+private fun mapCanvasDescription(
+    siteCount: Int,
+    serviceContours: List<ServiceContourOverlay>,
+): String {
+    val siteLabel = "$siteCount project ${if (siteCount == 1) "site" else "sites"}"
+    if (serviceContours.isEmpty()) {
+        return "Offline geographic coordinate grid with $siteLabel. " +
+            "No basemap is installed. Pan with one finger and pinch to zoom."
+    }
+    val protectedCount = serviceContours.count { it.purpose == ContourPurpose.PROTECTED }
+    val screeningCount = serviceContours.count { it.purpose == ContourPurpose.SCREENING }
+    val completeCount = serviceContours.count { it.status == ContourStatus.COMPLETE }
+    val incompleteCount = serviceContours.count { it.status == ContourStatus.INCOMPLETE }
+    val noDataCount = serviceContours.count { it.status == ContourStatus.NO_DATA }
+    return "Offline geographic coordinate grid with $siteLabel and " +
+        "${serviceContours.size} service contour ${if (serviceContours.size == 1) "record" else "records"}: " +
+        "$protectedCount protected, $screeningCount statistical screening; " +
+        "$completeCount complete geometry, $incompleteCount incomplete geometry, $noDataCount NoData. " +
+        "No basemap is installed. Pan with one finger and pinch to zoom."
+}
+
+private fun contourServiceLabel(service: BroadcastService): String = when (service) {
+    BroadcastService.FM -> "FM"
+    BroadcastService.DIGITAL_TV -> "Digital TV"
+}
+
+private fun contourPurposeLabel(purpose: ContourPurpose): String = when (purpose) {
+    ContourPurpose.PROTECTED -> "Protected"
+    ContourPurpose.SCREENING -> "Statistical Screening"
+}
+
+private fun contourStatusLabel(status: ContourStatus): String = when (status) {
+    ContourStatus.COMPLETE -> "Complete geometry"
+    ContourStatus.INCOMPLETE -> "Incomplete geometry"
+    ContourStatus.NO_DATA -> "NoData"
+}
+
+private fun contourThresholdLabel(thresholdDbuvPerM: Double?): String = thresholdDbuvPerM?.let { threshold ->
+    String.format(Locale.US, "%.1f dB\u00B5V/m", threshold)
+} ?: "Threshold NoData"
+
 private fun coordinateGridStep(visibleSpanDegrees: Double): Double {
     val desiredStep = (visibleSpanDegrees / 6.0).coerceAtLeast(0.000001)
     val magnitude = 10.0.pow(floor(log10(desiredStep)))
@@ -1442,6 +1794,12 @@ private val boundedNullableIdStateSaver = Saver<MutableState<String?>, String>(
     },
     restore = { value -> mutableStateOf(value) },
 )
+private data class ContourGeometryKey(
+    val id: String,
+    val status: ContourStatus,
+    val points: List<GeoPoint>,
+)
+
 private const val DEFAULT_CAMERA_ZOOM = 1.0
 private const val SITE_FOCUS_ZOOM = 12.0
 private const val MIN_MAP_UI_ZOOM = 0.0

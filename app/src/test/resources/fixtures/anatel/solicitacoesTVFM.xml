@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plano_basico data_geracao="2026-07-21">
+  <row item="4" id="request-fm-fallback" IdtPlanoBasico="PB-3001" Pais="BR" UF="RS" CodMunicipio="4314902" Municipio="Porto Alegre" Canal="201" Frequencia="not-a-number" Decalagem="" Classe="C" Servico="FM" Carater="R" Finalidade="REQUEST" Status="REQUEST_RAW_UNMAPPED" Entidade="Example Applicant" CNPJ="33.333.333/0001-33" categoriaEstacao="Requested" Latitude="-30.0346" Longitude="-51.2177" ERP="0.75" Altura="30" Limitacoes="keep this exact raw antenna limitation" Observacoes="Request fixture." Fistel="F-400" FistelGeradora="" dic="D-400" PadraoAntena_dBd="keep this exact raw antenna pattern"/>
+</plano_basico>

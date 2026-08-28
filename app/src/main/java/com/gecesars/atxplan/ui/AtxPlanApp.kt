@@ -1,5 +1,7 @@
 package com.gecesars.atxplan.ui
 
+import android.content.Context
+import android.net.Uri
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -34,6 +36,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -47,15 +50,21 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation3.runtime.NavEntry
+import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
 import com.gecesars.atxplan.ui.components.StorageErrorBanner
+import com.gecesars.atxplan.data.export.ServiceContourKmzExporter
 import com.gecesars.atxplan.ui.dataset.DataCatalogViewModel
 import com.gecesars.atxplan.ui.dataset.RegionalDataViewModel
+import com.gecesars.atxplan.domain.contour.BrazilBroadcastContourPlanner
+import com.gecesars.atxplan.domain.contour.ServiceContourOverlay
 import com.gecesars.atxplan.domain.dataset.RegionalBounds
 import com.gecesars.atxplan.domain.model.PlannerProject
 import com.gecesars.atxplan.ui.navigation.AtxRoute
+import com.gecesars.atxplan.ui.navigation.AntennaPatternsRoute
 import com.gecesars.atxplan.ui.navigation.CatalogRoute
 import com.gecesars.atxplan.ui.navigation.DashboardRoute
 import com.gecesars.atxplan.ui.navigation.MapRoute
@@ -69,6 +78,7 @@ import com.gecesars.atxplan.ui.navigation.activeRoute
 import com.gecesars.atxplan.ui.navigation.rememberAtxNavBackStack
 import com.gecesars.atxplan.ui.navigation.replaceTopLevel
 import com.gecesars.atxplan.ui.screens.CatalogScreen
+import com.gecesars.atxplan.ui.screens.AntennaPatternLabScreen
 import com.gecesars.atxplan.ui.screens.DashboardScreen
 import com.gecesars.atxplan.ui.screens.EngineeringMapScreen
 import com.gecesars.atxplan.ui.screens.ProjectRenameScreen
@@ -78,6 +88,17 @@ import com.gecesars.atxplan.ui.screens.RfAssetsScreen
 import com.gecesars.atxplan.ui.screens.StudiesScreen
 import com.gecesars.atxplan.ui.theme.AtxNavy
 import com.gecesars.atxplan.ui.theme.AtxTeal
+import com.gecesars.atxplan.ui.antenna.AntennaPatternLabViewModel
+import com.gecesars.atxplan.ui.anatel.AnatelBasicPlanViewModel
+import java.io.ByteArrayOutputStream
+import java.io.IOException
+import java.io.InputStream
+import java.security.MessageDigest
+import java.util.Locale
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private data class TopLevelDestination(
     val route: AtxRoute,
@@ -155,15 +176,19 @@ private fun AtxPlanShell(
     val activeRoute = backStack.activeRoute
     val isNestedEditor = activeRoute is RfPathEditorRoute ||
         activeRoute is ProjectRenameRoute ||
-        activeRoute is RfAssetsRoute
+        activeRoute is RfAssetsRoute ||
+        activeRoute is AntennaPatternsRoute
     var isEditorDirty by rememberSaveable { mutableStateOf(false) }
     var isEditorSavePending by remember { mutableStateOf(false) }
     var pendingEditorNavigation by remember { mutableStateOf<PendingEditorNavigation?>(null) }
     var navigationNotice by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
+    val exportScope = rememberCoroutineScope()
     val activeTopLevelRoute = when (activeRoute) {
         is RfPathEditorRoute,
         is ProjectRenameRoute,
         is RfAssetsRoute,
+        is AntennaPatternsRoute,
         -> ProjectsRoute
         else -> activeRoute
     }
@@ -246,6 +271,7 @@ private fun AtxPlanShell(
                                     is RfPathEditorRoute -> "Add RF Path"
                                     is ProjectRenameRoute -> "Rename Project"
                                     is RfAssetsRoute -> "RF Assets"
+                                    is AntennaPatternsRoute -> "Antenna Pattern Lab"
                                     else -> destinations.firstOrNull { it.route == activeRoute }
                                         ?.label
                                         ?: destinations.first().label
@@ -279,6 +305,10 @@ private fun AtxPlanShell(
                     }
                     NavDisplay(
                         backStack = backStack,
+                        entryDecorators = listOf(
+                            rememberSaveableStateHolderNavEntryDecorator(),
+                            rememberViewModelStoreNavEntryDecorator(),
+                        ),
                         modifier = Modifier.fillMaxSize(),
                         onBack = {
                             if (backStack.size > 1) navigateBack()
@@ -339,8 +369,12 @@ private fun AtxPlanShell(
                                 }
                                 MapRoute -> NavEntry(route) {
                                     val state = currentUiState.value
+                                    val serviceContours = remember(state.selectedProject) {
+                                        BrazilBroadcastContourPlanner.plan(state.selectedProject).overlays
+                                    }
                                     EngineeringMapScreen(
                                         project = state.selectedProject,
+                                        serviceContours = serviceContours,
                                         isCatalogWritable = state.isCatalogWritable,
                                         isSaving = state.isSavingCatalog,
                                         catalogMutationCompletionCount =
@@ -349,6 +383,16 @@ private fun AtxPlanShell(
                                         activeMutationRequestId = state.activeRfMutationRequestId,
                                         lastMutationReceipt = state.lastRfMutationReceipt,
                                         onMoveSite = onMutateRfAsset,
+                                        onExportServiceContours = { destination ->
+                                            val contourSnapshot = serviceContours
+                                            exportScope.launch {
+                                                navigationNotice = exportServiceContoursKmz(
+                                                    context = context,
+                                                    overlays = contourSnapshot,
+                                                    destination = destination,
+                                                )
+                                            }
+                                        },
                                     )
                                 }
                                 StudiesRoute -> NavEntry(route) {
@@ -428,6 +472,26 @@ private fun AtxPlanShell(
                                         activeMutationRequestId = state.activeRfMutationRequestId,
                                         lastMutationReceipt = state.lastRfMutationReceipt,
                                         onMutate = onMutateRfAsset,
+                                        onOpenAntennaPatterns = {
+                                            val patternRoute = AtxRoute.antennaPatterns(route.projectId)
+                                            if (
+                                                patternRoute is AntennaPatternsRoute &&
+                                                backStack.lastOrNull() != patternRoute
+                                            ) {
+                                                backStack.add(patternRoute)
+                                            }
+                                        },
+                                        onBack = navigateBack,
+                                    )
+                                }
+                                is AntennaPatternsRoute -> NavEntry(route) {
+                                    val state = currentUiState.value
+                                    AntennaPatternRouteContent(
+                                        projectId = route.projectId,
+                                        project = state.catalog.projects
+                                            .firstOrNull { project -> project.id == route.projectId },
+                                        isCatalogWritable = state.isCatalogWritable,
+                                        onCatalogChanged = onRetryLoad,
                                         onBack = navigateBack,
                                     )
                                 }
@@ -490,6 +554,44 @@ private fun AtxPlanShell(
 }
 
 @Composable
+private fun AntennaPatternRouteContent(
+    projectId: String,
+    project: PlannerProject?,
+    isCatalogWritable: Boolean,
+    onCatalogChanged: () -> Unit,
+    onBack: () -> Unit,
+) {
+    val context = LocalContext.current
+    val viewModel: AntennaPatternLabViewModel = viewModel(
+        key = "antenna-patterns:$projectId",
+        factory = AntennaPatternLabViewModel.factory(context, projectId),
+    )
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    LaunchedEffect(state.catalogMutationCount) {
+        if (state.catalogMutationCount > 0L) onCatalogChanged()
+    }
+    AntennaPatternLabScreen(
+        project = project,
+        state = state,
+        isCatalogWritable = isCatalogWritable,
+        onImportUri = viewModel::inspectImport,
+        onImportPairUris = viewModel::inspectImportPair,
+        onConfirmImport = viewModel::confirmImport,
+        onDismissImport = viewModel::dismissImport,
+        onResolvePrnConvention = viewModel::resolvePrnConventionChoice,
+        onDismissPrnConvention = viewModel::dismissPrnConventionChoice,
+        onSynthesize = viewModel::synthesize,
+        onPrepareExport = viewModel::prepareExport,
+        onExportUri = viewModel::export,
+        onDismissExport = viewModel::dismissExport,
+        onAssignTransmitPattern = viewModel::assignTransmitPattern,
+        onDeletePattern = viewModel::delete,
+        onDismissMessage = viewModel::dismissMessage,
+        onBack = onBack,
+    )
+}
+
+@Composable
 private fun DataCatalogRouteContent(project: PlannerProject?) {
     val context = LocalContext.current
     val viewModel: DataCatalogViewModel = viewModel(
@@ -501,11 +603,16 @@ private fun DataCatalogRouteContent(project: PlannerProject?) {
             initialBounds = project.suggestedRegionalBounds(),
         ),
     )
+    val anatelViewModel: AnatelBasicPlanViewModel = viewModel(
+        factory = AnatelBasicPlanViewModel.factory(context),
+    )
     val state by viewModel.state.collectAsStateWithLifecycle()
     val regionalState by regionalViewModel.state.collectAsStateWithLifecycle()
+    val anatelState by anatelViewModel.state.collectAsStateWithLifecycle()
     CatalogScreen(
         state = state,
         regionalState = regionalState,
+        anatelState = anatelState,
         onMunicipalityQueryChange = viewModel::updateMunicipalityQuery,
         onMunicipalitySelected = viewModel::selectMunicipality,
         onRetryDataset = viewModel::retryDataset,
@@ -517,6 +624,17 @@ private fun DataCatalogRouteContent(project: PlannerProject?) {
         onStartRegionalAcquisition = regionalViewModel::startAcquisition,
         onCancelRegionalAcquisition = regionalViewModel::cancelAcquisition,
         onEditRegionalRequest = regionalViewModel::editRequest,
+        onAnatelLicenseReviewAcknowledged =
+            anatelViewModel::setLicenseReviewAcknowledged,
+        onRefreshAnatelCatalog = anatelViewModel::refresh,
+        onAnatelServiceSelected = anatelViewModel::setService,
+        onAnatelQueryTextChange = anatelViewModel::setQueryText,
+        onAnatelStateCodeChange = anatelViewModel::setStateCode,
+        onAnatelChannelChange = anatelViewModel::setChannelText,
+        onSearchAnatelCatalog = anatelViewModel::search,
+        onLoadPreviousAnatelRecords = anatelViewModel::loadPrevious,
+        onLoadMoreAnatelRecords = anatelViewModel::loadMore,
+        onDismissAnatelMessage = anatelViewModel::dismissMessage,
     )
 }
 
@@ -541,6 +659,76 @@ private fun PlannerProject?.suggestedRegionalBounds(): RegionalBounds? {
         bounds.widthDegrees <= 1.0 && bounds.heightDegrees <= 1.0
     }
 }
+
+private suspend fun exportServiceContoursKmz(
+    context: Context,
+    overlays: List<ServiceContourOverlay>,
+    destination: Uri,
+): String = try {
+    require(overlays.isNotEmpty()) { "There are no service-contour records to export." }
+    val archive = withContext(Dispatchers.Default) {
+        val output = ByteArrayOutputStream()
+        val summary = ServiceContourKmzExporter().write(overlays, output)
+        KmzArchive(output.toByteArray(), summary.sha256, summary.includedOverlayCount, summary.omittedNoDataOverlayCount)
+    }
+    withContext(Dispatchers.IO) {
+        context.contentResolver.openOutputStream(destination, "w")?.use { output ->
+            output.write(archive.bytes)
+            output.flush()
+        } ?: throw IOException("The selected KMZ destination could not be opened.")
+        val verified = context.contentResolver.openInputStream(destination)?.use { input ->
+            input.readBoundedKmz()
+        } ?: throw IOException("The exported KMZ could not be reopened for verification.")
+        if (!verified.contentEquals(archive.bytes)) {
+            throw IOException("The exported KMZ failed read-back verification.")
+        }
+        val verifiedSha256 = MessageDigest.getInstance("SHA-256")
+            .digest(verified)
+            .joinToString(separator = "") { byte ->
+                "%02x".format(Locale.ROOT, byte.toInt() and 0xff)
+            }
+        if (verifiedSha256 != archive.sha256) {
+            throw IOException("The exported KMZ hash does not match its generated manifest evidence.")
+        }
+    }
+    "KMZ export verified · ${archive.drawableCount} drawable contour(s) · " +
+        "${archive.noDataCount} NoData record(s) · SHA-256 ${archive.sha256.take(12)}…"
+} catch (error: CancellationException) {
+    throw error
+} catch (error: Exception) {
+    when (error) {
+        is IOException,
+        is IllegalArgumentException,
+        is SecurityException,
+        -> error.message?.take(500) ?: "The KMZ export failed validation."
+
+        else -> "The KMZ export could not be completed."
+    }
+}
+
+private fun InputStream.readBoundedKmz(): ByteArray {
+    val output = ByteArrayOutputStream()
+    val buffer = ByteArray(64 * 1024)
+    var total = 0
+    while (true) {
+        val read = read(buffer)
+        if (read < 0) break
+        if (read == 0) continue
+        total += read
+        if (total > ServiceContourKmzExporter.MAX_OUTPUT_BYTES) {
+            throw IOException("The exported KMZ exceeds the 16 MiB verification limit.")
+        }
+        output.write(buffer, 0, read)
+    }
+    return output.toByteArray()
+}
+
+private data class KmzArchive(
+    val bytes: ByteArray,
+    val sha256: String,
+    val drawableCount: Int,
+    val noDataCount: Int,
+)
 
 @Composable
 private fun AtxNavigationRail(

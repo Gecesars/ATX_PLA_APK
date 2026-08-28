@@ -50,6 +50,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.gecesars.atxplan.domain.anatel.AnatelBroadcastService
 import com.gecesars.atxplan.domain.dataset.IbgeDatasetDescriptor
 import com.gecesars.atxplan.domain.dataset.IbgeMunicipalitySummary
 import com.gecesars.atxplan.domain.dataset.RegionalDatasetCatalog
@@ -61,6 +62,7 @@ import com.gecesars.atxplan.domain.dataset.RegionalTransferStatus
 import com.gecesars.atxplan.ui.components.ScreenHeader
 import com.gecesars.atxplan.ui.components.StatusPill
 import com.gecesars.atxplan.ui.components.StatusTone
+import com.gecesars.atxplan.ui.anatel.AnatelBasicPlanUiState
 import com.gecesars.atxplan.ui.dataset.DataCatalogUiState
 import com.gecesars.atxplan.ui.dataset.IbgeCatalogStatus
 import com.gecesars.atxplan.ui.dataset.RegionalCoordinateField
@@ -128,10 +130,12 @@ private val capabilities = listOf(
     ),
     Capability(
         "Brazil",
-        "Anatel and IBGE population data",
-        "Bounded index delivered",
+        "Anatel and IBGE offline catalogs",
+        "Bounded slices delivered",
         StatusTone.INFO,
-        "The verified national IBGE 2022 attribute index and portable sector envelopes are bundled. Sector polygons, population-by-coverage, and regulatory conclusions remain planned.",
+        "The verified IBGE 2022 attribute index is bundled. Anatel TV/FM channels use an " +
+            "explicit, review-gated snapshot download and atomic offline index. Project linking, " +
+            "sector polygons, population-by-coverage, and regulatory conclusions remain planned.",
     ),
 )
 
@@ -139,6 +143,7 @@ private val capabilities = listOf(
 fun CatalogScreen(
     state: DataCatalogUiState = DataCatalogUiState(),
     regionalState: RegionalDataUiState = RegionalDataUiState(),
+    anatelState: AnatelBasicPlanUiState = AnatelBasicPlanUiState(),
     onMunicipalityQueryChange: (String) -> Unit = {},
     onMunicipalitySelected: (String) -> Unit = {},
     onRetryDataset: () -> Unit = {},
@@ -150,6 +155,16 @@ fun CatalogScreen(
     onStartRegionalAcquisition: () -> Unit = {},
     onCancelRegionalAcquisition: () -> Unit = {},
     onEditRegionalRequest: () -> Unit = {},
+    onAnatelLicenseReviewAcknowledged: (Boolean) -> Unit = {},
+    onRefreshAnatelCatalog: () -> Unit = {},
+    onAnatelServiceSelected: (AnatelBroadcastService) -> Unit = {},
+    onAnatelQueryTextChange: (String) -> Unit = {},
+    onAnatelStateCodeChange: (String) -> Unit = {},
+    onAnatelChannelChange: (String) -> Unit = {},
+    onSearchAnatelCatalog: () -> Unit = {},
+    onLoadPreviousAnatelRecords: () -> Unit = {},
+    onLoadMoreAnatelRecords: () -> Unit = {},
+    onDismissAnatelMessage: () -> Unit = {},
 ) {
     val largeText = LocalDensity.current.fontScale >= 1.3f
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -250,6 +265,21 @@ fun CatalogScreen(
             }
             item {
                 RegionalReadinessNotice()
+            }
+            item {
+                AnatelBasicPlanCatalogSection(
+                    state = anatelState,
+                    onLicenseReviewAcknowledged = onAnatelLicenseReviewAcknowledged,
+                    onRefresh = onRefreshAnatelCatalog,
+                    onServiceSelected = onAnatelServiceSelected,
+                    onQueryTextChange = onAnatelQueryTextChange,
+                    onStateCodeChange = onAnatelStateCodeChange,
+                    onChannelChange = onAnatelChannelChange,
+                    onSearch = onSearchAnatelCatalog,
+                    onLoadPrevious = onLoadPreviousAnatelRecords,
+                    onLoadMore = onLoadMoreAnatelRecords,
+                    onDismissMessage = onDismissAnatelMessage,
+                )
             }
             item {
                 IbgeDatasetHeader(state.ibgeStatus)

@@ -1,3 +1,8 @@
 <resources>
     <string name="app_name">ATX Plan</string>
+    <string name="regional_work_channel_name">Regional data acquisition</string>
+    <string name="regional_work_channel_description">Progress and controls for user-requested regional datasets</string>
+    <string name="regional_work_notification_title">Regional data acquisition</string>
+    <string name="regional_work_notification_preparing">Preparing the reviewed dataset plan</string>
+    <string name="regional_work_notification_cancel">Cancel</string>
 </resources>

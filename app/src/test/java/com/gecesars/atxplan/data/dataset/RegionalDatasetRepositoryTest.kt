@@ -19,6 +19,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import javax.net.ssl.SSLException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
@@ -27,6 +28,7 @@ import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -159,6 +161,571 @@ class RegionalDatasetRepositoryTest {
     }
 
     @Test
+    fun `cancellation signalled by successful processing does not rewrite truthful ready inventory`() = runTest {
+        val plan = rasterPlan()
+        val artifact = plan.artifacts.single()
+        val payload = "truthful-ready-payload".toByteArray()
+        val cancellationSignalled = AtomicBoolean()
+        val transport = QueueTransport(
+            {
+                response(
+                    url = artifact.url,
+                    status = 200,
+                    bytes = payload,
+                    etag = "\"truthful-ready-v1\"",
+                )
+            },
+        )
+        val repository = repository(transport)
+
+        val result = repository.acquire(
+            plan = plan,
+            onProgress = { progress ->
+                if (progress.status == RegionalTransferStatus.READY) {
+                    cancellationSignalled.set(true)
+                }
+            },
+            isCancelled = { cancellationSignalled.get() },
+        )
+
+        assertTrue(cancellationSignalled.get())
+        assertEquals(RegionalTransferStatus.READY, result.results.single().status)
+        assertArrayEquals(payload, File(root, artifact.relativePath).readBytes())
+        val record = checkNotNull(repository.loadInventory().artifacts[artifact.relativePath])
+        assertEquals(RegionalTransferStatus.READY, record.status)
+        assertEquals(RegionalProcessingState.READY, record.processingState)
+        assertEquals(sha256(payload), record.sha256)
+    }
+
+    @Test
+    fun `processor coroutine cancellation propagates without publishing a failed inventory record`() = runTest {
+        val plan = rasterPlan()
+        val artifact = plan.artifacts.single()
+        val transport = QueueTransport(
+            {
+                response(
+                    url = artifact.url,
+                    status = 200,
+                    bytes = "processor-cancellation-payload".toByteArray(),
+                    etag = "\"processor-cancellation-v1\"",
+                )
+            },
+        )
+        val repository = repository(
+            transport = transport,
+            processor = RegionalArtifactProcessor { _, _, _, _ ->
+                throw CancellationException("Injected processor cancellation.")
+            },
+        )
+        var propagated = false
+
+        try {
+            repository.acquireArtifact(plan = plan, artifactIndex = 0)
+        } catch (_: CancellationException) {
+            propagated = true
+        }
+
+        assertTrue(propagated)
+        assertEquals(1, transport.requests.size)
+        assertTrue(repository.loadInventory().artifacts.isEmpty())
+    }
+
+    @Test
+    fun `immutable tile is reacquired when current plan bounds change within the same path`() = runTest {
+        val firstPlan = rasterPlan()
+        val secondPlan = RegionalDatasetPlanner().plan(
+            firstPlan.request.copy(
+                bounds = RegionalBounds(west = -46.69, south = -23.59, east = -46.61, north = -23.51),
+            ),
+        )
+        val firstArtifact = firstPlan.artifacts.single()
+        val secondArtifact = secondPlan.artifacts.single()
+        assertEquals(firstArtifact.relativePath, secondArtifact.relativePath)
+        assertFalse(firstArtifact.requestBounds == secondArtifact.requestBounds)
+        val firstPayload = "first-bounds-payload".toByteArray()
+        val secondPayload = "second-bounds-payload".toByteArray()
+        val transport = QueueTransport(
+            {
+                response(
+                    url = firstArtifact.url,
+                    status = 200,
+                    bytes = firstPayload,
+                    etag = "\"bounds-v1\"",
+                )
+            },
+            {
+                response(
+                    url = secondArtifact.url,
+                    status = 200,
+                    bytes = secondPayload,
+                    etag = "\"bounds-v2\"",
+                )
+            },
+        )
+        val repository = repository(transport)
+
+        assertEquals(RegionalTransferStatus.READY, repository.acquire(firstPlan).results.single().status)
+        val secondResult = repository.acquire(secondPlan).results.single()
+
+        assertEquals(RegionalTransferStatus.READY, secondResult.status)
+        assertEquals(2, transport.requests.size)
+        assertArrayEquals(secondPayload, File(root, secondArtifact.relativePath).readBytes())
+        val record = checkNotNull(repository.loadInventory().artifacts[secondArtifact.relativePath])
+        assertEquals(secondArtifact.requestBounds, record.bounds)
+        assertEquals(sha256(secondPayload), record.sha256)
+    }
+
+    @Test
+    fun `failed request for changed bounds does not preserve a stale immutable record`() = runTest {
+        val firstPlan = rasterPlan()
+        val secondPlan = RegionalDatasetPlanner().plan(
+            firstPlan.request.copy(
+                bounds = RegionalBounds(west = -46.69, south = -23.59, east = -46.61, north = -23.51),
+            ),
+        )
+        val firstArtifact = firstPlan.artifacts.single()
+        val secondArtifact = secondPlan.artifacts.single()
+        assertEquals(firstArtifact.relativePath, secondArtifact.relativePath)
+        val transport = QueueTransport(
+            {
+                response(
+                    url = firstArtifact.url,
+                    status = 200,
+                    bytes = "verified-old-bounds".toByteArray(),
+                    etag = "\"old-bounds-v1\"",
+                )
+            },
+            {
+                response(
+                    url = secondArtifact.url,
+                    status = 404,
+                    bytes = ByteArray(0),
+                    etag = null,
+                )
+            },
+        )
+        val repository = repository(transport)
+        assertEquals(RegionalTransferStatus.READY, repository.acquire(firstPlan).results.single().status)
+
+        val changedBoundsResult = repository.acquire(secondPlan).results.single()
+
+        assertEquals(RegionalTransferStatus.NOT_FOUND, changedBoundsResult.status)
+        assertEquals(2, transport.requests.size)
+        val record = checkNotNull(repository.loadInventory().artifacts[secondArtifact.relativePath])
+        assertEquals(RegionalTransferStatus.NOT_FOUND, record.status)
+        assertEquals(secondArtifact.requestBounds, record.bounds)
+        assertNull(record.bytes)
+        assertNull(record.sha256)
+    }
+
+    @Test
+    fun `single artifact seam reacquires an inventory record with substituted provenance`() = runTest {
+        val plan = rasterPlan()
+        val artifact = plan.artifacts.single()
+        val firstPayload = "trusted-provenance-payload".toByteArray()
+        val secondPayload = "reacquired-provenance-payload".toByteArray()
+        val transport = QueueTransport(
+            {
+                response(
+                    url = artifact.url,
+                    status = 200,
+                    bytes = firstPayload,
+                    etag = "\"provenance-v1\"",
+                )
+            },
+            {
+                response(
+                    url = artifact.url,
+                    status = 200,
+                    bytes = secondPayload,
+                    etag = "\"provenance-v2\"",
+                )
+            },
+        )
+        val repository = repository(transport)
+        assertEquals(RegionalTransferStatus.READY, repository.acquire(plan).results.single().status)
+        val inventoryFile = File(root, ".atx-regional-inventory.json")
+        val originalJson = inventoryFile.readText(Charsets.UTF_8)
+        val substitutedJson = originalJson.replace(
+            oldValue = JsonPrimitive(artifact.source.provenance).toString(),
+            newValue = JsonPrimitive("Untrusted substituted provenance.").toString(),
+        )
+        assertFalse(originalJson == substitutedJson)
+        inventoryFile.writeText(substitutedJson, Charsets.UTF_8)
+
+        assertNull(repository.findCommittedArtifact(plan, artifactIndex = 0))
+        val reacquired = repository.acquireArtifact(plan = plan, artifactIndex = 0)
+
+        assertEquals(RegionalTransferStatus.READY, reacquired.result.status)
+        assertEquals(2, transport.requests.size)
+        assertArrayEquals(secondPayload, File(root, artifact.relativePath).readBytes())
+        assertEquals(artifact.source.toSourceSnapshot(), reacquired.committedInventoryRecord.sourceSnapshot)
+    }
+
+    @Test
+    fun `single artifact seam returns its exact committed record and bounded transfer evidence`() = runTest {
+        val plan = rasterPlan()
+        val artifact = plan.artifacts.single()
+        val payload = "single-artifact-evidence".toByteArray()
+        val permitAttempts = mutableListOf<Int>()
+        val transport = QueueTransport(
+            {
+                response(
+                    url = artifact.url,
+                    status = 200,
+                    bytes = payload,
+                    etag = "\"artifact-v1\"",
+                )
+            },
+        )
+        val repository = repository(transport)
+
+        val acquired = repository.acquireArtifact(
+            plan = plan,
+            artifactIndex = 0,
+            beforeProviderAttempt = { attempt ->
+                permitAttempts += attempt
+                true
+            },
+        )
+
+        assertEquals(RegionalTransferStatus.READY, acquired.result.status)
+        assertEquals(1, acquired.providerAttempts)
+        assertEquals(payload.size.toLong(), acquired.networkBytesTransferred)
+        assertEquals(listOf(1), permitAttempts)
+        assertEquals(
+            acquired.committedInventoryRecord,
+            repository.loadInventory().artifacts[artifact.relativePath],
+        )
+        assertEquals(
+            acquired.committedInventoryRecord,
+            repository.findCommittedArtifact(plan, artifactIndex = 0),
+        )
+
+        val cached = repository.acquireArtifact(
+            plan = plan,
+            artifactIndex = 0,
+            maximumProviderAttempts = 0,
+            beforeProviderAttempt = { throw AssertionError("A verified cache hit requested a provider permit.") },
+        )
+
+        assertEquals(RegionalTransferStatus.EXISTING, cached.result.status)
+        assertEquals(0, cached.providerAttempts)
+        assertEquals(0L, cached.networkBytesTransferred)
+        assertEquals(1, transport.requests.size)
+        assertEquals(
+            cached.committedInventoryRecord,
+            repository.findCommittedArtifact(plan, artifactIndex = 0),
+        )
+
+        File(root, artifact.relativePath).appendText("tampered", Charsets.UTF_8)
+        assertNull(repository.findCommittedArtifact(plan, artifactIndex = 0))
+    }
+
+    @Test
+    fun `single artifact attempt clamp and permit denial prevent excess provider requests`() = runTest {
+        val plan = rasterPlan()
+        val artifact = plan.artifacts.single()
+        val limitedRoot = File(root, "limited")
+        val limitedTransport = QueueTransport(
+            {
+                response(
+                    url = artifact.url,
+                    status = 503,
+                    bytes = ByteArray(0),
+                    etag = null,
+                )
+            },
+            {
+                response(
+                    url = artifact.url,
+                    status = 200,
+                    bytes = "must-not-run".toByteArray(),
+                    etag = "\"unexpected\"",
+                )
+            },
+        )
+        val limitedPermits = mutableListOf<Int>()
+
+        val limited = repository(
+            transport = limitedTransport,
+            repositoryRoot = limitedRoot,
+        ).acquireArtifact(
+            plan = plan,
+            artifactIndex = 0,
+            maximumProviderAttempts = 1,
+            beforeProviderAttempt = { attempt ->
+                limitedPermits += attempt
+                true
+            },
+        )
+
+        assertEquals(RegionalTransferStatus.FAILED, limited.result.status)
+        assertEquals(1, limited.providerAttempts)
+        assertEquals(0L, limited.networkBytesTransferred)
+        assertEquals(listOf(1), limitedPermits)
+        assertEquals(1, limitedTransport.requests.size)
+
+        val zeroTransport = QueueTransport(
+            {
+                response(
+                    url = artifact.url,
+                    status = 200,
+                    bytes = "must-not-run".toByteArray(),
+                    etag = "\"unexpected\"",
+                )
+            },
+        )
+        val zeroPermits = mutableListOf<Int>()
+        val zero = repository(
+            transport = zeroTransport,
+            repositoryRoot = File(root, "zero"),
+        ).acquireArtifact(
+            plan = plan,
+            artifactIndex = 0,
+            maximumProviderAttempts = 0,
+            beforeProviderAttempt = { attempt ->
+                zeroPermits += attempt
+                true
+            },
+        )
+
+        assertEquals(RegionalTransferStatus.FAILED, zero.result.status)
+        assertTrue(zero.result.error.orEmpty().contains("No provider attempts remain"))
+        assertEquals(0, zero.providerAttempts)
+        assertEquals(0L, zero.networkBytesTransferred)
+        assertTrue(zeroPermits.isEmpty())
+        assertTrue(zeroTransport.requests.isEmpty())
+
+        val deniedTransport = QueueTransport(
+            {
+                response(
+                    url = artifact.url,
+                    status = 200,
+                    bytes = "must-not-run".toByteArray(),
+                    etag = "\"unexpected\"",
+                )
+            },
+        )
+        val deniedPermits = mutableListOf<Int>()
+        val denied = repository(
+            transport = deniedTransport,
+            repositoryRoot = File(root, "denied"),
+        ).acquireArtifact(
+            plan = plan,
+            artifactIndex = 0,
+            maximumProviderAttempts = 2,
+            beforeProviderAttempt = { attempt ->
+                deniedPermits += attempt
+                false
+            },
+        )
+
+        assertEquals(RegionalTransferStatus.CANCELLED, denied.result.status)
+        assertEquals(listOf(1), deniedPermits)
+        assertEquals(0, denied.providerAttempts)
+        assertEquals(0L, denied.networkBytesTransferred)
+        assertTrue(deniedTransport.requests.isEmpty())
+    }
+
+    @Test
+    fun `single artifact evidence accumulates accepted bytes across provider retry attempts`() = runTest {
+        val plan = rasterPlan()
+        val artifact = plan.artifacts.single()
+        val permitAttempts = mutableListOf<Int>()
+        val transport = QueueTransport(
+            {
+                RegionalHttpResponse(
+                    statusCode = 200,
+                    finalUrl = artifact.url,
+                    contentLength = 6L,
+                    contentRange = null,
+                    etag = "\"v1\"",
+                    lastModified = null,
+                    body = FailingAfterBytesInputStream(
+                        bytes = "abcdef".toByteArray(),
+                        failureOffset = 3,
+                        failure = SSLException("BAD_RECORD_MAC"),
+                    ),
+                    closeAction = {},
+                )
+            },
+            { request ->
+                assertEquals(3L, request.rangeStart)
+                response(
+                    url = artifact.url,
+                    status = 206,
+                    bytes = "def".toByteArray(),
+                    etag = "\"v1\"",
+                    contentRange = "bytes 3-5/6",
+                )
+            },
+        )
+
+        val acquired = repository(transport).acquireArtifact(
+            plan = plan,
+            artifactIndex = 0,
+            maximumProviderAttempts = 2,
+            beforeProviderAttempt = { attempt ->
+                permitAttempts += attempt
+                true
+            },
+        )
+
+        assertEquals(RegionalTransferStatus.READY, acquired.result.status)
+        assertEquals(2, acquired.providerAttempts)
+        assertEquals(6L, acquired.networkBytesTransferred)
+        assertEquals(listOf(1, 2), permitAttempts)
+        assertEquals(2, transport.requests.size)
+    }
+
+    @Test
+    fun `batch acquisition matches sequential use of the committed artifact seam`() = runTest {
+        val plan = multiRasterPlan()
+        assertEquals(2, plan.artifacts.size)
+        val payloads = plan.artifacts.associate { artifact ->
+            artifact.url to "parity-${artifact.source.datasetId}".toByteArray()
+        }
+        val batchRoot = File(root, "batch")
+        val seamRoot = File(root, "seam")
+        val batchRepository = repository(
+            transport = RegionalHttpTransport { request ->
+                response(
+                    url = request.url,
+                    status = 200,
+                    bytes = payloads.getValue(request.url),
+                    etag = "\"parity\"",
+                )
+            },
+            repositoryRoot = batchRoot,
+        )
+        val seamRepository = repository(
+            transport = RegionalHttpTransport { request ->
+                response(
+                    url = request.url,
+                    status = 200,
+                    bytes = payloads.getValue(request.url),
+                    etag = "\"parity\"",
+                )
+            },
+            repositoryRoot = seamRoot,
+        )
+
+        val batch = batchRepository.acquire(plan)
+        val seamResults = plan.artifacts.indices.map { artifactIndex ->
+            seamRepository.acquireArtifact(plan, artifactIndex).result
+        }
+
+        assertEquals(batch.results, seamResults)
+        assertEquals(batchRepository.loadInventory(), seamRepository.loadInventory())
+        plan.artifacts.forEach { artifact ->
+            assertArrayEquals(
+                File(batchRoot, artifact.relativePath).readBytes(),
+                File(seamRoot, artifact.relativePath).readBytes(),
+            )
+        }
+    }
+
+    @Test
+    fun `committed artifact verification accepts explicit optional NoData without inventing a file`() = runTest {
+        val plan = rasterPlan()
+        val artifact = plan.artifacts.single()
+        assertTrue(artifact.source.optionalWhenNotPublished)
+        val repository = repository(
+            QueueTransport(
+                {
+                    response(
+                        url = artifact.url,
+                        status = 404,
+                        bytes = ByteArray(0),
+                        etag = null,
+                    )
+                },
+            ),
+        )
+
+        val acquired = repository.acquireArtifact(plan, artifactIndex = 0)
+
+        assertEquals(RegionalTransferStatus.NOT_FOUND, acquired.result.status)
+        assertEquals(1, acquired.providerAttempts)
+        assertEquals(0L, acquired.networkBytesTransferred)
+        assertFalse(File(root, artifact.relativePath).exists())
+        assertEquals(
+            acquired.committedInventoryRecord,
+            repository.findCommittedArtifact(plan, artifactIndex = 0),
+        )
+    }
+
+    @Test
+    fun `forced live snapshot verification cannot adopt a record older than its durable intent`() = runTest {
+        val acquisitionTime = 1_787_852_800_000L
+        val plan = buildingPlan(liveSnapshotRefresh = true)
+        val artifact = plan.artifacts.single()
+        val repository = repository(
+            transport = QueueTransport(
+                {
+                    response(
+                        url = artifact.url,
+                        status = 200,
+                        bytes = "forced-live-snapshot".toByteArray(),
+                        etag = null,
+                    )
+                },
+            ),
+            clock = { acquisitionTime },
+        )
+
+        val acquired = repository.acquireArtifact(plan, artifactIndex = 0)
+
+        assertEquals(
+            acquired.committedInventoryRecord,
+            repository.findCommittedArtifact(
+                plan = plan,
+                artifactIndex = 0,
+                minimumAcquiredAtEpochMillis = acquisitionTime,
+            ),
+        )
+        assertNull(
+            repository.findCommittedArtifact(
+                plan = plan,
+                artifactIndex = 0,
+                minimumAcquiredAtEpochMillis = acquisitionTime + 1L,
+            ),
+        )
+        assertNull(repository.findCommittedArtifact(plan, artifactIndex = 0))
+    }
+
+    @Test
+    fun `expired live cache remains exact historical outcome evidence`() = runTest {
+        var nowEpochMillis = 1_787_852_800_000L
+        val plan = buildingPlan()
+        val artifact = plan.artifacts.single()
+        val repository = repository(
+            transport = QueueTransport(
+                {
+                    response(
+                        url = artifact.url,
+                        status = 200,
+                        bytes = "historical-live-snapshot".toByteArray(),
+                        etag = null,
+                    )
+                },
+            ),
+            clock = { nowEpochMillis },
+        )
+        val acquired = repository.acquireArtifact(plan, artifactIndex = 0)
+        assertNotNull(repository.findCommittedArtifact(plan, artifactIndex = 0))
+
+        nowEpochMillis += checkNotNull(artifact.source.maximumCacheAgeMillis) + 1L
+
+        assertNull(repository.findCommittedArtifact(plan, artifactIndex = 0))
+        assertEquals(
+            acquired.committedInventoryRecord,
+            repository.findCommittedArtifactEvidence(plan, artifactIndex = 0),
+        )
+    }
+
+    @Test
     fun `repository instances sharing one root serialize acquisitions and preserve inventory`() = runTest {
         val firstPlan = rasterPlan()
         val secondPlan = buildingPlan()
@@ -173,7 +740,7 @@ class RegionalDatasetRepositoryTest {
         val firstRepository = repository(transport)
         val secondRepository = repository(transport)
 
-        val firstAcquisition = async(Dispatchers.IO) { firstRepository.acquire(firstPlan) }
+        val firstAcquisition = async(Dispatchers.IO) { firstRepository.acquireArtifact(firstPlan, 0) }
         assertTrue(
             "The first acquisition did not reach the blocking transport.",
             firstEnteredTransport.await(5, TimeUnit.SECONDS),
@@ -181,7 +748,7 @@ class RegionalDatasetRepositoryTest {
         val secondInvocationStarted = CountDownLatch(1)
         val secondAcquisition = async(Dispatchers.IO) {
             secondInvocationStarted.countDown()
-            secondRepository.acquire(secondPlan)
+            secondRepository.acquireArtifact(secondPlan, 0)
         }
         assertTrue(
             "The second acquisition coroutine did not start.",
@@ -191,8 +758,8 @@ class RegionalDatasetRepositoryTest {
         val enteredBeforeRelease = laterRequestEnteredTransport.await(1, TimeUnit.SECONDS)
         releaseFirstResponse.countDown()
 
-        assertTrue(firstAcquisition.await().isSuccessful)
-        assertTrue(secondAcquisition.await().isSuccessful)
+        assertEquals(RegionalTransferStatus.READY, firstAcquisition.await().result.status)
+        assertEquals(RegionalTransferStatus.READY, secondAcquisition.await().result.status)
         assertFalse(
             "A second repository entered its transport while the shared root was being mutated.",
             enteredBeforeRelease,
@@ -703,7 +1270,7 @@ class RegionalDatasetRepositoryTest {
 
         val cancelledGet = repository(getTransport).acquire(
             plan = rasterPlan,
-            isCancelled = { getCancellationChecks.incrementAndGet() >= 5 },
+            isCancelled = { getCancellationChecks.incrementAndGet() >= 6 },
         )
 
         assertEquals(RegionalTransferStatus.CANCELLED, cancelledGet.results.single().status)
@@ -730,7 +1297,7 @@ class RegionalDatasetRepositoryTest {
 
         val cancelledPost = repository(postTransport).acquire(
             plan = buildingPlan,
-            isCancelled = { postCancellationChecks.incrementAndGet() >= 5 },
+            isCancelled = { postCancellationChecks.incrementAndGet() >= 6 },
         )
 
         assertEquals(RegionalTransferStatus.CANCELLED, cancelledPost.results.single().status)
@@ -826,6 +1393,11 @@ class RegionalDatasetRepositoryTest {
         val reused = repository.acquire(plan)
         assertEquals(RegionalTransferStatus.EXISTING, reused.results.single().status)
         assertTrue(transport.requests.isEmpty())
+        val legacyCompatibleRecord = checkNotNull(repository.loadInventory().artifacts[artifact.relativePath])
+        assertEquals(1, legacyCompatibleRecord.sourceSnapshot.catalogRevision)
+        assertNull(legacyCompatibleRecord.effectiveUrl)
+        assertNull(legacyCompatibleRecord.acquiredAt)
+        assertNull(repository.findCommittedArtifact(plan, artifactIndex = 0))
     }
 
     @Test
@@ -1034,11 +1606,12 @@ class RegionalDatasetRepositoryTest {
         ),
     )
 
-    private fun buildingPlan() = RegionalDatasetPlanner().plan(
+    private fun buildingPlan(liveSnapshotRefresh: Boolean = false) = RegionalDatasetPlanner().plan(
         RegionalDatasetRequest(
             bounds = RegionalBounds(west = -46.635, south = -23.555, east = -46.630, north = -23.550),
             selections = setOf(RegionalDatasetSelection.OSM_BUILDINGS_EXPERIMENTAL),
             reason = "repository test",
+            liveSnapshotRefresh = liveSnapshotRefresh,
         ),
     )
 

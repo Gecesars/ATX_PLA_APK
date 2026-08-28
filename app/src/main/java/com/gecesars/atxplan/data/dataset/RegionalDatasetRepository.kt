@@ -5,6 +5,7 @@ import com.gecesars.atxplan.domain.dataset.MAX_STATUS_MESSAGE_LENGTH
 import com.gecesars.atxplan.domain.dataset.MEBIBYTE
 import com.gecesars.atxplan.domain.dataset.REGIONAL_INVENTORY_SCHEMA_VERSION
 import com.gecesars.atxplan.domain.dataset.RegionalArtifact
+import com.gecesars.atxplan.domain.dataset.RegionalArtifactAcquisition
 import com.gecesars.atxplan.domain.dataset.RegionalArtifactCachePolicy
 import com.gecesars.atxplan.domain.dataset.RegionalArtifactResult
 import com.gecesars.atxplan.domain.dataset.RegionalDatasetPlanner
@@ -20,6 +21,7 @@ import com.gecesars.atxplan.domain.dataset.RegionalInventoryRecord
 import com.gecesars.atxplan.domain.dataset.RegionalProcessedOutput
 import com.gecesars.atxplan.domain.dataset.RegionalProcessingState
 import com.gecesars.atxplan.domain.dataset.RegionalFileFormat
+import com.gecesars.atxplan.domain.dataset.RegionalSnapshotPolicy
 import com.gecesars.atxplan.domain.dataset.RegionalTransferStatus
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -241,7 +243,7 @@ class FileRegionalDatasetRepository(
     override suspend fun acquire(
         plan: RegionalDownloadPlan,
         onProgress: (RegionalDownloadProgress) -> Unit,
-        isCancelled: () -> Boolean,
+        isCancelled: suspend () -> Boolean,
     ): RegionalDownloadResult = withContext(ioDispatcher) {
         operationMutex.withLock {
             validateCanonicalPlan(plan)
@@ -261,22 +263,16 @@ class FileRegionalDatasetRepository(
                     break
                 }
 
-                onProgress(
-                    RegionalDownloadProgress(
-                        artifact = artifact,
-                        status = RegionalTransferStatus.QUEUED,
-                        message = "Regional artifact queued.",
-                    ),
-                )
-                val result = acquireArtifact(
-                    artifact = artifact,
-                    priorRecord = inventory.artifacts[artifact.relativePath],
+                val committed = acquireAndCommitArtifactLocked(
+                    plan = plan,
+                    artifactIndex = index,
+                    inventory = inventory,
                     onProgress = onProgress,
                     isCancelled = isCancelled,
                 )
+                val result = committed.acquisition.result
                 results += result
-                inventory = inventory.withResult(result, nowIso8601(), plan)
-                writeInventory(inventory)
+                inventory = committed.inventory
 
                 if (result.status == RegionalTransferStatus.CANCELLED) {
                     for (remaining in plan.artifacts.drop(index + 1)) {
@@ -291,6 +287,77 @@ class FileRegionalDatasetRepository(
         }
     }
 
+    override suspend fun acquireArtifact(
+        plan: RegionalDownloadPlan,
+        artifactIndex: Int,
+        maximumProviderAttempts: Int?,
+        beforeProviderAttempt: suspend (attemptNumber: Int) -> Boolean,
+        onProgress: (RegionalDownloadProgress) -> Unit,
+        isCancelled: suspend () -> Boolean,
+    ): RegionalArtifactAcquisition = withContext(ioDispatcher) {
+        operationMutex.withLock {
+            validateCanonicalPlan(plan)
+            requirePlanArtifact(plan, artifactIndex)
+            ensureStorageRoot()
+            preflightStorage(plan, firstArtifactIndex = artifactIndex)
+            acquireAndCommitArtifactLocked(
+                plan = plan,
+                artifactIndex = artifactIndex,
+                inventory = readInventory(),
+                requireExactPlanSemantics = true,
+                maximumProviderAttempts = maximumProviderAttempts,
+                beforeProviderAttempt = beforeProviderAttempt,
+                onProgress = onProgress,
+                isCancelled = isCancelled,
+            ).acquisition
+        }
+    }
+
+    override suspend fun findCommittedArtifact(
+        plan: RegionalDownloadPlan,
+        artifactIndex: Int,
+        minimumAcquiredAtEpochMillis: Long?,
+    ): RegionalInventoryRecord? = withContext(ioDispatcher) {
+        operationMutex.withLock {
+            validateCanonicalPlan(plan)
+            val artifact = requirePlanArtifact(plan, artifactIndex)
+            if (minimumAcquiredAtEpochMillis != null && minimumAcquiredAtEpochMillis < 0L) {
+                throw RegionalDatasetException(
+                    RegionalDatasetFailure.INVALID_PLAN,
+                    "The minimum regional acquisition time cannot be negative.",
+                )
+            }
+            ensureStorageRoot()
+            readInventory().artifacts[artifact.relativePath]?.takeIf { record ->
+                committedInventoryRecordIsValid(
+                    artifact = artifact,
+                    record = record,
+                    minimumAcquiredAtEpochMillis = minimumAcquiredAtEpochMillis,
+                    requireReusableCache = true,
+                )
+            }
+        }
+    }
+
+    override suspend fun findCommittedArtifactEvidence(
+        plan: RegionalDownloadPlan,
+        artifactIndex: Int,
+    ): RegionalInventoryRecord? = withContext(ioDispatcher) {
+        operationMutex.withLock {
+            validateCanonicalPlan(plan)
+            val artifact = requirePlanArtifact(plan, artifactIndex)
+            ensureStorageRoot()
+            readInventory().artifacts[artifact.relativePath]?.takeIf { record ->
+                committedInventoryRecordIsValid(
+                    artifact = artifact,
+                    record = record,
+                    minimumAcquiredAtEpochMillis = null,
+                    requireReusableCache = false,
+                )
+            }
+        }
+    }
+
     override suspend fun loadInventory(): RegionalInventory = withContext(ioDispatcher) {
         operationMutex.withLock {
             ensureStorageRoot()
@@ -298,16 +365,84 @@ class FileRegionalDatasetRepository(
         }
     }
 
-    private suspend fun acquireArtifact(
+    private suspend fun acquireAndCommitArtifactLocked(
+        plan: RegionalDownloadPlan,
+        artifactIndex: Int,
+        inventory: RegionalInventory,
+        requireExactPlanSemantics: Boolean = false,
+        maximumProviderAttempts: Int? = null,
+        beforeProviderAttempt: suspend (attemptNumber: Int) -> Boolean = { true },
+        onProgress: (RegionalDownloadProgress) -> Unit,
+        isCancelled: suspend () -> Boolean,
+    ): CommittedArtifactAcquisition {
+        val artifact = requirePlanArtifact(plan, artifactIndex)
+        val providerPolicyMaximum = maximumTransferAttempts(artifact)
+        val boundedMaximumAttempts = maximumProviderAttempts ?: providerPolicyMaximum
+        if (boundedMaximumAttempts !in 0..providerPolicyMaximum) {
+            throw RegionalDatasetException(
+                RegionalDatasetFailure.INVALID_PLAN,
+                "The regional provider-attempt allowance is outside the fixed transfer policy.",
+            )
+        }
+        val accounting = RegionalTransferAccounting(
+            maximumAttempts = boundedMaximumAttempts,
+            maximumArtifactBytes = artifact.source.maximumArtifactBytes,
+        )
+        onProgress(
+            RegionalDownloadProgress(
+                artifact = artifact,
+                status = RegionalTransferStatus.QUEUED,
+                message = "Regional artifact queued.",
+            ),
+        )
+        val result = acquireArtifactPayload(
+            artifact = artifact,
+            priorRecord = inventory.artifacts[artifact.relativePath],
+            accounting = accounting,
+            requireExactPlanSemantics = requireExactPlanSemantics,
+            beforeProviderAttempt = beforeProviderAttempt,
+            onProgress = onProgress,
+            isCancelled = isCancelled,
+        )
+        val updatedInventory = inventory.withResult(
+            result = result,
+            timestamp = nowIso8601(),
+            plan = plan,
+            requireExactPlanSemantics = requireExactPlanSemantics,
+        )
+        writeInventory(updatedInventory)
+        val committedRecord = checkNotNull(updatedInventory.artifacts[artifact.relativePath]) {
+            "A committed regional artifact must have an inventory record."
+        }
+        return CommittedArtifactAcquisition(
+            acquisition = RegionalArtifactAcquisition(
+                result = result,
+                committedInventoryRecord = committedRecord,
+                providerAttempts = accounting.providerAttempts,
+                networkBytesTransferred = accounting.networkBytesTransferred,
+            ),
+            inventory = updatedInventory,
+        )
+    }
+
+    private suspend fun acquireArtifactPayload(
         artifact: RegionalArtifact,
         priorRecord: RegionalInventoryRecord?,
+        accounting: RegionalTransferAccounting,
+        requireExactPlanSemantics: Boolean,
+        beforeProviderAttempt: suspend (attemptNumber: Int) -> Boolean,
         onProgress: (RegionalDownloadProgress) -> Unit,
-        isCancelled: () -> Boolean,
+        isCancelled: suspend () -> Boolean,
     ): RegionalArtifactResult {
         val destination = safeTarget(artifact.relativePath)
         ensureDirectory(destination.parentFile ?: rootDirectory)
 
-        verifiedExisting(artifact, destination, priorRecord)?.let { existing ->
+        verifiedExisting(
+            artifact = artifact,
+            destination = destination,
+            record = priorRecord,
+            requireExactPlanSemantics = requireExactPlanSemantics,
+        )?.let { existing ->
             if (
                 priorRecord?.processingState == RegionalProcessingState.READY &&
                 processedOutputIsValid(priorRecord.processedOutput)
@@ -348,6 +483,8 @@ class FileRegionalDatasetRepository(
                 artifact = artifact,
                 staging = staging,
                 metadataFile = partialMetadataFile,
+                accounting = accounting,
+                beforeProviderAttempt = beforeProviderAttempt,
                 onProgress = onProgress,
                 isCancelled = isCancelled,
             )
@@ -436,10 +573,12 @@ class FileRegionalDatasetRepository(
         artifact: RegionalArtifact,
         staging: File,
         metadataFile: File,
+        accounting: RegionalTransferAccounting,
+        beforeProviderAttempt: suspend (attemptNumber: Int) -> Boolean,
         onProgress: (RegionalDownloadProgress) -> Unit,
-        isCancelled: () -> Boolean,
+        isCancelled: suspend () -> Boolean,
     ): TransferPayload {
-        val maximumAttempts = maximumTransferAttempts(artifact)
+        val maximumAttempts = accounting.maximumAttempts
         var attempt = 1
         while (true) {
             if (isCancelled()) throw ExplicitRegionalCancellation()
@@ -449,6 +588,8 @@ class FileRegionalDatasetRepository(
                     artifact = artifact,
                     staging = staging,
                     metadataFile = metadataFile,
+                    accounting = accounting,
+                    beforeProviderAttempt = beforeProviderAttempt,
                     onProgress = onProgress,
                     isCancelled = isCancelled,
                 )
@@ -499,8 +640,10 @@ class FileRegionalDatasetRepository(
         artifact: RegionalArtifact,
         staging: File,
         metadataFile: File,
+        accounting: RegionalTransferAccounting,
+        beforeProviderAttempt: suspend (attemptNumber: Int) -> Boolean,
         onProgress: (RegionalDownloadProgress) -> Unit,
-        isCancelled: () -> Boolean,
+        isCancelled: suspend () -> Boolean,
     ): TransferPayload {
         if (artifact.httpMethod == RegionalHttpMethod.POST) {
             discardPartial(staging, metadataFile)
@@ -509,6 +652,8 @@ class FileRegionalDatasetRepository(
                 staging = staging,
                 metadataFile = metadataFile,
                 resume = null,
+                accounting = accounting,
+                beforeProviderAttempt = beforeProviderAttempt,
                 onProgress = onProgress,
                 isCancelled = isCancelled,
             )
@@ -549,6 +694,8 @@ class FileRegionalDatasetRepository(
             staging = staging,
             metadataFile = metadataFile,
             resume = metadata,
+            accounting = accounting,
+            beforeProviderAttempt = beforeProviderAttempt,
             onProgress = onProgress,
             isCancelled = isCancelled,
         )
@@ -592,7 +739,7 @@ class FileRegionalDatasetRepository(
         message: String,
         providerDelayMillis: Long? = null,
         onProgress: (RegionalDownloadProgress) -> Unit,
-        isCancelled: () -> Boolean,
+        isCancelled: suspend () -> Boolean,
     ) {
         if (isCancelled()) throw ExplicitRegionalCancellation()
         coroutineContext.ensureActive()
@@ -618,8 +765,10 @@ class FileRegionalDatasetRepository(
         staging: File,
         metadataFile: File,
         resume: PartialTransferMetadata?,
+        accounting: RegionalTransferAccounting,
+        beforeProviderAttempt: suspend (attemptNumber: Int) -> Boolean,
         onProgress: (RegionalDownloadProgress) -> Unit,
-        isCancelled: () -> Boolean,
+        isCancelled: suspend () -> Boolean,
     ): TransferPayload {
         val requestedStart = resume?.let { staging.length() }?.takeIf { it > 0L }
         val request = RegionalHttpRequest(
@@ -636,6 +785,12 @@ class FileRegionalDatasetRepository(
         if (isCancelled()) throw ExplicitRegionalCancellation()
         coroutineContext.ensureActive()
         val requestStarted = nanoClock()
+        accounting.requireProviderAttemptAvailable()
+        val attemptNumber = accounting.providerAttempts + 1
+        if (!beforeProviderAttempt(attemptNumber)) throw ExplicitRegionalCancellation()
+        if (isCancelled()) throw ExplicitRegionalCancellation()
+        coroutineContext.ensureActive()
+        accounting.recordProviderAttempt()
         val response = try {
             transport.execute(request)
         } catch (error: RegionalDatasetException) {
@@ -785,6 +940,7 @@ class FileRegionalDatasetRepository(
                 declaredResponseBytes = response.contentLength,
                 totalBytes = totalBytes,
                 requestStartedNanos = requestStarted,
+                accounting = accounting,
                 onProgress = onProgress,
                 isCancelled = isCancelled,
             )
@@ -833,8 +989,9 @@ class FileRegionalDatasetRepository(
         declaredResponseBytes: Long?,
         totalBytes: Long?,
         requestStartedNanos: Long,
+        accounting: RegionalTransferAccounting,
         onProgress: (RegionalDownloadProgress) -> Unit,
-        isCancelled: () -> Boolean,
+        isCancelled: suspend () -> Boolean,
     ): Long {
         var completedBytes = initialBytes
         var responseBytes = 0L
@@ -876,6 +1033,7 @@ class FileRegionalDatasetRepository(
                             "The provider response exceeds the approved artifact limit.",
                         )
                     }
+                    accounting.recordNetworkBytes(read.toLong())
                     output.write(buffer, 0, read)
                     val now = nanoClock()
                     if (now - lastProgressNanos >= PROGRESS_INTERVAL_NANOS) {
@@ -905,7 +1063,7 @@ class FileRegionalDatasetRepository(
         return completedBytes
     }
 
-    private fun processAndRecord(
+    private suspend fun processAndRecord(
         artifact: RegionalArtifact,
         staging: File,
         payload: TransferPayload,
@@ -914,7 +1072,7 @@ class FileRegionalDatasetRepository(
         destination: File = staging,
         metadataFile: File? = null,
         onProgress: (RegionalDownloadProgress) -> Unit,
-        isCancelled: () -> Boolean,
+        isCancelled: suspend () -> Boolean,
     ): RegionalArtifactResult {
         if (isCancelled()) throw ExplicitRegionalCancellation()
         onProgress(
@@ -934,6 +1092,8 @@ class FileRegionalDatasetRepository(
                 effectiveSourceUrl = payload.effectiveUrl,
             )
         } catch (error: RegionalDatasetException) {
+            throw error
+        } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
             throw RegionalDatasetException(
@@ -977,15 +1137,17 @@ class FileRegionalDatasetRepository(
         artifact: RegionalArtifact,
         destination: File,
         record: RegionalInventoryRecord?,
+        requireExactPlanSemantics: Boolean,
     ): TransferPayload? {
+        val planSemanticsMatch = record != null && if (requireExactPlanSemantics) {
+            record.matchesExactPlanArtifact(artifact)
+        } else {
+            record.matchesReusablePlanArtifact(artifact)
+        }
         if (
             record == null ||
-            record.relativePath != artifact.relativePath ||
-            record.datasetId != artifact.source.datasetId ||
-            record.sourceSnapshot.datasetFamily != artifact.source.datasetFamily ||
-            record.sourceSnapshot.datasetRelease != artifact.source.datasetRelease ||
-            record.sourceSnapshot.queryVersion != artifact.source.queryVersion ||
-            record.sourceSnapshot.normalizerVersion != artifact.source.normalizerVersion ||
+            !planSemanticsMatch ||
+            record.status !in setOf(RegionalTransferStatus.READY, RegionalTransferStatus.EXISTING) ||
             !cacheEntryMayBeReused(artifact, record) ||
             record.bytes == null ||
             record.sha256 == null ||
@@ -1020,6 +1182,72 @@ class FileRegionalDatasetRepository(
             age in 0L..maximumAge
         }
     }
+
+    private fun committedInventoryRecordIsValid(
+        artifact: RegionalArtifact,
+        record: RegionalInventoryRecord,
+        minimumAcquiredAtEpochMillis: Long?,
+        requireReusableCache: Boolean,
+    ): Boolean {
+        if (!record.matchesExactPlanArtifact(artifact)) return false
+        return when (record.status) {
+            RegionalTransferStatus.READY,
+            RegionalTransferStatus.EXISTING,
+            -> {
+                val cacheContractIsValid = if (!requireReusableCache) {
+                    true
+                } else {
+                    when (artifact.cachePolicy) {
+                        RegionalArtifactCachePolicy.IMMUTABLE_RELEASE -> true
+                        RegionalArtifactCachePolicy.LIVE_SNAPSHOT_REUSE_WITHIN_MAX_AGE ->
+                            cacheEntryMayBeReused(artifact, record)
+                        RegionalArtifactCachePolicy.LIVE_SNAPSHOT_FORCE_REFRESH -> {
+                            val acquiredAtMillis = record.acquiredAt?.let(::parseInventoryTimestamp)
+                            minimumAcquiredAtEpochMillis != null &&
+                                acquiredAtMillis != null &&
+                                acquiredAtMillis in minimumAcquiredAtEpochMillis..clock()
+                        }
+                    }
+                }
+                cacheContractIsValid &&
+                    record.processingState == RegionalProcessingState.READY &&
+                    storedRecordIsValid(artifact, record)
+            }
+
+            RegionalTransferStatus.NOT_FOUND ->
+                artifact.source.optionalWhenNotPublished &&
+                    artifact.source.snapshotPolicy == RegionalSnapshotPolicy.IMMUTABLE_RELEASE &&
+                    record.effectiveUrl == null &&
+                    record.acquiredAt == null &&
+                    record.bytes == null &&
+                    record.sha256 == null &&
+                    record.etag == null &&
+                    record.lastModified == null &&
+                    record.processingState == RegionalProcessingState.PENDING &&
+                    record.processedOutput == null &&
+                    record.error == null
+
+            else -> false
+        }
+    }
+
+    private fun RegionalInventoryRecord.matchesReusablePlanArtifact(artifact: RegionalArtifact): Boolean =
+        relativePath == artifact.relativePath &&
+            datasetId == artifact.source.datasetId &&
+            requestedUrl == artifact.url &&
+            routeId == artifact.source.routeId &&
+            routePolicyVersion == artifact.source.routePolicyVersion &&
+            bounds == artifact.requestBounds &&
+            sourceSnapshot.datasetFamily == artifact.source.datasetFamily &&
+            sourceSnapshot.datasetRelease == artifact.source.datasetRelease &&
+            sourceSnapshot.dataType == artifact.source.dataType &&
+            sourceSnapshot.fileFormat == artifact.source.fileFormat &&
+            sourceSnapshot.queryVersion == artifact.source.queryVersion &&
+            sourceSnapshot.normalizerVersion == artifact.source.normalizerVersion
+
+    private fun RegionalInventoryRecord.matchesExactPlanArtifact(artifact: RegionalArtifact): Boolean =
+        matchesReusablePlanArtifact(artifact) &&
+            sourceSnapshot == artifact.source.toSourceSnapshot()
 
     private fun parseInventoryTimestamp(value: String): Long? = try {
         val formatter = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
@@ -1085,8 +1313,22 @@ class FileRegionalDatasetRepository(
         }
     }
 
-    private fun preflightStorage(plan: RegionalDownloadPlan) {
-        val processingBytes = plan.artifacts.sumOf { artifact ->
+    private fun requirePlanArtifact(
+        plan: RegionalDownloadPlan,
+        artifactIndex: Int,
+    ): RegionalArtifact = plan.artifacts.getOrNull(artifactIndex)
+        ?: throw RegionalDatasetException(
+            RegionalDatasetFailure.INVALID_PLAN,
+            "The regional artifact index is outside the reviewed plan.",
+        )
+
+    private fun preflightStorage(
+        plan: RegionalDownloadPlan,
+        firstArtifactIndex: Int = 0,
+    ) {
+        val remainingArtifacts = plan.artifacts.drop(firstArtifactIndex)
+        val remainingEstimatedBytes = remainingArtifacts.sumOf(RegionalArtifact::estimatedBytes)
+        val processingBytes = remainingArtifacts.sumOf { artifact ->
             when (artifact.source.fileFormat) {
                 RegionalFileFormat.COG_GEOTIFF -> MAXIMUM_PROCESSOR_CONTROL_BYTES
                 RegionalFileFormat.OVERPASS_JSON -> MAXIMUM_BUILDING_OUTPUT_BYTES
@@ -1094,10 +1336,10 @@ class FileRegionalDatasetRepository(
         }
         val safetyBytes = maxOf(
             MINIMUM_STORAGE_SAFETY_BYTES,
-            ceil(plan.estimatedBytes * STORAGE_SAFETY_RATIO).toLong(),
+            ceil(remainingEstimatedBytes * STORAGE_SAFETY_RATIO).toLong(),
         )
         val required = try {
-            Math.addExact(Math.addExact(plan.estimatedBytes, processingBytes), safetyBytes)
+            Math.addExact(Math.addExact(remainingEstimatedBytes, processingBytes), safetyBytes)
         } catch (error: ArithmeticException) {
             throw RegionalDatasetException(
                 RegionalDatasetFailure.INVALID_PLAN,
@@ -1314,9 +1556,15 @@ class FileRegionalDatasetRepository(
         result: RegionalArtifactResult,
         timestamp: String,
         plan: RegionalDownloadPlan,
+        requireExactPlanSemantics: Boolean,
     ): RegionalInventory {
         val artifact = result.artifact
         val priorRecord = artifacts[artifact.relativePath]
+        val priorMatchesPlan = priorRecord != null && if (requireExactPlanSemantics) {
+            priorRecord.matchesExactPlanArtifact(artifact)
+        } else {
+            priorRecord.matchesReusablePlanArtifact(artifact)
+        }
         if (
             result.status in setOf(
                 RegionalTransferStatus.FAILED,
@@ -1324,6 +1572,9 @@ class FileRegionalDatasetRepository(
                 RegionalTransferStatus.NOT_FOUND,
             ) &&
             priorRecord != null &&
+            priorMatchesPlan &&
+            priorRecord.status in setOf(RegionalTransferStatus.READY, RegionalTransferStatus.EXISTING) &&
+            priorRecord.processingState == RegionalProcessingState.READY &&
             storedRecordIsValid(artifact, priorRecord)
         ) {
             return copy(updatedAt = timestamp, lastBounds = plan.request.bounds)
@@ -1335,7 +1586,12 @@ class FileRegionalDatasetRepository(
                 RegionalProcessingState.FAILED
             else -> RegionalProcessingState.PENDING
         }
-        val record = if (result.status == RegionalTransferStatus.EXISTING && priorRecord != null) {
+        val record = if (
+            result.status == RegionalTransferStatus.EXISTING &&
+            priorRecord != null &&
+            priorMatchesPlan &&
+            priorRecord.status in setOf(RegionalTransferStatus.READY, RegionalTransferStatus.EXISTING)
+        ) {
             priorRecord.copy(
                 status = RegionalTransferStatus.EXISTING,
                 checkedAt = timestamp,
@@ -1625,6 +1881,45 @@ private data class TransferPayload(
     val lastModified: String? = null,
 )
 
+private data class CommittedArtifactAcquisition(
+    val acquisition: RegionalArtifactAcquisition,
+    val inventory: RegionalInventory,
+)
+
+private class RegionalTransferAccounting(
+    val maximumAttempts: Int,
+    maximumArtifactBytes: Long,
+) {
+    private val maximumNetworkBytes = Math.multiplyExact(maximumArtifactBytes, maximumAttempts.toLong())
+
+    var providerAttempts: Int = 0
+        private set
+
+    var networkBytesTransferred: Long = 0L
+        private set
+
+    fun requireProviderAttemptAvailable() {
+        if (providerAttempts >= maximumAttempts) throw RegionalProviderAttemptBudgetExhausted()
+    }
+
+    fun recordProviderAttempt() {
+        requireProviderAttemptAvailable()
+        providerAttempts += 1
+    }
+
+    fun recordNetworkBytes(bytes: Long) {
+        require(bytes > 0L) { "Regional network accounting requires a positive byte increment." }
+        val updated = Math.addExact(networkBytesTransferred, bytes)
+        if (updated > maximumNetworkBytes) {
+            throw RegionalDatasetException(
+                RegionalDatasetFailure.RESPONSE_TOO_LARGE,
+                "Regional network bytes exceed the approved retry budget.",
+            )
+        }
+        networkBytesTransferred = updated
+    }
+}
+
 private data class ParsedContentRange(
     val start: Long,
     val end: Long,
@@ -1666,6 +1961,9 @@ private data class PersistedTiffMetadataIndex(
 )
 
 private class ExplicitRegionalCancellation : IOException()
+private class RegionalProviderAttemptBudgetExhausted : IOException(
+    "No provider attempts remain for this regional artifact.",
+)
 private class RestartTransferFromZero : IOException()
 private class RegionalArtifactNotFound : IOException()
 private class RetryableRegionalTransferException(

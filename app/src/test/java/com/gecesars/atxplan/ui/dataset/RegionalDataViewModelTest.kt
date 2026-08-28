@@ -1,5 +1,6 @@
 package com.gecesars.atxplan.ui.dataset
 
+import com.gecesars.atxplan.domain.dataset.RegionalArtifactAcquisition
 import com.gecesars.atxplan.domain.dataset.RegionalArtifactResult
 import com.gecesars.atxplan.domain.dataset.RegionalDatasetRepository
 import com.gecesars.atxplan.domain.dataset.RegionalDatasetSelection
@@ -7,6 +8,7 @@ import com.gecesars.atxplan.domain.dataset.RegionalDownloadPlan
 import com.gecesars.atxplan.domain.dataset.RegionalDownloadProgress
 import com.gecesars.atxplan.domain.dataset.RegionalDownloadResult
 import com.gecesars.atxplan.domain.dataset.RegionalInventory
+import com.gecesars.atxplan.domain.dataset.RegionalInventoryRecord
 import com.gecesars.atxplan.domain.dataset.RegionalTransferStatus
 import com.gecesars.atxplan.ui.MainDispatcherRule
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -113,7 +115,7 @@ private class FakeRegionalDatasetRepository : RegionalDatasetRepository {
     override suspend fun acquire(
         plan: RegionalDownloadPlan,
         onProgress: (RegionalDownloadProgress) -> Unit,
-        isCancelled: () -> Boolean,
+        isCancelled: suspend () -> Boolean,
     ): RegionalDownloadResult {
         acquireCalls++
         val results = plan.artifacts.map { artifact ->
@@ -136,4 +138,19 @@ private class FakeRegionalDatasetRepository : RegionalDatasetRepository {
     }
 
     override suspend fun loadInventory(): RegionalInventory = RegionalInventory()
+
+    override suspend fun acquireArtifact(
+        plan: RegionalDownloadPlan,
+        artifactIndex: Int,
+        maximumProviderAttempts: Int?,
+        beforeProviderAttempt: suspend (attemptNumber: Int) -> Boolean,
+        onProgress: (RegionalDownloadProgress) -> Unit,
+        isCancelled: suspend () -> Boolean,
+    ): RegionalArtifactAcquisition = error("The ViewModel test fake does not use artifact-level acquisition.")
+
+    override suspend fun findCommittedArtifact(
+        plan: RegionalDownloadPlan,
+        artifactIndex: Int,
+        minimumAcquiredAtEpochMillis: Long?,
+    ): RegionalInventoryRecord? = null
 }

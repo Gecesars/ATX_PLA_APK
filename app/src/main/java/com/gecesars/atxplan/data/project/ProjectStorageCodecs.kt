@@ -4,6 +4,7 @@ import com.gecesars.atxplan.domain.model.PROJECT_CATALOG_SCHEMA_VERSION
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
@@ -62,14 +63,11 @@ internal class ProjectDocumentCodec(
             ?.jsonPrimitive
             ?.intOrNull
             ?: throw SerializationException("The project document schema version is invalid.")
-        val sanitizedRoot = if (projectSchemaVersion < PROJECT_CATALOG_SCHEMA_VERSION) {
-            val project = root["project"] as? JsonObject
-                ?: throw SerializationException("The project document is missing its project object.")
-            JsonObject(
-                root + ("project" to JsonObject(project.filterKeys { key -> key != "linkStudies" })),
-            )
-        } else {
-            root
+        val project = root["project"] as? JsonObject
+            ?: throw SerializationException("The project document is missing its project object.")
+        val sanitizedProject = sanitizeProjectDocument(project, projectSchemaVersion)
+        val sanitizedRoot = if (sanitizedProject === project) root else {
+            JsonObject(root + ("project" to sanitizedProject))
         }
         return json.decodeFromJsonElement(ProjectDocument.serializer(), sanitizedRoot)
     }
@@ -77,6 +75,48 @@ internal class ProjectDocumentCodec(
     fun encode(document: ProjectDocument): ByteArray =
         json.encodeToString(ProjectDocument.serializer(), document).toByteArray(Charsets.UTF_8)
 }
+
+private const val LINK_STUDY_PROJECT_SCHEMA_VERSION = 5
+
+private fun sanitizeProjectDocument(
+    project: JsonObject,
+    projectSchemaVersion: Int,
+): JsonObject {
+    var changed = false
+    var fields = project
+    if (projectSchemaVersion < LINK_STUDY_PROJECT_SCHEMA_VERSION && "linkStudies" in fields) {
+        fields = JsonObject(fields.filterKeys { key -> key != "linkStudies" })
+        changed = true
+    }
+    if (projectSchemaVersion < PROJECT_CATALOG_SCHEMA_VERSION) {
+        val patterns = fields["antennaPatterns"] as? JsonArray
+        if (patterns != null) {
+            val sanitizedPatterns = JsonArray(
+                patterns.map { element ->
+                    (element as? JsonObject)?.let { pattern ->
+                        JsonObject(
+                            pattern.filterKeys { key -> key !in VERSION_6_PATTERN_FIELDS },
+                        )
+                    } ?: element
+                },
+            )
+            fields = JsonObject(fields + ("antennaPatterns" to sanitizedPatterns))
+            changed = true
+        }
+    }
+    return if (changed) fields else project
+}
+
+private val VERSION_6_PATTERN_FIELDS = setOf(
+    "sourceArtifactId",
+    "canonicalDataVersion",
+    "origin",
+    "coordinateConvention",
+    "horizontalCut",
+    "verticalCut",
+    "normalizedContentSha256",
+    "warnings",
+)
 
 internal fun sha256Hex(payload: ByteArray): String = MessageDigest.getInstance("SHA-256")
     .digest(payload)

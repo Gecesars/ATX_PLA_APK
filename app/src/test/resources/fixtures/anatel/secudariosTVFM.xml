@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plano_basico data_geracao="2026-07-20">
+  <row item="3" id="secondary-tv-source" IdtPlanoBasico="PB-2001" Pais="BR" UF="MG" CodMunicipio="3106200" Municipio="Belo Horizonte" Canal="22" Frequencia="521" Decalagem="" Classe="B" Servico="RTV" Carater="S" Finalidade="RELAY" Status="SECONDARY_RAW" Entidade="Example Relay" CNPJ="22.222.222/0001-22" categoriaEstacao="Retransmissora" Latitude="-19.9167" Longitude="-43.9345" ERP="1.2" Altura="45" Limitacoes="source limitation text" Observacoes="Secondary-channel fixture." Fistel="F-300" FistelGeradora="FG-300" dic="D-300" PadraoAntena_dBd="raw pattern limitation"/>
+</plano_basico>
