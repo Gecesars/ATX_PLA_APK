@@ -1,6 +1,6 @@
 # Android Architecture
 
-> Architecture baseline and target as of August 27, 2026. The repository contains a working Compose application, typed/saveable Navigation 3 routes, explicit UDF and use-case boundaries, a transactional schema-5 project store with a small atomic index and immutable SHA-256 project documents, explicit 1→2→3→4→5, 2→3→4→5, 3→4→5, and indexed 4→5 migrations, a content-addressed artifact-store foundation, validated RF-domain models, transactional project lifecycle operations, independent RF-entity CRUD, a combined Add RF Path editor, a bounded RF calculator, a persisted project-linked ITU-R P.525-5 study, and a separate feature ViewModel/repository for the bundled verified IBGE 2022 attribute index. Sections labeled Target or Planned describe the next architecture and must not be read as delivered functionality; the project-link slice is not terrain-aware analysis or complete RadioPlanner parity.
+> Architecture baseline and target as of August 27, 2026. The repository contains a working Compose application, typed/saveable Navigation 3 routes, explicit UDF and use-case boundaries, a transactional schema-5 project store with a small atomic index and immutable SHA-256 project documents, explicit 1→2→3→4→5, 2→3→4→5, 3→4→5, and indexed 4→5 migrations, a content-addressed artifact-store foundation, validated RF-domain models, transactional project lifecycle operations, independent RF-entity CRUD, a combined Add RF Path editor, a bounded RF calculator, a persisted project-linked ITU-R P.525-5 study, a separate feature ViewModel/repository for the bundled verified IBGE 2022 attribute index, and a screen-bound fixed-source regional raw-data acquisition/processing foundation. Sections labeled Target or Planned describe the next architecture and must not be read as delivered functionality; the regional cache is not a bare-earth DTM, terrain/clutter engine, or process-durable job, and the project-link slice is not terrain-aware analysis or complete RadioPlanner parity.
 
 ## 1. Architecture goals
 
@@ -28,6 +28,7 @@ flowchart TD
     THEME --> APP[AtxPlanApp]
     APP --> VM[AppViewModel]
     APP --> DVM[DataCatalogViewModel]
+    APP --> RVM[RegionalDataViewModel]
     APP --> NAV[Navigation 3 NavDisplay]
     NAV --> DASH[Dashboard]
     NAV --> PROJECTS[Projects]
@@ -51,6 +52,10 @@ flowchart TD
     IPORT --> IREPO[BundledIbgeDatasetRepository]
     IREPO --> IASSET[(Manifest, NOTICE, content-addressed asset)]
     IREPO --> IDB[(Verified read-only SQLite in no-backup storage)]
+    RVM --> RPORT[RegionalDatasetRepository]
+    RPORT --> RREPO[FileRegionalDatasetRepository]
+    RREPO --> RHTTP[Allowlisted HTTPS transport]
+    RREPO --> RCACHE[(Raw files, processed metadata/GeoJSON, atomic inventory)]
 ```
 
 ### 2.2 Current status by concern
@@ -61,17 +66,17 @@ flowchart TD
 | UI shell | Delivered | Compose Material 3, edge-to-edge, custom light/dark theme. | Full accessibility/device-matrix validation remains. |
 | Adaptive navigation | Delivered | Bottom navigation on compact width; navigation rail at 720 dp or wider; rail labels/header collapse to accessible icons below 520 dp height. | Feature contents are not all adaptive list/detail layouts. |
 | Navigation 3 | Foundation | Serializable stable-ID `AtxRoute` keys, a saveable typed back stack, safe unknown-route fallback, and nested RF-path and project-name editors have saved-instance-state tests. | Deep links, deleted-ID UX, route ownership, and true process-death/rotation/device-matrix flows remain. |
-| State management | Foundation | Immutable state, explicit actions/effects, structured problems/recovery, injected use cases/dispatchers, an explicit mutation-completion counter, cancellation, and ViewModel tests. `DataCatalogViewModel` separately owns IBGE preparation, retry, debounced search, stale-query rejection, and selection state. Serialized project-catalog mutations rebase generically on the latest repository catalog and publish only after persistence; rejected/no-op outcomes return that latest catalog without writing. | Most project/RF screens still share `AppViewModel`; cross-instance catalog observation, DI/scoping, durable jobs, broader observability, accessibility, and system recovery remain. |
-| Repository boundary | Delivered | `ProjectRepository` separates project state from file persistence, and `IbgeDatasetRepository` separates the Data Catalog from the packaged SQLite implementation. | Generic user/acquired datasets, map sources, elevation, studies, and exchange still need their target ports. |
+| State management | Foundation | Immutable state, explicit actions/effects, structured problems/recovery, injected use cases/dispatchers, an explicit mutation-completion counter, cancellation, and ViewModel tests. `DataCatalogViewModel` owns IBGE preparation/search, while `RegionalDataViewModel` owns envelope drafts, source selection, license acceptance, planning, screen-bound acquisition progress/cancellation, and inventory refresh. A separate pure regional job model/reconciler validates durable state decisions without UI ownership. Serialized project-catalog mutations rebase generically on the latest repository catalog and publish only after persistence. | Regional transfers are intentionally in-app and do not survive process death. The job foundation is not observed by a ViewModel or scheduler. Most project/RF screens still share `AppViewModel`; cross-instance catalog observation, DI/scoping, runner/scheduler integration, broader observability, accessibility, and system recovery remain. |
+| Repository boundary | Delivered | `ProjectRepository` separates project state from file persistence, `IbgeDatasetRepository` separates packaged SQLite data, `RegionalDatasetRepository` separates fixed-source planning results from regional cache/download/processing infrastructure, and `RegionalJobRepository` provides bounded non-executing job persistence. | Arbitrary user datasets, job execution/retention, map sources, raster-sample elevation, studies, and exchange still need their target ports or integrations. |
 | Project persistence | Delivered baseline | Strict UTF-8 project-schema-5 JSON uses a 5 MiB atomic store-schema-1 control index and immutable, independently verified project documents bounded to a conservative 8 MiB each. Explicit 1→2→3→4→5, 2→3→4→5, and 3→4→5 project migrations are present. Indexed project-schema-4 migration writes and verifies all replacement project-schema-5 documents before atomically publishing a replacement store-schema-1 index declaring project schema 5; failure leaves the previous index declaring project schema 4 authoritative. A process mutex protects latest-catalog read-transform-write transactions; migration, fault, no-op, corruption, and reuse tests are present. | Unreadable/future-store recovery/export, reachability cleanup, backup, multi-process policy, storage-exhaustion/interruption system evidence, lazy document loading, and the long-term operational-store decision remain. |
-| Artifact persistence | Foundation | A private streaming content-addressed store validates operation limits and optional expected SHA-256, syncs and promotes immutable blobs, deduplicates verified content, and reports available, missing, or corrupt states. | No import/attachment UI, document-reference transaction, export, ownership policy, garbage collection, or artifact-backed study-result workflow consumes this store yet. The bounded project-link result is stored inside its immutable-addressed project document. |
-| Domain | Foundation | Schema-5 active/archive invariants, `ArchivedProject`, project/network/site/sector/receiver/study models, expanded RP3-parity carrier fields, scenario/GIS/antenna/coverage/regulatory records, artifact references, import provenance, engineering value types, and cross-reference validation are implemented. `ProjectLinkStudyRecord` holds immutable project/network/endpoint/effective-input snapshots, bounded geometry, P.525-5 results/provenance, warnings, and a canonical SHA-256 fingerprint and must match one completed point-to-point summary. Separate dataset-domain models describe the delivered global IBGE package and municipality summaries. | Project GIS/coverage records remain persistence foundations, not delivered parsers, sector geometry, terrain-aware propagation results, or regulatory conclusions. The release-managed IBGE reference index is not a project GIS layer. Remaining legacy primitive entity fields still need staged migration. |
+| Artifact persistence | Foundation | A private streaming content-addressed project store validates operation limits and optional expected SHA-256, syncs and promotes immutable blobs, deduplicates verified content, and reports available, missing, or corrupt states. Regional data is deliberately held in a separate bounded private cache with its own inventory. | No import/attachment UI, document-reference transaction, export, ownership policy, garbage collection, reference-aware regional removal, or artifact-backed study-result workflow consumes the project store yet. The bounded project-link result is stored inside its immutable-addressed project document. |
+| Domain | Foundation | Schema-5 project/RF/study models and validation are implemented. Separate dataset models describe the bundled IBGE package and the regional fixed catalog, WGS 84 bounds, selections, source licenses, bounded plans/artifacts, cache policy, transfer/processing state, processed outputs, and path-keyed provenance inventory schema 2 with nested source snapshots. Regional job models add a passive E6 plan, semantic/execution identities, exact accepted licenses, strict state/checkpoint/progress invariants, and pure reconciliation actions. | Regional records describe cached source material or a future execution contract, not project GIS layers or RF inputs. The inventory retains one current record per path and has no content-addressed history/pins. The job model is not wired to execution. Copernicus GLO-30 is a DSM rather than a bare-earth DTM; raster samples, terrain profiles, RF clutter mapping, interpreted building heights, coverage, and regulatory conclusions remain absent. |
 | Project workflow | Delivered bounded slices | Create/select/rename/duplicate/archive/restore/delete use cases operate through repository transactions. Archive retains the complete aggregate with its timestamp/original index while excluding it from active selection/metrics; restore reinserts it deterministically and selects it. Complete reviewed snapshots protect archive, restore, and logical hard delete from stale concurrent state. | Local archive is not backup/export/sync or hard-delete recovery. Unreadable/future-store recovery, physical orphan cleanup, and source-lineage/duplication-provenance remain. |
 | RF entity workflow | Delivered bounded slice | A project-scoped compact manager creates, edits, and deletes networks, sites, sectors, and receivers independently. Exact entity snapshots reject stale edits/deletes; referenced network deletion is blocked with sector/receiver counts, site-sector cascade requires explicit confirmation, and preserved per-network receiver profiles are surfaced as read-only compatibility references. The combined Add RF Path flow remains available, and the Studies screen can select a stored sector plus a network-compatible stored receiver. | Individual compatibility-profile editing/removal, terrain-aware link studies, bulk editing/import, artifact workflows, and full process-death/device-matrix proof remain. |
 | RF engine | Delivered bounded slice | Pure Kotlin `RfCalculator` implements ITU-R P.525-5 free-space loss, EIRP, received power, margin, midpoint Fresnel radius, noise floor, and SNR with explicit provenance. `ProjectLinkStudyEngine` adds fixed-radius mean-Earth great-circle endpoint distance/bearing, relative azimuth/elevation, and an inclined distance based only on the AGL antenna-height difference, then creates a persisted immutable fingerprinted record. | The stored transmitter-site ground elevation is snapshotted but not evaluated; receiver ground elevation, DEM sampling, and a terrain profile are not delivered. Earth-curvature clearance/effective-Earth propagation, LOS, Fresnel clearance, diffraction, clutter, directional patterns, coverage, export, `.rp3`, and full RadioPlanner parity are also absent. |
 | Engineering map | Foundation | Compose renders an offline Web Mercator coordinate grid using pure domain camera math, project fit, pan, anchored pinch zoom, metric scale, site selection, active azimuth rays, an accessible site list, and a coordinate-only durable site move. The UI explicitly distinguishes stored elevation from `NoData` and states that movement does not resample it. | No basemap package, third-party tiles, DEM sampling, terrain, IBGE polygon/map integration, GIS features, receiver move, or map performance gate is delivered. It is not a cartographic basemap or GIS engine. |
-| Dataset catalog | Delivered bounded slice | The screen prepares and verifies one release-managed national IBGE package, reports checking/installing/validating/ready/failed state, exposes retry, and performs normalized offline municipality queries with explicit source, CRS, storage, hash, `NoData`, licensing, and geometry limits. | No arbitrary inventory, user import, remote acquisition, removal, rollback, sector polygons, exact containment, map rendering, or population-by-coverage exists. |
-| Tests | Delivered baseline | The current 252 JVM tests pass with no failures or skips. They include mean-Earth/antimeridian/AGL-only geometry, compatibility profiles, fingerprint/round-trip/result invariants and tolerances, use-case rejection paths, duplication history, persist-before-publish and failed-save behavior, and indexed schema-4-to-5 migration ordering/failure preservation. The complete 68-test Android 16/API 36 emulator suite is green at system font scale 1.30, including 5 Studies Compose cases and 1 real-storage schema-4-to-5 migration/integrity/reopen test. | A fresh physical run, API 23 dataset execution, broader accessibility automation, performance, export, true system-reclaim process death, and a formal device matrix remain. |
+| Dataset catalog | Delivered bounded slices | The screen prepares and queries the release-managed national IBGE package and also plans/acquires a small regional envelope from fixed Copernicus GLO-30 DSM, WorldCover, and experimental OSM `building`/`building:part` way sources. The regional path enforces fixed HTTPS hosts, same-origin redirects, a 384 MiB plan ceiling, per-artifact/Overpass caps, source-license acceptance, eligible GET resume, SHA-256/provenance inventory schema 2, a 24-hour verified live cache with force refresh, TIFF metadata-only indexing, and deterministic building GeoJSON. A separate job-contract/store foundation exists outside the screen. | Regional execution is not process-durable, and the screen does not create or observe job records. No append-only snapshot index/pins, arbitrary import/removal, garbage collection, bare-earth DTM, raster sampling, terrain profile, RF clutter mapping, interpreted building heights, relations/holes, sector polygons, map integration, exact containment, or population-by-coverage exists. |
+| Tests | Delivered baseline | The current 364 JVM tests pass with no failures or skips. Regional additions cover fixed-source planning/transfer/cache/inventory/processing, cross-instance serialization and provenance hardening, canonical semantic/execution goldens, job/license/state invariants, atomic store/CAS faults, and pure reconciliation decisions. The complete 72-test Android 16/API 36 emulator suite is green at system font scale 1.30, including 3 regional Catalog cases, 5 Studies Compose cases, 1 real-storage schema-4-to-5 migration/integrity/reopen test, and 1 real-`AtomicFile` regional-job test. | The job tests are JVM foundation evidence, not scheduler or process-recovery evidence. A fresh physical run, API 23 dataset execution, broader accessibility automation, performance, export, true system-reclaim process death, and a formal device matrix remain. |
 | Build automation | Delivered baseline | CI runs unit tests, lint, and debug/test APK assembly; current local lint has 0 errors and 12 dependency/tooling warnings. | Connected test and signed release are outside current CI. |
 | Product language | Delivered baseline | Production UI/errors/demo/tests are English and a unit test scans Kotlin, XML, JSON, and text production resources for common Portuguese terms while allowing official identifiers. | The blacklist is partial and must cover every future user-visible resource type. |
 
@@ -507,6 +512,27 @@ Automated storage tests cover legacy 1/2/3/4 migration to schema 5, indexed sche
 
 The database contains all 468,099 sector attribute rows, 5,570 municipality summaries, and portable rectangle records, but no polygon geometry. Its immediate input is a pinned desktop-derived index; the official archive is independently pinned but is not parsed by the current transformer. This boundary, API 36.1-only runtime evidence, and unresolved redistribution review are recorded in `docs/IBGE_DATASET.md`.
 
+### Current regional raw-data repository
+
+`FileRegionalDatasetRepository` implements the separate `RegionalDatasetRepository` contract for one deliberately small, fixed source catalog:
+
+- `RegionalDatasetPlanner` validates a non-antimeridian WGS 84 envelope no wider or taller than 1 degree, deterministically selects 1-degree Copernicus GLO-30 DSM tiles and 3-degree ESA WorldCover 2021 v200 COG tiles, and optionally creates one tiny ways-only OSM `building`/`building:part` union request;
+- experimental buildings are opt-in and additionally bounded to 0.05 degrees per axis, 25 km², and a 16 MiB Overpass response; the processor retains bounded raw building/height/level/roof tags and an upstream OSM timestamp when supplied but does not interpret height or promise multipolygon relations, holes, addresses, or completeness;
+- the plan has a 384 MiB ceiling, no more than 12 artifacts, source-specific artifact limits, and a free-space preflight that includes staging, processing, and safety allowance;
+- `AllowlistedHttpsRegionalHttpTransport` accepts only HTTPS on the fixed Copernicus S3, ESA WorldCover S3, and pinned `lambert.openstreetmap.de` hosts, bounds both initial and resolved redirect URLs to 2,048 characters, bounds redirect count/timeouts, rejects cross-origin redirects before the redirected request is opened, and prevents arbitrary URL or host injection;
+- bounded GET transfers retain validated `.part` and strong-ETag metadata for a later user-triggered resume; metadata requires a bounded effective URL on the requested HTTPS origin, incomplete metadata cannot claim acquisition time, and completed metadata requires bounded total bytes plus a valid nonfuture UTC completion timestamp; transient GET work receives at most three total attempts, while the fixed read-only Overpass POST receives at most two and always restarts its staging file; `Retry-After` is accepted only from 1-30 seconds inside that attempt budget, and HTTP 429 without it is not replayed;
+- each raw result is size-bounded, SHA-256-verified, processed before final promotion, and recorded in atomically replaced path-keyed inventory schema 2 with a nested family/release/type/format/catalog/query/normalizer snapshot, stored license/provenance, requested and actual final URL, route policy, acquisition/check times, selection bounds, byte count, hash, and processing outcome; completed `READY`/`EXISTING` provenance requires bounded same-origin HTTPS effective URL, valid acquisition time, bytes, and SHA-256 together;
+- every `FileRegionalDatasetRepository` instance shares one application-wide in-process mutex for acquisition and inventory loads; this prevents cross-instance staging/inventory races inside the app process but is not multi-process locking;
+- the TIFF/BigTIFF processor validates bounded metadata and publishes a metadata index only; it does not decode raster samples or prove Cloud Optimized GeoTIFF layout;
+- the building processor validates bounded UTF-8 Overpass JSON and publishes deterministic WGS 84 GeoJSON with actual final endpoint, raw-source provenance, optional `osm3s` source timestamp, and bounded raw tags, while counting unsupported/unclosed geometry rather than inventing it;
+- verified live OSM data is reused for at most 24 hours; stale data refreshes only during another explicit acquisition, and a reviewed force-refresh checkbox bypasses a fresh cache entry. There is no timer, polling, or background refresh.
+
+This is an acquisition and processing foundation, not a GIS or RF engine. Copernicus GLO-30 is a DSM that can include vegetation and buildings, not a bare-earth DTM. WorldCover categories are not RF clutter coefficients, and retained OSM height strings are not a trusted height model. The regional ViewModel launches work on an I/O dispatcher and requires the app to remain open; the application-wide repository mutex is not a process-durable worker or a multi-process policy. WorkManager/UIDT scheduling, network constraints, notification policy, durable process recovery, append-only snapshot history/pins, arbitrary import, ownership, removal, and garbage collection remain planned.
+
+The shared semantics are defined in `docs/CROSS_PLATFORM_DATA_CONTRACT.md`. Android now delivers the half-open WGS 84 bounds, canonical family/release fields, nested acquisition source snapshot, requested/effective route identity, OSM query/normalizer versions, bounded schema-1 migration, live-cache/force-refresh behavior, and canonical-plan semantic/execution golden fixtures described there. Desktop execution of the semantic fixture, broader cross-language fixtures, append-only content identity/pins, and raster adapter parity remain **planned**; this contract does not imply that desktop behavior has already changed.
+
+The first lifecycle increment delivers a passive microdegree canonical plan, separate semantic and Android-execution SHA-256 identities, exact accepted-license snapshots, a strict revisioned state/outcome model, bounded per-job private storage, and stale-decision-guarded pure reconciliation. It models scheduler generations, persisted cancellation priority, provider attempt ceilings, future-artifact checkpoint rejection, contextual terminal/nonterminal outcome auditing, and bounded complete snapshots containing stale/current targets. Reconciliation separates expected record generation from the concrete target scheduler tuple, rejects physical target reuse, deterministically cancels extra targets, preserves scheduler entries whose job ID is unreadable, and marks maximum-generation recovery as typed `scheduler-generation-exhausted` orphaning. A recordless cancellation declares expected record absence; a future executor must atomically re-read the job store before the scheduler effect. An invalid committed outcome on an immutable terminal record yields a guarded non-mutating `REPORT_TERMINAL_OUTCOME_INVALID` action instead of an illegal state rewrite. The execution lifecycle accepted in `docs/adr/0001-android-regional-data-lifecycle.md` remains **planned**: API 34+ long user-triggered transfers use Android [user-initiated data transfer jobs](https://developer.android.com/develop/background-work/background-tasks/uidt), while API 23-33 uses a constrained foreground [WorkManager long-running worker](https://developer.android.com/develop/background-work/background-tasks/persistent/how-to/long-running). A reconciliation executor, shared runner, scheduler adapters, notifications, Data-screen observation, and tested process/reboot recovery are absent. The current ViewModel path remains the only delivered execution path.
+
 ### Target ports
 
 ```text
@@ -514,7 +540,9 @@ ProjectRepository
 RfCatalogRepository
 AntennaRepository
 IbgeDatasetRepository (delivered bounded contract)
-UserDatasetRepository
+RegionalDatasetRepository (delivered bounded contract)
+RegionalJobRepository (delivered non-executing persistence foundation)
+UserDatasetRepository (planned general contract)
 ElevationProvider
 MapSourceRepository
 StudyRepository
@@ -547,9 +575,16 @@ APK assets/
 
 private no-backup files/
   datasets/ibge/<database-sha256>.sqlite
+  datasets/regional/
+    .atx-regional-inventory.json
+    <fixed-source raw paths and .part files>
+    processed/<metadata-index or building-GeoJSON paths>
+    jobs/<uuid>.json[.bak]
 ```
 
-The control file is a store-schema-1 index carrying project schema 5 and is the current project commit point. Project documents and artifact blobs are immutable content-addressed files. The bounded project-link record is serialized inside its project document; it is not a separate artifact or portable export. The separate IBGE manifest is the release-time asset commit point, and its content-addressed payload installs as a recomputable read-only database. These formats support current project aggregates, bounded artifacts, and one global reference dataset; they are not a lazy project database, job store, portable project container, or general user/acquired raster/dataset lifecycle.
+The control file is a store-schema-1 index carrying project schema 5 and is the current project commit point. Project documents and artifact blobs are immutable content-addressed files. The bounded project-link record is serialized inside its project document; it is not a separate artifact or portable export. The separate IBGE manifest is the release-time asset commit point, and its content-addressed payload installs as a recomputable read-only database. Regional inventory schema 2 is the commit point for the separate fixed-source cache after raw validation and bounded processing; its map is keyed by relative path and retains only the current logical-path snapshot.
+
+The separate regional job foundation stores one strict schema-1 JSON record per UUID under the no-backup `jobs/` directory. Each record is limited to 256 KiB and the directory to 64 identities. Android `AtomicFile`, `fd.sync`, readback verification, a process-wide mutex, immutable reviewed identity, and exact one-revision compare-and-set updates protect the in-process path. Invalid/future/oversized records are preserved and reported independently. These files are not created or observed by the current Data screen, do not execute work, have no retention/removal UI, and are not a multi-process database. The formats support current project aggregates, bounded artifacts, one global reference dataset, one bounded regional cache, and a non-executing job-state foundation; they are not a lazy project database, process-durable execution lifecycle, append-only regional snapshot index, portable project container, or general user/acquired dataset lifecycle.
 
 ### Current guarantees
 
@@ -569,20 +604,27 @@ The control file is a store-schema-1 index carrying project schema 5 and is the 
 - the pinned IBGE asset/database identity, counts, source hashes, CRS, attribution, limitations, and sizes are checked before the dataset becomes queryable;
 - bundled-dataset extraction is output-bounded and streamed through a synced staging file with compressed and database hashes before atomic promotion;
 - a failed/corrupt bundled install exposes a typed problem and no synthetic population/municipality result; the embedded package remains available for retry.
+- regional plans and artifacts are bounded before transfer; raw and processed outputs are hashed/validated before inventory publication, and eligible GET partials retain bounded strong-ETag resume metadata.
+- regional canonical plans normalize bounds to integer microdegrees and produce separate canonical semantic and Android-execution SHA-256 identities; the passive plan remains structurally decodable across catalog change and compatibility is checked explicitly;
+- regional job records bind exact accepted-license snapshots, provider-specific attempt and cumulative-byte ceilings, monotonic checkpoint promotion, one committed inventory-entry outcome per completed artifact, immutable terminal state, and generation-scoped scheduler identity publication; record construction rejects checkpoints beyond the current artifact and mutation validation accepts a new checkpoint only for the previously current artifact; idempotent create, overlapping-path exclusion, unreadable-record fail-closed ownership, and single-revision CAS are covered independently of a scheduler;
+- the pure regional reconciler never infers success, gives persisted cancellation priority, distinguishes active from finished scheduler observations, and validates every committed outcome with its owning record and indexed canonical artifact, including terminal records; an invalid terminal outcome emits guarded non-mutating `REPORT_TERMINAL_OUTCOME_INVALID` rather than changing immutable state;
+- a bounded complete scheduler snapshot may contain stale and current targets for one job, from which reconciliation deterministically retains at most one matching target and emits cancellation for every extra, while rejecting reuse of one physical scheduler-kind/identity target across generations or job IDs; an entry whose job ID is represented by an unreadable record is preserved and not treated as recordless;
+- record-derived reconciliation actions carry expected record revision, execution fingerprint, and expected record scheduler generation as stale-decision guards, while cancel/adopt actions independently carry the concrete target scheduler kind, generation, and identity; a recordless cancel explicitly expects record absence, and its future executor must atomically re-read the store before the external effect;
+- missing-scheduler recovery at the maximum bounded generation emits a guarded `MARK_ORPHANED` problem with code `scheduler-generation-exhausted` instead of attempting an invalid generation increment; no action is executed by the foundation.
 
 ### Current gaps
 
 - no recovery UI or export of an unreadable catalog;
 - no true Android `AtomicFile` interruption/full-storage system test;
 - no multi-process locking or external-writer conflict policy;
-- no durable job/checkpoint store;
+- no job-store retention/removal/migration policy, multi-process locking, production checkpoint writer/validator, scheduler adapter, shared runner, notification, UI observer, or actual process/reboot recovery;
 - no artifact attachment/import UI, reachability garbage collection, portable export, or external-file ownership/recovery policy;
 - no study result consumes the artifact-store foundation or provides a portable/exported manifest; the bounded project-link result is local project-document data only;
 - project loading still materializes every document into the compatibility catalog view;
 - no approved transition plan for project/job JSON versus Room/SQLite;
 - no selective backup policy because backup is disabled;
 - local archive does not provide hard-delete undo/recovery, backup, export, synchronization, or project-owned external-asset cleanup;
-- no generic dataset import/download/removal, rollback/resume, sector polygon package, basemap, or DEM lifecycle;
+- no arbitrary dataset import, reference-aware removal/garbage collection, completed-output rollback, sector polygon package, basemap, bare-earth DTM, or raster-sampling lifecycle; resume is limited to eligible regional GET partials;
 - no API 23 runtime execution of the bundled SQLite integration test;
 - no approved IBGE redistribution terms or release-grade archive-to-index derivation proof.
 
@@ -630,16 +672,32 @@ Data Catalog observes feature state
   -> issue bounded local municipality queries
 ```
 
-Target external/user dataset flow:
+Current fixed-catalog regional flow:
 
 ```text
-UI observes local state
-  -> explicit acquisition/import action
-  -> download/read into staging
-  -> validate format, limits, license, hash, extent
-  -> atomically promote file and metadata
-  -> local repository emits new authoritative state
+Data Catalog observes RegionalDataViewModel state
+  -> validate bounded WGS 84 envelope and selected fixed sources
+  -> review exact plan, budget, limitations, and source licenses
+  -> explicit in-app acquisition into bounded private staging
+  -> resume eligible GET partial or start a bounded response
+  -> reuse verified live OSM data up to 24 hours unless force refresh was reviewed
+  -> hash, validate, and process TIFF metadata or building GeoJSON
+  -> atomically promote raw/processed files and path-keyed provenance inventory schema 2
 ```
+
+Delivered contract/store foundation plus planned durable regional execution:
+
+```text
+review canonical plan and exact license snapshots
+  -> delivered: normalize E6 bounds and calculate semantic + Android execution fingerprints
+  -> delivered foundation: validate/store a bounded revisioned job and derive reconciliation actions
+  -> planned: API 34+ UIDT, or API 23-33 foreground WorkManager adapter
+  -> one RegionalJobRunner transfers/processes one artifact at a time
+  -> persist checkpoints, progress, cancel intent, and terminal outcome
+  -> commit checkpoints/results to the delivered inventory schema and reconcile after process return
+```
+
+Only the contract/store/decision portion of the second flow is delivered. No UIDT service, WorkManager worker, `RegionalJobRunner`, production checkpoint integration, scheduler-backed reconciliation executor, notification implementation, or UI observation is delivered. Inventory schema 2 and the job store are separate persistence boundaries; neither makes the current acquisition process-durable.
 
 A network failure never deletes the last valid local state.
 
@@ -656,7 +714,7 @@ Invalid(reason)
 MissingExternalPermission
 ```
 
-The current IBGE manifest records ID/title, provider/source URLs, access date, attribution, unresolved license status, CRS, source archive/index/signature hashes, geometry availability, population field, counts, compressed/installed sizes and hashes, schema/application IDs, transformer version, and bounding-box limitation. Generic acquired datasets still require extent/resolution/ETag, acceptance, dependencies/references, parser result, update/removal policy, and ownership.
+The current IBGE manifest records ID/title, provider/source URLs, access date, attribution, unresolved license status, CRS, source archive/index/signature hashes, geometry availability, population field, counts, compressed/installed sizes and hashes, schema/application IDs, transformer version, and bounding-box limitation. Delivered regional inventory schema 2 records fixed dataset identity; nested family/release/data-type/file-format/catalog/query/normalizer and license/provenance metadata; requested/effective URL and route policy; local acquisition/check times; bounds; byte count; SHA-256; validation/processing state; processed output; ETag/last-modified when supplied; and explicit limitations. Its bounded schema-1 migration preserves stored source/license/provenance fields, maps fields absent from schema 1 through the known legacy catalog, leaves unavailable effective URL/acquisition time unknown, and atomically rewrites a valid primary or atomic backup; a valid backup replaces an invalid primary. The inventory is still path-keyed/current-snapshot-only and does not store an exact request-body fingerprint. The separate passive job plan does retain the request body/hash and both plan identities, but no acquisition currently creates that record. Content-addressed append-only snapshots, pins, historical retention, portable ownership/reference, dependency tracking, update/removal, garbage collection, and arbitrary-format parser contracts remain planned.
 
 Community basemap endpoints must not be used for bulk prefetch. Offline packages require user files, an authorized source, or compatible infrastructure.
 
@@ -674,7 +732,7 @@ The current `EngineeringMapScreen` is a bounded offline geographic foundation:
 - distinguishes stored project elevation from explicit `NoData` and warns that moving a site does not sample a DEM;
 - provides a semantic content description and permanently labels the view as a local coordinate grid with no basemap or third-party tiles.
 
-It remains a coordinate overlay rather than a cartographic basemap or GIS result. The delivered IBGE attribute package is not consumed by this screen and contains no renderable polygons. G4 still requires a renderer/package decision, an authorized basemap source and lifecycle, general hostile-package handling, DEM, geometry integration, airplane-mode map proof, and performance evidence. DEM sampling and pixel-level `NoData` are not present.
+It remains a coordinate overlay rather than a cartographic basemap or GIS result. Neither the delivered IBGE attribute package nor cached regional DSM/land-cover/building outputs are consumed by this screen. The IBGE package contains no renderable polygons; the regional TIFF output is metadata-only, and the experimental building GeoJSON has no map or RF integration. G4 still requires a renderer/package decision, an authorized basemap source and lifecycle, general hostile-package handling, bare-earth DTM/raster sampling, geometry integration, airplane-mode map proof, and performance evidence. Pixel-level `NoData` is not present.
 
 ### Target map adapter
 
@@ -705,7 +763,7 @@ GIS rules:
 
 Format priorities:
 
-- P0: validated GeoJSON/CSV, HGT/GeoTIFF elevation, approved offline basemap;
+- P0: validated GeoJSON/CSV, HGT/GeoTIFF raster sampling, approved offline basemap; bounded TIFF metadata indexing and experimental ways-only `building`/`building:part` GeoJSON processing are already delivered separately, without interpreted heights, relations, or holes;
 - P1: output GeoTIFF, KMZ, and dataset packages;
 - P2: GeoPackage, large vectors, clutter, buildings, census-sector polygons, and population-by-coverage. The bounded IBGE attribute/municipality index is already delivered separately.
 
@@ -743,24 +801,36 @@ Before execution, estimate cells/profiles/samples, input/intermediate/output mem
 
 ## 16. Concurrency and durable work
 
-Storage and computation dispatchers are injected through `AppUseCases`. Catalog read-transform-write operations are serialized by the repository and ViewModel mutation boundaries, and link calculations cancel superseded UI work. The current RF calculation is still small and bounded; durable or heavy work requires:
+Storage and computation dispatchers are injected through `AppUseCases`. Catalog read-transform-write operations are serialized by the repository and ViewModel mutation boundaries, and link calculations cancel superseded UI work. Regional acquisition and inventory loads are serialized application-wide across `FileRegionalDatasetRepository` instances by one in-process mutex, run from `RegionalDataViewModel` on an I/O dispatcher, support cooperative cancellation, own the single bounded provider-retry loop, and can resume an eligible GET partial after a later explicit action; this is neither multi-process locking nor a process-persistent worker.
+
+The accepted target in `docs/adr/0001-android-regional-data-lifecycle.md` now has a delivered non-executing foundation:
+
+- **delivered foundation:** canonical E6 plan, semantic/execution fingerprints, exact accepted-license snapshots, strict state/CAS validation with future-artifact checkpoint rejection, bounded per-job atomic storage, contextual terminal/nonterminal artifact-outcome validation, and pure reconciliation actions with separate record guards/concrete scheduler targets, deterministic extra-target cancellation, physical-target uniqueness, unreadable-ID preservation, record-absence cancel guards, non-mutating terminal audit reports, and typed generation exhaustion;
+- **planned integration:** create the record from the reviewed Data screen before scheduler enqueue;
+- use API 34+ [user-initiated data transfer jobs](https://developer.android.com/develop/background-work/background-tasks/uidt) for long user-started transfers;
+- use API 23-33 constrained foreground [WorkManager long-running workers](https://developer.android.com/develop/background-work/background-tasks/persistent/how-to/long-running) as the compatibility path;
+- route both schedulers through one `RegionalJobRunner`, which inherits sole ownership of the currently delivered repository retry policy;
+- transfer and process one artifact at a time;
+- persist progress, checkpoints, cancel intent, notification identity, and terminal state;
+- reconcile persisted and scheduled state after process return or reboot without inferring success;
+- retain only strong-ETag validated GET partials and never retain POST staging.
+
+The current RF calculation is still small and bounded; durable or heavy work also requires:
 
 - structured Kotlin coroutines;
 - injected dispatchers;
 - `viewModelScope` only for screen-bound recoverable work;
-- WorkManager for durable downloads/jobs that must survive process death;
-- foreground service only for policy-compliant, user-visible long work;
 - persistent job ID and progress;
 - cooperative cancellation between blocks;
 - checkpoints when resume is worthwhile;
 - CPU, memory, network, and provider parallelism limits;
 - no blocking wait or raster work on the main thread.
 
-On process return, job state is read from a repository as queued, running, paused, completed, failed, canceled, or orphaned. The UI does not infer success.
+On process return, target job state will be read from the delivered repository as queued, running, paused, completed, failed, canceled, or orphaned. The pure reconciler already refuses to infer success, but no UI or scheduler invokes it and no process-return behavior is delivered.
 
 ## 17. Desktop interoperability
 
-The desktop uses versioned `.atxp` projects and supports capabilities the Android app does not. Compatibility must use a codec contract, not improvised direct database access.
+The desktop uses versioned `.atxp` projects and supports capabilities the Android app does not. Compatibility must use a codec contract, not improvised direct database access. The first Android implementation target is a versioned portable ATX import package opened through SAF, bounded private staging, hashing, capability inspection, and import-copy with a loss report. Native `.rp3` parsing follows only after its separate legal, provenance, hostile-input, parser, and corpus gates close.
 
 ```text
 ProjectInspection
@@ -781,7 +851,7 @@ Open modes:
 - **import copy** with a conversion/loss report;
 - **rejected** for unsafe version, integrity, or capability.
 
-Unknown items are never discarded on save. `.rp3` has a separate provenance/security/parser gate. Automatic multi-user synchronization is outside the MVP.
+Unknown items are never discarded on save. Portable ATX import is **planned**; native `.rp3` remains **blocked** and must not use Java serialization, a .NET runtime, or an unbounded generic object decoder. Automatic multi-user synchronization is outside the MVP.
 
 ## 18. Dependency injection
 
@@ -864,15 +934,16 @@ Canonical serialization is versioned. Irrelevant timestamps and local paths do n
 
 ### Current evidence
 
-The current JVM baseline contains 252 passing tests with no failures or skips. The complete connected baseline contains 68 Android 16/API 36 emulator tests; that run completed on `Medium_Phone_API_36.1` at system font scale 1.30 with no failures or skips. It includes all 5 `StudiesScreenTest` cases and 1 real-storage `FileProjectRepositoryMigrationTest`. Local lint reports 0 errors and 12 dependency/tooling warnings, and debug/test APK assembly succeeds.
+The current JVM baseline contains 364 passing tests with no failures or skips. The 50 durable-job foundation additions cover canonical semantic/execution goldens, coordinate/order normalization, reviewed-license and state invariants, atomic-store/CAS fault cases, and pure reconciliation decisions; additional acquisition regressions cover cross-instance inventory races, strict timestamp/same-origin provenance, and bounded initial/redirect URLs. The complete connected baseline contains 72 Android 16/API 36 emulator tests; that run completed on `Medium_Phone_API_36.1` at system font scale 1.30 with no failures or skips. It includes 3 regional Catalog cases, all 5 `StudiesScreenTest` cases, 1 real-storage `FileProjectRepositoryMigrationTest`, and 1 real-`AtomicFile` `FileRegionalJobRepositoryTest`. Local lint reports 0 errors and 12 dependency/tooling warnings, and debug/test APK assembly succeeds. The JVM additions are not UIDT, WorkManager, notification, or process-recovery evidence.
 
 - project/domain tests cover schema-5 defaults, active/archive uniqueness, archive lifecycle metadata, project-link record/summary invariants, engineering-value boundaries, legacy compatibility, canonical fingerprints, and exact round trips;
 - application tests cover transactional project lifecycle operations, independent RF-entity create/update/delete, exact-snapshot conflict handling, linked-deletion impact, deterministic Add RF Path success, and project-link success/stale/missing/incompatible/id-collision outcomes;
 - persistence tests cover 1/2/3/4→5 migration, indexed schema-4 document-before-index promotion and failed-promotion preservation, hostile legacy-field removal, failed document/index publication, malformed/invalid/future/unknown store data, strict UTF-8, integrity and size limits, immutable-document reuse, artifact deduplication/corruption, atomic write failure, no-op writes, and latest-catalog repository transactions;
+- regional job tests cover passive E6 plan canonicalization, semantic/execution golden JSON and SHA-256, route-versus-semantic identity, exact reviewed licenses, strict state/terminal/monotonic mutation rules, idempotent and conflicting creates, single-winner CAS, failed atomic replacement preservation, unreadable/future/unknown/oversized record isolation, and deterministic abstract reconciliation without success inference;
 - ViewModel tests cover load/create/select/rename/duplicate/archive/restore/delete/Add RF Path/independent RF/project-link mutation transitions, persist-before-publish behavior and failed project-link storage, RF receipts, generic latest-catalog rebase, structured failures/retry, mutation-completion accounting, ordering/concurrency, stale/repeated/missing outcomes without writes, invalid mutations, calculation cancellation, and stale-result suppression;
 - RF and form tests cover implemented formulas, P.525-5 provenance, mean-Earth endpoint/antimeridian geometry, AGL-only inclined distance, invalid physical inputs, unit parsing, defaults, and typed command conversion;
 - the English-only source test scans production Kotlin, XML, JSON, and text resources for common Portuguese terms while allowing pinned official identifiers;
-- the green complete 68-test instrumented baseline on an Android 16/API 36 emulator covers the Dashboard-to-Studies smoke path, saved-instance-state restoration for supported, unknown, malformed, nested RF-path, nested project-name, and nested RF-assets routes, explicit mutation-completion and transient pending-save recovery, project lifecycle behavior, deterministic selection, create-project → persist-RF-path → Activity recreation, compact RF-assets reachability/reference impact, Engineering Map selection and coordinate editing, stale-write/isolation, draft recovery, inaccessible targets, validation, discard protection, save retry, real IBGE extraction/hash/schema/query/corruption/storage/update behavior, compact Catalog state/reachability, 5 project-link Studies cases, and the real-storage schema-4-to-5 migration; the preceding 18-test revision passed on the physical Android 16 reference phone;
+- the green complete 72-test instrumented baseline on an Android 16/API 36 emulator covers the Dashboard-to-Studies smoke path, saved-instance-state restoration for supported, unknown, malformed, nested RF-path, nested project-name, and nested RF-assets routes, explicit mutation-completion and transient pending-save recovery, project lifecycle behavior, deterministic selection, create-project → persist-RF-path → Activity recreation, compact RF-assets reachability/reference impact, Engineering Map selection and coordinate editing, stale-write/isolation, draft recovery, inaccessible targets, validation, discard protection, save retry, real IBGE extraction/hash/schema/query/corruption/storage/update behavior, compact IBGE and regional Catalog state/reachability including explicit live-snapshot refresh, 5 project-link Studies cases, the real-storage schema-4-to-5 migration, and the real-`AtomicFile` regional-job case; the preceding 18-test revision passed on the physical Android 16 reference phone;
 - manual API 36 emulator checks cover Duplicate Project/Delete Project at font scales 1.0/1.30 in portrait and short landscape with Gboard open/closed, plus Archive Project/actions and the archived-project card in portrait at font scales 1.0/1.30/2.0 and landscape at 1.30;
 - a bounded manual force-stop/relaunch retained the archived record, and a second cycle after restore retained that project as active and selected; this is not Android Backup or system-reclaim restoration proof and does not establish every process-death timing or a support matrix;
 - a bounded manual font-scale-1.30 project-link run saved one stored endpoint result and reopened the same scalar terms, P.525-5/geodesy identities, warnings, and fingerprint after force-stop/relaunch; this is one local-storage observation, not broad process-death or device proof;
@@ -922,13 +993,15 @@ Until measured targets exist, absolute requirements are:
 | ADR-A002 | Navigation 3 deep links, feature ownership, deleted-ID recovery, and system process restoration | G2 |
 | ADR-A003 | Post-schema-5 operational store, Room criteria, reachability cleanup, unreadable/future-store recovery/export, backup, and migration | G3 |
 | ADR-A004 | Geographic renderer and offline map format | G4 |
-| ADR-A005 | Managed user/remote dataset acquisition, update, ownership, and removal beyond the bundled IBGE slice | G4 |
+| ADR-A005 | Remaining managed dataset ownership, removal, arbitrary packages, and cleanup beyond the lifecycle selected by ADR 0001 | G4 |
 | ADR-A006 | Compute contract and scheduler | G5/G6 |
 | ADR-A007 | Kotlin versus native backend | G6 |
 | ADR-A008 | Optional service and privacy | G6/G8 |
 | ADR-A009 | `.atxp` interoperability | G7 |
 | ADR-A010 | DI framework and scopes | G2 |
 | ADR-A011 | Project security and backup | G3/G9 |
+
+`docs/adr/0001-android-regional-data-lifecycle.md` accepts the regional scheduler/recovery target formerly contained in ADR-A005. Its job-contract/store/reconciliation-decision foundation is delivered, while scheduler adapters, a shared runner, notifications, UI wiring, and actual process/reboot recovery remain **planned**. ADR-A005 still covers unresolved general-package ownership, removal, and garbage collection.
 
 ## 25. Prohibited anti-patterns
 
@@ -959,7 +1032,7 @@ Until measured targets exist, absolute requirements are:
 6. decide the long-term operational store, artifact ownership/recovery and reachability cleanup, unreadable/future-store recovery/export, backup, and multi-process policy beyond schema 5;
 7. generalize the delivered bounded project-link snapshot/result and the scenario/provenance/artifact carrier records into explicit editors, other immutable study requests/results, and verified artifact-reference transactions;
 8. place an authorized offline basemap behind an approved package/renderer adapter while retaining the coordinate viewport as the no-data fallback;
-9. add general/user package inventory and acquisition lifecycle, DEM, and an optional licensed census-sector geometry package without overstating the existing attribute index;
+9. extend the delivered cross-platform identity/inventory-v2/live-cache foundation with shared golden fixtures and an append-only content-addressed snapshot index/pins; implement the API 34+ UIDT/API 23-33 WorkManager lifecycle with one retry owner; then add bounded CPU COG windows, versioned DSM/land-cover adapters, arbitrary user packages, bare-earth DTM policy, and an optional licensed census-sector geometry package without overstating the existing data slices;
 10. extend the delivered project-linked P.525-5 baseline with DEM-backed ground elevations, terrain sampling, Earth-curvature clearance, LOS/Fresnel clearance, and approved diffraction/clutter/pattern terms;
 11. add portable executable study manifests/exports and attach their verified artifacts to project records; do not treat the local schema-5 record as that exported package;
 12. benchmark before coverage, native code, or an optional service;

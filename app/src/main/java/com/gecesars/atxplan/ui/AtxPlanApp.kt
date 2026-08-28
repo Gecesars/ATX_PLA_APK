@@ -52,6 +52,9 @@ import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.ui.NavDisplay
 import com.gecesars.atxplan.ui.components.StorageErrorBanner
 import com.gecesars.atxplan.ui.dataset.DataCatalogViewModel
+import com.gecesars.atxplan.ui.dataset.RegionalDataViewModel
+import com.gecesars.atxplan.domain.dataset.RegionalBounds
+import com.gecesars.atxplan.domain.model.PlannerProject
 import com.gecesars.atxplan.ui.navigation.AtxRoute
 import com.gecesars.atxplan.ui.navigation.CatalogRoute
 import com.gecesars.atxplan.ui.navigation.DashboardRoute
@@ -363,7 +366,11 @@ private fun AtxPlanShell(
                                         onRunProjectLinkStudy = onRunProjectLinkStudy,
                                     )
                                 }
-                                CatalogRoute -> NavEntry(route) { DataCatalogRouteContent() }
+                                CatalogRoute -> NavEntry(route) {
+                                    DataCatalogRouteContent(
+                                        project = currentUiState.value.selectedProject,
+                                    )
+                                }
                                 is RfPathEditorRoute -> NavEntry(route) {
                                     val state = currentUiState.value
                                     RfPathEditorScreen(
@@ -483,18 +490,56 @@ private fun AtxPlanShell(
 }
 
 @Composable
-private fun DataCatalogRouteContent() {
+private fun DataCatalogRouteContent(project: PlannerProject?) {
     val context = LocalContext.current
     val viewModel: DataCatalogViewModel = viewModel(
         factory = DataCatalogViewModel.factory(context),
     )
+    val regionalViewModel: RegionalDataViewModel = viewModel(
+        factory = RegionalDataViewModel.factory(
+            context = context,
+            initialBounds = project.suggestedRegionalBounds(),
+        ),
+    )
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val regionalState by regionalViewModel.state.collectAsStateWithLifecycle()
     CatalogScreen(
         state = state,
+        regionalState = regionalState,
         onMunicipalityQueryChange = viewModel::updateMunicipalityQuery,
         onMunicipalitySelected = viewModel::selectMunicipality,
         onRetryDataset = viewModel::retryDataset,
+        onRegionalCoordinateChange = regionalViewModel::updateCoordinate,
+        onRegionalSelectionToggle = regionalViewModel::toggleSelection,
+        onRegionalLiveSnapshotRefreshChange = regionalViewModel::setLiveSnapshotRefresh,
+        onReviewRegionalPlan = regionalViewModel::reviewPlan,
+        onRegionalLicensesAccepted = regionalViewModel::setLicensesAccepted,
+        onStartRegionalAcquisition = regionalViewModel::startAcquisition,
+        onCancelRegionalAcquisition = regionalViewModel::cancelAcquisition,
+        onEditRegionalRequest = regionalViewModel::editRequest,
     )
+}
+
+private fun PlannerProject?.suggestedRegionalBounds(): RegionalBounds? {
+    val locations = this?.sites?.map { site -> site.location }.orEmpty()
+    if (locations.isEmpty()) return null
+    val west = locations.minOf { point -> point.longitude }
+    val east = locations.maxOf { point -> point.longitude }
+    val south = locations.minOf { point -> point.latitude }
+    val north = locations.maxOf { point -> point.latitude }
+    val longitudePadding = maxOf(0.01, (east - west) * 0.08)
+    val latitudePadding = maxOf(0.01, (north - south) * 0.08)
+    val candidate = runCatching {
+        RegionalBounds(
+            west = (west - longitudePadding).coerceAtLeast(-180.0),
+            south = (south - latitudePadding).coerceAtLeast(-90.0),
+            east = (east + longitudePadding).coerceAtMost(180.0),
+            north = (north + latitudePadding).coerceAtMost(90.0),
+        )
+    }.getOrNull()
+    return candidate?.takeIf { bounds ->
+        bounds.widthDegrees <= 1.0 && bounds.heightDegrees <= 1.0
+    }
 }
 
 @Composable

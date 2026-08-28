@@ -66,7 +66,7 @@ The gzip payload uses an app-owned, content-addressed `.ibgedata` filename and i
 7. promotes the verified file atomically to `<database-sha256>.sqlite`; and
 8. removes superseded content-addressed database versions while preserving unrelated files.
 
-The installed database lives below `noBackupFilesDir/datasets/ibge`; application backup is disabled. The application manifest has no `INTERNET` permission, and municipality queries use only the installed SQLite file.
+The installed database lives below `noBackupFilesDir/datasets/ibge`; application backup is disabled. Municipality queries use only the installed SQLite file and the IBGE repository performs no network request. The app-level `INTERNET` permission is used only by the separate, explicit regional-data acquisition flow.
 
 The Android schema uses ordinary tables supported by framework SQLite rather than desktop `STRICT` or `RTree` tables. The tables are `metadata`, `state`, `municipality`, `sector`, and `sector_bounds`. The bounds table is portable storage for rectangles, not a spatial extension or polygon layer.
 
@@ -87,4 +87,4 @@ The current asset was generated with Python's SQLite 3.50.4. Exact database byte
 
 ## Verification boundary
 
-Two repository instrumentation tests use the real packaged asset and cover fresh extraction, integrity/schema checks, offline municipality queries, exact-code lookup, literal wildcard handling, same-length corruption recovery, storage preflight failure, superseded-version cleanup, and reopen without reinstalling. Four compact Catalog tests cover Ready/search/selection/limitations plus preparation, failure/retry, and query-failure behavior. All six pass as part of the 68-test connected suite. The current runtime evidence is the Android 16/API 36.1 emulator. Avoid claiming API 23 runtime proof until the same integration test runs on an API 23 device or emulator.
+Two repository instrumentation tests use the real packaged asset and cover fresh extraction, integrity/schema checks, offline municipality queries, exact-code lookup, literal wildcard handling, same-length corruption recovery, storage preflight failure, superseded-version cleanup, and reopen without reinstalling. Four IBGE-focused compact Catalog tests cover Ready/search/selection/limitations plus preparation, failure/retry, and query-failure behavior; three additional Catalog tests cover regional-data plan/license/start, explicit live-snapshot refresh, and running/cancel/limitation states. All nine pass as part of the 72-test connected suite. The current runtime evidence is the Android 16/API 36.1 emulator. Avoid claiming API 23 runtime proof until the same integration test runs on an API 23 device or emulator.

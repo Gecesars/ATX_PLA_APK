@@ -1,5 +1,6 @@
 package com.gecesars.atxplan.ui.screens
 
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -27,11 +28,14 @@ import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -43,15 +47,25 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.gecesars.atxplan.domain.dataset.IbgeDatasetDescriptor
 import com.gecesars.atxplan.domain.dataset.IbgeMunicipalitySummary
+import com.gecesars.atxplan.domain.dataset.RegionalDatasetCatalog
+import com.gecesars.atxplan.domain.dataset.RegionalDatasetSelection
+import com.gecesars.atxplan.domain.dataset.RegionalDownloadResult
+import com.gecesars.atxplan.domain.dataset.RegionalInventoryRecord
+import com.gecesars.atxplan.domain.dataset.RegionalProcessingState
+import com.gecesars.atxplan.domain.dataset.RegionalTransferStatus
 import com.gecesars.atxplan.ui.components.ScreenHeader
 import com.gecesars.atxplan.ui.components.StatusPill
 import com.gecesars.atxplan.ui.components.StatusTone
 import com.gecesars.atxplan.ui.dataset.DataCatalogUiState
 import com.gecesars.atxplan.ui.dataset.IbgeCatalogStatus
+import com.gecesars.atxplan.ui.dataset.RegionalCoordinateField
+import com.gecesars.atxplan.ui.dataset.RegionalDataUiPhase
+import com.gecesars.atxplan.ui.dataset.RegionalDataUiState
 import java.util.Locale
 
 private data class Capability(
@@ -93,10 +107,10 @@ private val capabilities = listOf(
     ),
     Capability(
         "Data",
-        "Regional DEM, clutter, and buildings",
-        "Planned",
-        StatusTone.WARNING,
-        "Bounding-box downloads with hashes, license metadata, resume support, and a disk budget.",
+        "Regional DSM, land cover, and buildings",
+        "Acquisition foundation delivered",
+        StatusTone.INFO,
+        "User-bounded downloads add hashes, provenance, licenses, resumable GET partials, a disk budget, GeoTIFF metadata indexing, and experimental OSM building processing. Terrain, clutter, and RF sampling remain unavailable.",
     ),
     Capability(
         "Propagation",
@@ -124,9 +138,18 @@ private val capabilities = listOf(
 @Composable
 fun CatalogScreen(
     state: DataCatalogUiState = DataCatalogUiState(),
+    regionalState: RegionalDataUiState = RegionalDataUiState(),
     onMunicipalityQueryChange: (String) -> Unit = {},
     onMunicipalitySelected: (String) -> Unit = {},
     onRetryDataset: () -> Unit = {},
+    onRegionalCoordinateChange: (RegionalCoordinateField, String) -> Unit = { _, _ -> },
+    onRegionalSelectionToggle: (RegionalDatasetSelection) -> Unit = {},
+    onRegionalLiveSnapshotRefreshChange: (Boolean) -> Unit = {},
+    onReviewRegionalPlan: () -> Unit = {},
+    onRegionalLicensesAccepted: (Boolean) -> Unit = {},
+    onStartRegionalAcquisition: () -> Unit = {},
+    onCancelRegionalAcquisition: () -> Unit = {},
+    onEditRegionalRequest: () -> Unit = {},
 ) {
     val largeText = LocalDensity.current.fontScale >= 1.3f
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -179,6 +202,54 @@ fun CatalogScreen(
                         )
                     }
                 }
+            }
+            item {
+                RegionalDataHeader(regionalState.phase)
+            }
+            item {
+                RegionalRequestCard(
+                    state = regionalState,
+                    onCoordinateChange = onRegionalCoordinateChange,
+                    onSelectionToggle = onRegionalSelectionToggle,
+                    onLiveSnapshotRefreshChange = onRegionalLiveSnapshotRefreshChange,
+                    onReview = onReviewRegionalPlan,
+                )
+            }
+            if (regionalState.phase == RegionalDataUiPhase.REVIEW && regionalState.plan != null) {
+                item {
+                    RegionalPlanReviewCard(
+                        state = regionalState,
+                        onLicensesAccepted = onRegionalLicensesAccepted,
+                        onStart = onStartRegionalAcquisition,
+                        onEdit = onEditRegionalRequest,
+                    )
+                }
+            }
+            if (regionalState.phase == RegionalDataUiPhase.RUNNING) {
+                item {
+                    RegionalProgressCard(
+                        state = regionalState,
+                        onCancel = onCancelRegionalAcquisition,
+                    )
+                }
+            }
+            if (
+                regionalState.phase == RegionalDataUiPhase.COMPLETE ||
+                regionalState.phase == RegionalDataUiPhase.FAILED ||
+                regionalState.phase == RegionalDataUiPhase.CANCELLED
+            ) {
+                item {
+                    RegionalResultCard(
+                        state = regionalState,
+                        onEdit = onEditRegionalRequest,
+                    )
+                }
+            }
+            item {
+                RegionalInventoryCard(regionalState)
+            }
+            item {
+                RegionalReadinessNotice()
             }
             item {
                 IbgeDatasetHeader(state.ibgeStatus)
@@ -297,6 +368,643 @@ fun CatalogScreen(
             }
         }
     }
+}
+
+@Composable
+private fun RegionalDataHeader(phase: RegionalDataUiPhase) {
+    val status = when (phase) {
+        RegionalDataUiPhase.EDITING -> "Configure" to StatusTone.INFO
+        RegionalDataUiPhase.REVIEW -> "License Review" to StatusTone.WARNING
+        RegionalDataUiPhase.RUNNING -> "Acquiring" to StatusTone.INFO
+        RegionalDataUiPhase.COMPLETE -> "Raw Indexed" to StatusTone.POSITIVE
+        RegionalDataUiPhase.FAILED -> "Action Required" to StatusTone.NEGATIVE
+        RegionalDataUiPhase.CANCELLED -> "Cancelled" to StatusTone.WARNING
+    }
+    FlowRow(
+        modifier = Modifier.fillMaxWidth().testTag("regional_data_header"),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text("Regional GIS Packages", style = MaterialTheme.typography.titleLarge)
+        StatusPill(status.first, status.second)
+    }
+}
+
+@Composable
+private fun RegionalRequestCard(
+    state: RegionalDataUiState,
+    onCoordinateChange: (RegionalCoordinateField, String) -> Unit,
+    onSelectionToggle: (RegionalDatasetSelection) -> Unit,
+    onLiveSnapshotRefreshChange: (Boolean) -> Unit,
+    onReview: () -> Unit,
+) {
+    val editable = state.phase != RegionalDataUiPhase.RUNNING
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag("regional_request_card"),
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                "WGS84 download bounds",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                "Select a small region. Raster requests are limited to 1 degree per axis; experimental buildings are limited to 0.05 degrees and 25 km2.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                val usePairs = maxWidth >= 280.dp
+                if (usePairs) {
+                    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            RegionalCoordinateInput(
+                                label = "West",
+                                value = state.west,
+                                enabled = editable,
+                                tag = "regional_west",
+                                modifier = Modifier.weight(1f),
+                                onValueChange = { onCoordinateChange(RegionalCoordinateField.WEST, it) },
+                            )
+                            RegionalCoordinateInput(
+                                label = "South",
+                                value = state.south,
+                                enabled = editable,
+                                tag = "regional_south",
+                                modifier = Modifier.weight(1f),
+                                onValueChange = { onCoordinateChange(RegionalCoordinateField.SOUTH, it) },
+                            )
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            RegionalCoordinateInput(
+                                label = "East",
+                                value = state.east,
+                                enabled = editable,
+                                tag = "regional_east",
+                                modifier = Modifier.weight(1f),
+                                onValueChange = { onCoordinateChange(RegionalCoordinateField.EAST, it) },
+                            )
+                            RegionalCoordinateInput(
+                                label = "North",
+                                value = state.north,
+                                enabled = editable,
+                                tag = "regional_north",
+                                modifier = Modifier.weight(1f),
+                                onValueChange = { onCoordinateChange(RegionalCoordinateField.NORTH, it) },
+                            )
+                        }
+                    }
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                        RegionalCoordinateInput(
+                            label = "West",
+                            value = state.west,
+                            enabled = editable,
+                            tag = "regional_west",
+                            onValueChange = { onCoordinateChange(RegionalCoordinateField.WEST, it) },
+                        )
+                        RegionalCoordinateInput(
+                            label = "South",
+                            value = state.south,
+                            enabled = editable,
+                            tag = "regional_south",
+                            onValueChange = { onCoordinateChange(RegionalCoordinateField.SOUTH, it) },
+                        )
+                        RegionalCoordinateInput(
+                            label = "East",
+                            value = state.east,
+                            enabled = editable,
+                            tag = "regional_east",
+                            onValueChange = { onCoordinateChange(RegionalCoordinateField.EAST, it) },
+                        )
+                        RegionalCoordinateInput(
+                            label = "North",
+                            value = state.north,
+                            enabled = editable,
+                            tag = "regional_north",
+                            onValueChange = { onCoordinateChange(RegionalCoordinateField.NORTH, it) },
+                        )
+                    }
+                }
+            }
+            Text("Packages", style = MaterialTheme.typography.labelLarge)
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
+                verticalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                RegionalDatasetSelection.entries.forEach { selection ->
+                    FilterChip(
+                        selected = selection in state.selections,
+                        onClick = { onSelectionToggle(selection) },
+                        enabled = editable,
+                        label = { Text(selection.shortLabel()) },
+                        modifier = Modifier.testTag("regional_selection_${selection.name.lowercase(Locale.US)}"),
+                    )
+                }
+            }
+            if (RegionalDatasetSelection.COPERNICUS_GLO_30_DSM in state.selections) {
+                RegionalCompactWarning(
+                    "Copernicus GLO-30 is a surface model (DSM), not a bare-earth DTM. GeoTIFF processing validates and indexes metadata only; it does not create terrain samples.",
+                )
+            }
+            if (RegionalDatasetSelection.ESA_WORLDCOVER_2021 in state.selections) {
+                RegionalCompactWarning(
+                    "ESA WorldCover classes are source observations, not RF clutter-loss values.",
+                )
+            }
+            if (RegionalDatasetSelection.OSM_BUILDINGS_EXPERIMENTAL in state.selections) {
+                RegionalCompactWarning(
+                    "Buildings use a best-effort bounded Overpass snapshot of OSM building and building-part ways. Height tags are retained but not interpreted; multipolygon relations are omitted.",
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(
+                        checked = state.refreshLiveSnapshot,
+                        onCheckedChange = onLiveSnapshotRefreshChange,
+                        enabled = editable,
+                        modifier = Modifier.testTag("regional_refresh_live_snapshot"),
+                    )
+                    Text(
+                        "Refresh the live snapshot now. Otherwise a verified snapshot up to 24 hours old may be reused.",
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+            Button(
+                onClick = onReview,
+                enabled = state.canReview,
+                modifier = Modifier.heightIn(min = 48.dp).testTag("regional_review"),
+            ) {
+                Text(if (state.plan == null) "Review Download" else "Review Again")
+            }
+        }
+    }
+}
+
+@Composable
+private fun RegionalCoordinateInput(
+    label: String,
+    value: String,
+    enabled: Boolean,
+    tag: String,
+    modifier: Modifier = Modifier,
+    onValueChange: (String) -> Unit,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier.testTag(tag),
+        enabled = enabled,
+        singleLine = true,
+        label = { Text(label) },
+        textStyle = MaterialTheme.typography.bodySmall,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+    )
+}
+
+@Composable
+private fun RegionalCompactWarning(message: String) {
+    Text(
+        message,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        fontWeight = FontWeight.Medium,
+    )
+}
+
+@Composable
+private fun RegionalPlanReviewCard(
+    state: RegionalDataUiState,
+    onLicensesAccepted: (Boolean) -> Unit,
+    onStart: () -> Unit,
+    onEdit: () -> Unit,
+) {
+    val plan = state.plan ?: return
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag("regional_plan_review"),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("Download and License Review", style = MaterialTheme.typography.titleMedium)
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                DatasetMetric("Artifacts", plan.artifacts.size.toString())
+                DatasetMetric("Estimated", formatStorage(plan.estimatedBytes))
+                DatasetMetric("Batch limit", formatStorage(plan.maximumBatchBytes))
+                DatasetMetric("Licenses", plan.licenses.size.toString())
+            }
+            HorizontalDivider()
+            plan.artifacts
+                .groupingBy { it.source.selection }
+                .eachCount()
+                .forEach { (selection, count) ->
+                    val source = RegionalDatasetCatalog.sourceFor(selection)
+                    Text(
+                        "$count x ${source.title} | ${source.sourceCrs}",
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                    Text(
+                        "${source.datasetFamily} / ${source.datasetRelease} | " +
+                            "Route ${source.routeId} v${source.routePolicyVersion} | " +
+                            "Query ${source.queryVersion}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    )
+                }
+            HorizontalDivider()
+            plan.licenses.forEach { license ->
+                Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                    Text(license.title, style = MaterialTheme.typography.labelLarge)
+                    Text(license.attribution, style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        license.url,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    )
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(
+                    checked = state.licensesAccepted,
+                    onCheckedChange = onLicensesAccepted,
+                    modifier = Modifier.testTag("regional_license_acceptance"),
+                )
+                Text(
+                    "I reviewed these licenses and will preserve the required attribution.",
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            Text(
+                "Downloads use private no-backup storage. Keep ATX Plan open during this in-app operation.",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                OutlinedButton(
+                    onClick = onEdit,
+                    modifier = Modifier.heightIn(min = 48.dp).testTag("regional_edit_request"),
+                ) {
+                    Text("Edit Request")
+                }
+                Button(
+                    onClick = onStart,
+                    enabled = state.canAcquire,
+                    modifier = Modifier.heightIn(min = 48.dp).testTag("regional_start"),
+                ) {
+                    Text("Download & Process")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RegionalProgressCard(
+    state: RegionalDataUiState,
+    onCancel: () -> Unit,
+) {
+    val progress = state.progress
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag("regional_progress_card"),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp),
+        ) {
+            Text("Acquiring and Processing", style = MaterialTheme.typography.titleMedium)
+            Text(
+                progress?.artifact?.source?.title ?: "Preparing the first artifact",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                progress?.status?.displayLabel() ?: "Preparing",
+                style = MaterialTheme.typography.labelLarge,
+            )
+            val fraction = progress?.fraction
+            if (fraction == null) {
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth().testTag("regional_progress"),
+                )
+            } else {
+                LinearProgressIndicator(
+                    progress = { fraction.coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth().testTag("regional_progress"),
+                )
+            }
+            progress?.let { value ->
+                val transfer = if (value.totalBytes == null) {
+                    formatStorage(value.completedBytes)
+                } else {
+                    "${formatStorage(value.completedBytes)} / ${formatStorage(value.totalBytes)}"
+                }
+                Text(
+                    "$transfer | ${formatRate(value.bytesPerSecond)}",
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                if (value.message.isNotBlank()) {
+                    Text(value.message, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            Text(
+                "This is not a process-persistent job. Resumable GET partials are preserved after cancellation; the bounded Overpass POST restarts.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+            )
+            OutlinedButton(
+                onClick = onCancel,
+                modifier = Modifier.heightIn(min = 48.dp).testTag("regional_cancel"),
+            ) {
+                Text("Cancel")
+            }
+        }
+    }
+}
+
+@Composable
+private fun RegionalResultCard(
+    state: RegionalDataUiState,
+    onEdit: () -> Unit,
+) {
+    val result = state.result
+    val phasePresentation = when (state.phase) {
+        RegionalDataUiPhase.COMPLETE -> Triple("Regional package recorded", StatusTone.POSITIVE, MaterialTheme.colorScheme.secondaryContainer)
+        RegionalDataUiPhase.CANCELLED -> Triple("Regional operation cancelled", StatusTone.WARNING, MaterialTheme.colorScheme.surfaceVariant)
+        else -> Triple("Regional operation failed", StatusTone.NEGATIVE, MaterialTheme.colorScheme.errorContainer)
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag("regional_result_card"),
+        colors = CardDefaults.cardColors(containerColor = phasePresentation.third),
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp),
+        ) {
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                Text(phasePresentation.first, style = MaterialTheme.typography.titleMedium)
+                StatusPill(state.phase.displayLabel(), phasePresentation.second)
+            }
+            state.errorMessage?.let { message ->
+                Text(message, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+            }
+            if (result != null) {
+                RegionalResultSummary(result)
+            } else {
+                Text(
+                    "No artifact result was published. No synthetic data was substituted.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            OutlinedButton(
+                onClick = onEdit,
+                modifier = Modifier.heightIn(min = 48.dp).testTag("regional_result_edit"),
+            ) {
+                Text("Edit / Retry")
+            }
+        }
+    }
+}
+
+@Composable
+private fun RegionalResultSummary(result: RegionalDownloadResult) {
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        DatasetMetric("Ready", result.readyCount.toString())
+        DatasetMetric("Existing", result.existingCount.toString())
+        DatasetMetric(
+            "Unavailable",
+            result.results.count {
+                it.status != RegionalTransferStatus.READY && it.status != RegionalTransferStatus.EXISTING
+            }.toString(),
+        )
+    }
+    result.results.take(4).forEach { artifactResult ->
+        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(
+                artifactResult.artifact.source.title,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                buildString {
+                    append(artifactResult.status.displayLabel())
+                    artifactResult.bytes?.let { append(" | ").append(formatStorage(it)) }
+                    artifactResult.processedOutput?.let { output ->
+                        append(" | ").append(output.format)
+                        output.recordCount?.let { append(" | ").append(formatInteger(it)).append(" records") }
+                    }
+                    artifactResult.effectiveUrl?.let { effectiveUrl ->
+                        append(" | ").append(effectiveUrl.endpointHostOrUnknown())
+                    }
+                },
+                style = MaterialTheme.typography.bodySmall,
+            )
+            artifactResult.error?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+        }
+    }
+    if (result.results.size > 4) {
+        Text(
+            "+${result.results.size - 4} more artifacts recorded in the inventory",
+            style = MaterialTheme.typography.labelSmall,
+        )
+    }
+}
+
+@Composable
+private fun RegionalInventoryCard(state: RegionalDataUiState) {
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag("regional_inventory"),
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp),
+        ) {
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                Text("Local Regional Inventory", style = MaterialTheme.typography.titleMedium)
+                StatusPill(
+                    when (state.inventory.size) {
+                        0 -> "Empty"
+                        1 -> "1 Artifact"
+                        else -> "${state.inventory.size} Artifacts"
+                    },
+                    if (state.inventory.isEmpty()) StatusTone.INFO else StatusTone.POSITIVE,
+                )
+            }
+            when {
+                state.isLoadingInventory -> {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    Text("Reading private-storage inventory records...", style = MaterialTheme.typography.bodySmall)
+                }
+                state.inventory.isEmpty() -> Text(
+                    "No regional artifact has been recorded. Downloads occur only after explicit review and license acceptance.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                else -> RegionalInventorySummary(state.inventory)
+            }
+        }
+    }
+}
+
+@Composable
+private fun RegionalInventorySummary(inventory: List<RegionalInventoryRecord>) {
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        DatasetMetric("Raw data", formatStorage(inventory.sumOf { it.bytes ?: 0L }))
+        DatasetMetric(
+            "Indexed / derived",
+            inventory.count { it.processingState == RegionalProcessingState.READY }.toString(),
+        )
+        DatasetMetric(
+            "NoData / failed",
+            inventory.count {
+                it.status == RegionalTransferStatus.NOT_FOUND || it.status == RegionalTransferStatus.FAILED
+            }.toString(),
+        )
+    }
+    inventory.take(3).forEach { record ->
+        val sourceTitle = RegionalDatasetCatalog.sources
+            .firstOrNull { it.datasetId == record.datasetId }
+            ?.title
+            ?: record.datasetId
+        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(sourceTitle, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+            Text(
+                "${record.status.displayLabel()} | ${record.processingState.displayLabel()} | ${record.bytes?.let(::formatStorage) ?: "NoData"}",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            record.processedOutput?.let { output ->
+                Text(
+                    buildString {
+                        append(output.format)
+                        output.recordCount?.let { append(" | ").append(formatInteger(it)).append(" records") }
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+            Text(
+                "${record.licenseId} | Local SHA-256: ${record.sha256?.take(12) ?: "NoData"} | ${record.checkedAt}",
+                style = MaterialTheme.typography.labelSmall,
+            )
+            Text(
+                "${record.routeId} v${record.routePolicyVersion} | Served by " +
+                    "${record.effectiveUrl.endpointHostOrUnknown()} | Acquired " +
+                    (record.acquiredAt ?: "Unknown (migrated record)"),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+    if (inventory.size > 3) {
+        Text("${inventory.size - 3} more inventory records", style = MaterialTheme.typography.labelSmall)
+    }
+}
+
+@Composable
+private fun RegionalReadinessNotice() {
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag("regional_readiness_limitations"),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text("Engineering Readiness", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Acquisition and bounded processing are a data foundation only. GeoTIFF outputs are metadata-indexed, not raster-sampled. Building GeoJSON is experimental.",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                "No downloaded artifact is currently connected to terrain profiles, DTM generation, clutter loss, propagation, coverage, interference, or other RF results.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+}
+
+private fun RegionalDatasetSelection.shortLabel(): String = when (this) {
+    RegionalDatasetSelection.COPERNICUS_GLO_30_DSM -> "Elevation DSM"
+    RegionalDatasetSelection.ESA_WORLDCOVER_2021 -> "Land cover"
+    RegionalDatasetSelection.OSM_BUILDINGS_EXPERIMENTAL -> "Buildings (experimental)"
+}
+
+private fun RegionalTransferStatus.displayLabel(): String = when (this) {
+    RegionalTransferStatus.QUEUED -> "Queued"
+    RegionalTransferStatus.DOWNLOADING -> "Downloading"
+    RegionalTransferStatus.VERIFYING -> "Verifying SHA-256"
+    RegionalTransferStatus.PROCESSING -> "Processing"
+    RegionalTransferStatus.READY -> "Raw verified"
+    RegionalTransferStatus.EXISTING -> "Already verified"
+    RegionalTransferStatus.NOT_FOUND -> "NoData / not published"
+    RegionalTransferStatus.FAILED -> "Failed"
+    RegionalTransferStatus.CANCELLED -> "Cancelled"
+}
+
+private fun RegionalProcessingState.displayLabel(): String = when (this) {
+    RegionalProcessingState.PENDING -> "Processing pending"
+    RegionalProcessingState.PROCESSING -> "Processing"
+    RegionalProcessingState.READY -> "Bounded processing complete"
+    RegionalProcessingState.FAILED -> "Processing failed"
+}
+
+private fun RegionalDataUiPhase.displayLabel(): String = when (this) {
+    RegionalDataUiPhase.EDITING -> "Editing"
+    RegionalDataUiPhase.REVIEW -> "Review"
+    RegionalDataUiPhase.RUNNING -> "Running"
+    RegionalDataUiPhase.COMPLETE -> "Complete"
+    RegionalDataUiPhase.FAILED -> "Failed"
+    RegionalDataUiPhase.CANCELLED -> "Cancelled"
+}
+
+private fun formatRate(bytesPerSecond: Double): String = when {
+    bytesPerSecond >= 1024.0 * 1024.0 -> String.format(Locale.US, "%.1f MiB/s", bytesPerSecond / (1024.0 * 1024.0))
+    bytesPerSecond >= 1024.0 -> String.format(Locale.US, "%.1f KiB/s", bytesPerSecond / 1024.0)
+    else -> String.format(Locale.US, "%.0f B/s", bytesPerSecond)
 }
 
 @Composable
@@ -645,6 +1353,12 @@ private fun formatStorage(bytes: Long): String = when {
     bytes >= 1024L * 1024L -> String.format(Locale.US, "%.1f MiB", bytes / (1024.0 * 1024.0))
     bytes >= 1024L -> String.format(Locale.US, "%.1f KiB", bytes / 1024.0)
     else -> "$bytes B"
+}
+
+private fun String?.endpointHostOrUnknown(): String = try {
+    this?.let { java.net.URI(it).host }?.takeIf(String::isNotBlank) ?: "Unknown endpoint"
+} catch (_: Exception) {
+    "Unknown endpoint"
 }
 
 @Composable

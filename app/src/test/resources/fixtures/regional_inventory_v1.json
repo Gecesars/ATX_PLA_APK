@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "artifacts": {
+    "buildings/openstreetmap-overpass/S23562000_W046656000_S23560000_W046654000.json": {
+      "datasetId": "openstreetmap-buildings-overpass-experimental",
+      "relativePath": "buildings/openstreetmap-overpass/S23562000_W046656000_S23560000_W046654000.json",
+      "url": "https://lambert.openstreetmap.de/api/interpreter",
+      "sourceUrl": "https://www.openstreetmap.org/copyright",
+      "licenseId": "odbl-1.0-openstreetmap",
+      "licenseUrl": "https://opendatacommons.org/licenses/odbl/1-0/",
+      "attribution": "© OpenStreetMap contributors",
+      "provenance": "A user-triggered live Overpass API snapshot of closed ways carrying a building tag within the selected bounds.",
+      "status": "NOT_FOUND",
+      "bytes": null,
+      "sha256": null,
+      "etag": null,
+      "lastModified": null,
+      "checkedAt": "2026-08-26T12:00:00.000Z",
+      "bounds": {
+        "west": -46.656,
+        "south": -23.562,
+        "east": -46.654,
+        "north": -23.56
+      },
+      "processingState": "PENDING",
+      "processedOutput": null,
+      "notes": "Legacy migration fixture: no source bytes were published.",
+      "error": null
+    }
+  },
+  "updatedAt": "2026-08-26T12:00:00.000Z",
+  "lastBounds": {
+    "west": -46.656,
+    "south": -23.562,
+    "east": -46.654,
+    "north": -23.56
+  }
+}
