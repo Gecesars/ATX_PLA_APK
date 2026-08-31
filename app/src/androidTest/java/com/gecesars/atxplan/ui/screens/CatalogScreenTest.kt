@@ -400,11 +400,11 @@ class CatalogScreenTest {
             .performScrollToNode(hasTestTag("regional_readiness_limitations"))
         composeRule.onNodeWithTag("regional_readiness_limitations").assertIsDisplayed()
         composeRule.onNodeWithText(
-            "GeoTIFF outputs are metadata-indexed, not raster-sampled.",
+            "Copernicus DSM terrain to HNMT and P.526 paths",
             substring = true,
         ).assertIsDisplayed()
         composeRule.onNodeWithText(
-            "No downloaded artifact is currently connected to terrain profiles",
+            "does not generate a DTM or apply WorldCover, buildings, clutter, or vegetation losses",
             substring = true,
         ).assertIsDisplayed()
     }

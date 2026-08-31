@@ -25,7 +25,17 @@ enum class AntennaPatternExportFormat(
 
 enum class AntennaArrayTaper {
     UNIFORM,
+    COSINE,
     BINOMIAL,
+}
+
+enum class AntennaArrayTopology(val label: String) {
+    SINGLE("Single element"),
+    VERTICAL_STACK("Vertical stack"),
+    HORIZONTAL_LINEAR("Horizontal linear"),
+    PLANAR("Planar"),
+    CIRCULAR("Circular"),
+    MULTIPANEL("Multipanel"),
 }
 
 enum class AntennaPrnValueInterpretation {
@@ -37,6 +47,7 @@ data class AntennaArraySynthesisRequest(
     val name: String,
     val basePatternId: String?,
     val frequencyMHz: Double,
+    val topology: AntennaArrayTopology = AntennaArrayTopology.PLANAR,
     val columns: Int,
     val rows: Int,
     val horizontalSpacingWavelengths: Double,

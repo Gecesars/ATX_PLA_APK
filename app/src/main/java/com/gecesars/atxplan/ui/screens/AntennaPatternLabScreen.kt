@@ -66,6 +66,7 @@ import com.gecesars.atxplan.domain.model.PlannerProject
 import com.gecesars.atxplan.domain.model.Sector
 import com.gecesars.atxplan.ui.antenna.AntennaArraySynthesisRequest
 import com.gecesars.atxplan.ui.antenna.AntennaArrayTaper
+import com.gecesars.atxplan.ui.antenna.AntennaArrayTopology
 import com.gecesars.atxplan.ui.antenna.AntennaPrnValueInterpretation
 import com.gecesars.atxplan.ui.antenna.AntennaPatternExportFormat
 import com.gecesars.atxplan.ui.antenna.AntennaPatternExportPreview
@@ -730,13 +731,18 @@ private fun AntennaComposerPanel(
     var scanAzimuth by rememberSaveable { mutableStateOf("0.0") }
     var scanElevation by rememberSaveable { mutableStateOf("0.0") }
     var basePatternId by rememberSaveable { mutableStateOf<String?>(null) }
+    var topologyName by rememberSaveable { mutableStateOf(AntennaArrayTopology.PLANAR.name) }
     var taperName by rememberSaveable { mutableStateOf(AntennaArrayTaper.UNIFORM.name) }
     var baseExpanded by remember { mutableStateOf(false) }
+    var topologyExpanded by remember { mutableStateOf(false) }
     var taperExpanded by remember { mutableStateOf(false) }
+    val topology = AntennaArrayTopology.entries.firstOrNull { it.name == topologyName }
+        ?: AntennaArrayTopology.PLANAR
     val request = parseSynthesisRequest(
         name = name,
         basePatternId = basePatternId,
         frequencyMHz = frequencyMHz,
+        topologyName = topologyName,
         columns = columns,
         rows = rows,
         spacingX = spacingX,
@@ -766,13 +772,84 @@ private fun AntennaComposerPanel(
             )
             DenseField(name, { name = it }, "Pattern name", KeyboardType.Text)
             DenseField(frequencyMHz, { frequencyMHz = it }, "Frequency (MHz)", KeyboardType.Decimal)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                DenseField(columns, { columns = it }, "Columns", KeyboardType.Number, Modifier.weight(1f))
-                DenseField(rows, { rows = it }, "Rows", KeyboardType.Number, Modifier.weight(1f))
+            Box {
+                OutlinedButton(
+                    onClick = { topologyExpanded = true },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                ) {
+                    Text(topology.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                DropdownMenu(
+                    expanded = topologyExpanded,
+                    onDismissRequest = { topologyExpanded = false },
+                ) {
+                    AntennaArrayTopology.entries.forEach { option ->
+                        DropdownMenuItem(
+                            text = { Text(option.label) },
+                            onClick = {
+                                topologyName = option.name
+                                topologyExpanded = false
+                            },
+                        )
+                    }
+                }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                DenseField(spacingX, { spacingX = it }, "X spacing (λ)", KeyboardType.Decimal, Modifier.weight(1f))
-                DenseField(spacingY, { spacingY = it }, "Y spacing (λ)", KeyboardType.Decimal, Modifier.weight(1f))
+            when (topology) {
+                AntennaArrayTopology.SINGLE -> Unit
+                AntennaArrayTopology.VERTICAL_STACK -> {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        DenseField(rows, { rows = it }, "Elements", KeyboardType.Number, Modifier.weight(1f))
+                        DenseField(spacingY, { spacingY = it }, "Spacing (λ)", KeyboardType.Decimal, Modifier.weight(1f))
+                    }
+                }
+                AntennaArrayTopology.HORIZONTAL_LINEAR -> {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        DenseField(columns, { columns = it }, "Elements", KeyboardType.Number, Modifier.weight(1f))
+                        DenseField(spacingX, { spacingX = it }, "Spacing (λ)", KeyboardType.Decimal, Modifier.weight(1f))
+                    }
+                }
+                AntennaArrayTopology.CIRCULAR -> {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        DenseField(columns, { columns = it }, "Elements", KeyboardType.Number, Modifier.weight(1f))
+                        DenseField(spacingX, { spacingX = it }, "Radius (λ)", KeyboardType.Decimal, Modifier.weight(1f))
+                    }
+                }
+                AntennaArrayTopology.PLANAR,
+                AntennaArrayTopology.MULTIPANEL,
+                -> {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        DenseField(
+                            columns,
+                            { columns = it },
+                            if (topology == AntennaArrayTopology.MULTIPANEL) "Panels" else "Columns",
+                            KeyboardType.Number,
+                            Modifier.weight(1f),
+                        )
+                        DenseField(
+                            rows,
+                            { rows = it },
+                            if (topology == AntennaArrayTopology.MULTIPANEL) "Elements/panel" else "Rows",
+                            KeyboardType.Number,
+                            Modifier.weight(1f),
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        DenseField(
+                            spacingX,
+                            { spacingX = it },
+                            if (topology == AntennaArrayTopology.MULTIPANEL) "Tower radius (λ)" else "X spacing (λ)",
+                            KeyboardType.Decimal,
+                            Modifier.weight(1f),
+                        )
+                        DenseField(
+                            spacingY,
+                            { spacingY = it },
+                            "Vertical spacing (λ)",
+                            KeyboardType.Decimal,
+                            Modifier.weight(1f),
+                        )
+                    }
+                }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 DenseField(
@@ -835,8 +912,8 @@ private fun AntennaComposerPanel(
             }
             if (request == null) {
                 Text(
-                    "Use a name, positive frequency, 1–32 rows/columns, 0.05–5.0 λ spacing, " +
-                        "and scan angles from -60° to +60°.",
+                    "Use a name, positive frequency, 1–32 elements per dimension, no more than " +
+                        "512 active elements, 0.05–5.0 λ spacing/radius, and scan angles from -60° to +60°.",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.error,
                 )
@@ -985,6 +1062,7 @@ private fun parseSynthesisRequest(
     name: String,
     basePatternId: String?,
     frequencyMHz: String,
+    topologyName: String,
     columns: String,
     rows: String,
     spacingX: String,
@@ -997,7 +1075,18 @@ private fun parseSynthesisRequest(
     val frequency = frequencyMHz.toDoubleOrNull()?.takeIf { it.isFinite() && it > 0.0 } ?: return null
     val columnCount = columns.toIntOrNull()?.takeIf { it in 1..32 } ?: return null
     val rowCount = rows.toIntOrNull()?.takeIf { it in 1..32 } ?: return null
-    if (columnCount * rowCount > 512) return null
+    val topology = AntennaArrayTopology.entries.firstOrNull { it.name == topologyName } ?: return null
+    val elementCount = when (topology) {
+        AntennaArrayTopology.SINGLE -> 1
+        AntennaArrayTopology.VERTICAL_STACK -> rowCount
+        AntennaArrayTopology.HORIZONTAL_LINEAR,
+        AntennaArrayTopology.CIRCULAR,
+        -> columnCount
+        AntennaArrayTopology.PLANAR,
+        AntennaArrayTopology.MULTIPANEL,
+        -> columnCount * rowCount
+    }
+    if (elementCount > 512) return null
     val horizontalSpacing = spacingX.toDoubleOrNull()?.takeIf { it.isFinite() && it in 0.05..5.0 }
         ?: return null
     val verticalSpacing = spacingY.toDoubleOrNull()?.takeIf { it.isFinite() && it in 0.05..5.0 }
@@ -1011,6 +1100,7 @@ private fun parseSynthesisRequest(
         name = cleanName,
         basePatternId = basePatternId,
         frequencyMHz = frequency,
+        topology = topology,
         columns = columnCount,
         rows = rowCount,
         horizontalSpacingWavelengths = horizontalSpacing,

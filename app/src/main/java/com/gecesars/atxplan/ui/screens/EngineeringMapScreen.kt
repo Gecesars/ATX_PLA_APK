@@ -1,5 +1,8 @@
 package com.gecesars.atxplan.ui.screens
 
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -22,6 +25,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -40,6 +44,9 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -63,13 +70,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -85,6 +96,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -92,12 +104,20 @@ import com.gecesars.atxplan.domain.application.RfAssetKind
 import com.gecesars.atxplan.domain.application.RfAssetMutationCommand
 import com.gecesars.atxplan.domain.application.RfAssetMutationReceipt
 import com.gecesars.atxplan.domain.application.RfAssetMutationStatus
+import com.gecesars.atxplan.data.basemap.CachedBasemapTile
 import com.gecesars.atxplan.domain.contour.BroadcastService
 import com.gecesars.atxplan.domain.contour.ContourPurpose
 import com.gecesars.atxplan.domain.contour.ContourStatus
+import com.gecesars.atxplan.domain.contour.RegulatoryDuAssessment
+import com.gecesars.atxplan.domain.contour.RegulatoryDuPointStatus
 import com.gecesars.atxplan.domain.contour.ServiceContourOverlay
+import com.gecesars.atxplan.domain.coverage.BroadcastCoveragePalette
+import com.gecesars.atxplan.domain.coverage.BroadcastCoverageSurface
+import com.gecesars.atxplan.domain.coverage.CoverageRenderMode
+import com.gecesars.atxplan.domain.basemap.BasemapTileCoordinate
 import com.gecesars.atxplan.domain.geo.GeographicCamera
 import com.gecesars.atxplan.domain.geo.GeographicViewport
+import com.gecesars.atxplan.domain.geo.MercatorWorldPoint
 import com.gecesars.atxplan.domain.geo.ScreenPointPx
 import com.gecesars.atxplan.domain.geo.ViewportSizePx
 import com.gecesars.atxplan.domain.model.GeoPoint
@@ -106,11 +126,15 @@ import com.gecesars.atxplan.domain.model.RadioSite
 import com.gecesars.atxplan.ui.components.ScreenHeader
 import com.gecesars.atxplan.ui.components.StatusPill
 import com.gecesars.atxplan.ui.components.StatusTone
+import com.gecesars.atxplan.ui.basemap.BasemapUiState
 import com.gecesars.atxplan.ui.theme.AtxAmber
 import com.gecesars.atxplan.ui.theme.AtxDarkBackground
 import com.gecesars.atxplan.ui.theme.AtxSignal
 import com.gecesars.atxplan.ui.theme.AtxTealLight
 import kotlinx.serialization.json.Json
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.math.BigDecimal
 import java.security.MessageDigest
 import java.util.Locale
@@ -135,6 +159,9 @@ import kotlin.math.sin
 fun EngineeringMapScreen(
     project: PlannerProject?,
     serviceContours: List<ServiceContourOverlay> = emptyList(),
+    coverageSurface: BroadcastCoverageSurface? = null,
+    duAssessments: List<RegulatoryDuAssessment> = emptyList(),
+    basemapState: BasemapUiState = BasemapUiState.gridOnly,
     isCatalogWritable: Boolean = false,
     isSaving: Boolean = false,
     catalogMutationCompletionCount: Long = 0L,
@@ -142,6 +169,9 @@ fun EngineeringMapScreen(
     activeMutationRequestId: String? = null,
     lastMutationReceipt: RfAssetMutationReceipt? = null,
     onMoveSite: (RfAssetMutationCommand.MoveSite) -> Unit = {},
+    onSelectBasemapProvider: (String?) -> Unit = {},
+    onRequestVisibleBasemap: (GeographicCamera, ViewportSizePx, Double) -> Unit = { _, _, _ -> },
+    onRefreshVisibleBasemap: () -> Unit = {},
     onExportServiceContours: (Uri) -> Unit = {},
 ) {
     val sites = project?.sites.orEmpty()
@@ -176,6 +206,17 @@ fun EngineeringMapScreen(
     val kmzExportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/vnd.google-earth.kmz"),
     ) { uri -> uri?.let(onExportServiceContours) }
+    val renderedBasemapTiles = rememberBasemapTileImages(basemapState.tiles)
+    var coverageRenderModeName by rememberSaveable(coverageSurface?.inputFingerprint) {
+        mutableStateOf(CoverageRenderMode.BROADCAST_DISCRETE.name)
+    }
+    val coverageRenderMode = CoverageRenderMode.entries.firstOrNull { mode ->
+        mode.name == coverageRenderModeName
+    } ?: CoverageRenderMode.BROADCAST_DISCRETE
+    val renderedCoverageSurface = rememberCoverageSurfaceImage(
+        surface = coverageSurface,
+        mode = coverageRenderMode,
+    )
 
     fun currentCamera(): GeographicCamera = GeographicCamera(
         center = GeographicViewport.canonicalPoint(
@@ -211,7 +252,8 @@ fun EngineeringMapScreen(
         val contourPoints = serviceContours
             .filter { contour -> contour.status != ContourStatus.NO_DATA }
             .flatMap(ServiceContourOverlay::points)
-        val visibleGeometry = sites.map(RadioSite::location) + contourPoints
+        val coveragePoints = coverageSurface?.bounds?.cornerPoints.orEmpty()
+        val visibleGeometry = sites.map(RadioSite::location) + contourPoints + coveragePoints
         if (visibleGeometry.isEmpty()) {
             updateCamera(DEFAULT_GEOGRAPHIC_CAMERA)
             return
@@ -282,12 +324,34 @@ fun EngineeringMapScreen(
         viewportSize,
         siteGeometryKey,
         contourGeometryKey,
+        coverageSurface?.inputFingerprint,
         hasFittedProject,
     ) {
         if (project == null) return@LaunchedEffect
         if (!hasFittedProject && viewportSize.width > 0 && viewportSize.height > 0) {
             fitSites()
             hasFittedProject = true
+        }
+    }
+
+    LaunchedEffect(
+        basemapState.selectedProviderId,
+        cameraLatitude,
+        cameraLongitude,
+        cameraZoom,
+        viewportSize,
+        mapTileSizePx,
+    ) {
+        if (
+            basemapState.selectedProviderId != null &&
+            viewportSize.width > 0 && viewportSize.height > 0
+        ) {
+            delay(BASEMAP_VIEWPORT_DEBOUNCE_MILLIS)
+            onRequestVisibleBasemap(
+                currentCamera(),
+                viewportSize.toGeographicViewport(),
+                mapTileSizePx,
+            )
         }
     }
 
@@ -415,10 +479,17 @@ fun EngineeringMapScreen(
             item {
                 ScreenHeader(
                     title = project?.name ?: "No Project Selected",
-                    subtitle = if (serviceContours.isEmpty()) {
-                        "Offline WGS 84 site geometry with a coordinate-grid overlay."
-                    } else {
-                        "Offline WGS 84 site and service-contour geometry on a coordinate grid."
+                    subtitle = when {
+                        basemapState.selectedProvider != null && coverageSurface != null ->
+                            "Cached basemap with a CPU-generated field surface and service contours."
+                        basemapState.selectedProvider != null && serviceContours.isNotEmpty() ->
+                            "Cached visible basemap tiles with local WGS 84 site and service-contour geometry."
+                        basemapState.selectedProvider != null ->
+                            "Cached visible basemap tiles with local WGS 84 site geometry."
+                        serviceContours.isEmpty() ->
+                            "Offline WGS 84 site geometry with a coordinate-grid overlay."
+                        else ->
+                            "Offline WGS 84 site and service-contour geometry on a coordinate grid."
                     },
                 )
             }
@@ -452,7 +523,45 @@ fun EngineeringMapScreen(
                             Text("Export KMZ")
                         }
                     }
-                    StatusPill("No Basemap Installed", StatusTone.WARNING)
+                    if (coverageSurface != null) {
+                        StatusPill(
+                            "${coverageSurface.width}×${coverageSurface.height} Coverage",
+                            if (coverageSurface.maximumCalculatedDbuvPerM == null) {
+                                StatusTone.WARNING
+                            } else {
+                                StatusTone.POSITIVE
+                            },
+                        )
+                        CoverageModeControl(
+                            selectedMode = coverageRenderMode,
+                            onSelect = { mode -> coverageRenderModeName = mode.name },
+                        )
+                    }
+                    if (duAssessments.isNotEmpty()) {
+                        val failureCount = duAssessments.sumOf { it.failingPointCount }
+                        StatusPill(
+                            "D/U ${if (failureCount == 0) "Pass" else "$failureCount Fail"}",
+                            if (failureCount == 0) StatusTone.POSITIVE else StatusTone.WARNING,
+                        )
+                    }
+                    when {
+                        basemapState.providers.isEmpty() ->
+                            StatusPill("No Basemap Installed", StatusTone.WARNING)
+                        basemapState.selectedProvider == null ->
+                            StatusPill("Coordinate Grid Only", StatusTone.INFO)
+                        basemapState.tiles.isNotEmpty() -> StatusPill(
+                            "${basemapState.selectedProvider?.label}: ${basemapState.tiles.size} Tiles",
+                            if (basemapState.failureCount == 0) {
+                                StatusTone.POSITIVE
+                            } else {
+                                StatusTone.WARNING
+                            },
+                        )
+                        else -> StatusPill(
+                            if (basemapState.isLoading) "Loading Basemap" else "Basemap Unavailable",
+                            if (basemapState.isLoading) StatusTone.INFO else StatusTone.WARNING,
+                        )
+                    }
                 }
             }
             item {
@@ -461,6 +570,12 @@ fun EngineeringMapScreen(
                     siteGeometryKey = siteGeometryKey,
                     serviceContours = serviceContours,
                     contourGeometryKey = contourGeometryKey,
+                    coverageSurface = coverageSurface,
+                    renderedCoverageSurface = renderedCoverageSurface,
+                    coverageRenderMode = coverageRenderMode,
+                    duAssessments = duAssessments,
+                    basemapState = basemapState,
+                    basemapTiles = renderedBasemapTiles,
                     selectedSiteId = selectedSiteId,
                     camera = currentCamera(),
                     tileSizePx = mapTileSizePx,
@@ -496,7 +611,20 @@ fun EngineeringMapScreen(
             if (serviceContours.isNotEmpty()) {
                 item { ServiceContourLegendCard(serviceContours) }
             }
-            item { BasemapDisclosureCard(hasServiceContours = serviceContours.isNotEmpty()) }
+            coverageSurface?.let { surface ->
+                item { CoverageLegendCard(surface, coverageRenderMode) }
+            }
+            if (duAssessments.isNotEmpty()) {
+                item { DuBoundaryLegendCard(duAssessments) }
+            }
+            item {
+                BasemapDisclosureCard(
+                    state = basemapState,
+                    hasServiceContours = serviceContours.isNotEmpty(),
+                    onSelectProvider = onSelectBasemapProvider,
+                    onRefresh = onRefreshVisibleBasemap,
+                )
+            }
             item { Text("Project Sites", style = MaterialTheme.typography.titleLarge) }
             if (sites.isEmpty()) {
                 item { EmptySitesCard(projectSelected = project != null) }
@@ -594,6 +722,12 @@ private fun GeographicMapCard(
     siteGeometryKey: List<Pair<String, GeoPoint>>,
     serviceContours: List<ServiceContourOverlay>,
     contourGeometryKey: List<ContourGeometryKey>,
+    coverageSurface: BroadcastCoverageSurface?,
+    renderedCoverageSurface: ImageBitmap?,
+    coverageRenderMode: CoverageRenderMode,
+    duAssessments: List<RegulatoryDuAssessment>,
+    basemapState: BasemapUiState,
+    basemapTiles: List<RenderedBasemapTile>,
     selectedSiteId: String?,
     camera: GeographicCamera,
     tileSizePx: Double,
@@ -610,7 +744,7 @@ private fun GeographicMapCard(
     val renderableContourCount = serviceContours.count { contour ->
         contour.status != ContourStatus.NO_DATA && contour.points.size >= 2
     }
-    val fitEnabled = sites.isNotEmpty() || renderableContourCount > 0
+    val fitEnabled = sites.isNotEmpty() || renderableContourCount > 0 || coverageSurface != null
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val mapHeight = (maxWidth * 0.90f).coerceIn(340.dp, 460.dp)
         Column(
@@ -651,7 +785,15 @@ private fun GeographicMapCard(
                     shape = RoundedCornerShape(10.dp),
                 ) {
                     Text(
-                        if (renderableContourCount == 0) "GRID ONLY" else "GRID + CONTOURS",
+                        when {
+                            basemapTiles.isNotEmpty() && renderedCoverageSurface != null ->
+                                "BASEMAP + COVERAGE"
+                            renderedCoverageSurface != null -> "GRID + COVERAGE"
+                            basemapTiles.isNotEmpty() && renderableContourCount > 0 -> "BASEMAP + CONTOURS"
+                            basemapTiles.isNotEmpty() -> "BASEMAP"
+                            renderableContourCount > 0 -> "GRID + CONTOURS"
+                            else -> "GRID ONLY"
+                        },
                         modifier = Modifier.padding(horizontal = 9.dp, vertical = 7.dp),
                         color = Color.White,
                         style = MaterialTheme.typography.labelMedium,
@@ -665,7 +807,12 @@ private fun GeographicMapCard(
                     .fillMaxWidth()
                     .weight(1f)
                     .onSizeChanged(onViewportSizeChanged)
-                    .pointerInput(viewportSize, siteGeometryKey, contourGeometryKey) {
+                    .pointerInput(
+                        viewportSize,
+                        siteGeometryKey,
+                        contourGeometryKey,
+                        coverageSurface?.inputFingerprint,
+                    ) {
                         detectTapGestures { tap ->
                             if (viewportSize.width <= 0 || viewportSize.height <= 0) {
                                 return@detectTapGestures
@@ -721,29 +868,44 @@ private fun GeographicMapCard(
                             contentDescription = mapCanvasDescription(
                                 siteCount = sites.size,
                                 serviceContours = serviceContours,
+                                coverageSurface = coverageSurface,
+                                coverageRenderMode = coverageRenderMode,
+                                duAssessments = duAssessments,
+                                basemapProviderLabel = basemapState.selectedProvider?.label
+                                    ?.takeIf { basemapTiles.isNotEmpty() },
                             )
                         }
                         .testTag("engineering_map_canvas"),
                 ) {
                     drawRect(AtxDarkBackground)
                     val viewport = ViewportSizePx(size.width.toDouble(), size.height.toDouble())
+                    drawBasemapTiles(basemapTiles, camera, viewport, tileSizePx)
+                    drawCoverageSurface(
+                        surface = coverageSurface,
+                        image = renderedCoverageSurface,
+                        renderMode = coverageRenderMode,
+                        camera = camera,
+                        viewport = viewport,
+                        tileSizePx = tileSizePx,
+                    )
                     drawCoordinateGrid(camera, viewport, tileSizePx)
                     drawServiceContours(serviceContours, camera, viewport, tileSizePx)
+                    drawDuBoundaryEvidence(duAssessments, camera, viewport, tileSizePx)
                     drawSiteGeometry(sites, selectedSiteId, camera, viewport, tileSizePx)
                     drawCenterCrosshair()
                 }
             }
-            Row(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(Color.Black.copy(alpha = 0.72f))
-                    .padding(horizontal = 10.dp, vertical = 7.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.Bottom,
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
             ) {
-                Column(
-                    modifier = Modifier.widthIn(min = 84.dp, max = 124.dp),
-                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.Bottom,
                 ) {
                     MapScaleBar(
                         camera = camera,
@@ -752,27 +914,175 @@ private fun GeographicMapCard(
                         tileSizePx = tileSizePx,
                     )
                     Text(
-                        "ATX grid | WGS 84",
+                        "Center ${formatLatitude(camera.center.latitude)}  " +
+                            "${formatLongitude(camera.center.longitude)}  |  " +
+                            "z${String.format(Locale.US, "%.1f", camera.zoom)}",
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("map_center_coordinates"),
                         color = Color.White,
                         style = MaterialTheme.typography.labelSmall,
-                        maxLines = 1,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.End,
                     )
                 }
                 Text(
-                    "Center ${formatLatitude(camera.center.latitude)}  " +
-                        "${formatLongitude(camera.center.longitude)}  |  " +
-                        "z${String.format(Locale.US, "%.1f", camera.zoom)}",
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("map_center_coordinates"),
+                    basemapState.selectedProvider?.attribution ?: "ATX grid | WGS 84",
                     color = Color.White,
                     style = MaterialTheme.typography.labelSmall,
                     maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    textAlign = TextAlign.End,
+                    overflow = TextOverflow.Clip,
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun CoverageModeControl(
+    selectedMode: CoverageRenderMode,
+    onSelect: (CoverageRenderMode) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(
+            onClick = { expanded = true },
+            modifier = Modifier.heightIn(min = 48.dp).testTag("coverage_render_mode"),
+        ) {
+            Icon(Icons.Outlined.Layers, contentDescription = null)
+            Text(selectedMode.displayName, maxLines = 1)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            CoverageRenderMode.entries.forEach { mode ->
+                DropdownMenuItem(
+                    text = { Text(mode.displayName) },
+                    onClick = {
+                        expanded = false
+                        onSelect(mode)
+                    },
+                    modifier = Modifier.semantics { selected = mode == selectedMode },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CoverageLegendCard(
+    surface: BroadcastCoverageSurface,
+    mode: CoverageRenderMode,
+) {
+    var showDetails by remember(surface.inputFingerprint) { mutableStateOf(false) }
+    val calculatedRange = if (
+        surface.minimumCalculatedDbuvPerM != null && surface.maximumCalculatedDbuvPerM != null
+    ) {
+        String.format(
+            Locale.US,
+            "Calculated %.1f to %.1f %s",
+            surface.minimumCalculatedDbuvPerM,
+            surface.maximumCalculatedDbuvPerM,
+            surface.unit,
+        )
+    } else {
+        "Calculated range NoData"
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag("coverage_legend"),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 9.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "Coverage Surface",
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                StatusPill(mode.displayName, StatusTone.INFO)
+            }
+            Row(modifier = Modifier.fillMaxWidth()) {
+                BroadcastCoveragePalette.discreteBands.forEach { band ->
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(10.dp)
+                            .background(Color((0xff000000L or band.rgb.toLong()).toInt())),
+                    )
+                }
+            }
+            Text(
+                "${BroadcastCoveragePalette.PALETTE_ID} | visible at 45 ${surface.unit} | " +
+                    "transparent below threshold and for NoData",
+                style = MaterialTheme.typography.labelSmall,
+            )
+            Text(
+                "$calculatedRange | ${surface.noDataCellCount} of " +
+                    "${surface.valuesDbuvPerM.size} cells NoData",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                "${surface.modelId} | ${surface.statisticalBasis}",
+                style = MaterialTheme.typography.labelSmall,
+            )
+            TextButton(onClick = { showDetails = !showDetails }) {
+                Text(if (showDetails) "Hide engineering notes" else "Show engineering notes")
+            }
+            if (showDetails) {
+                Text(surface.noDataMeaning, style = MaterialTheme.typography.bodySmall)
+                surface.warnings.forEach { warning ->
+                    Text("• $warning", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DuBoundaryLegendCard(assessments: List<RegulatoryDuAssessment>) {
+    val passing = assessments.sumOf(RegulatoryDuAssessment::passingPointCount)
+    val failing = assessments.sumOf(RegulatoryDuAssessment::failingPointCount)
+    val noData = assessments.sumOf(RegulatoryDuAssessment::noDataPointCount)
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag("du_boundary_legend"),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 9.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                "Protected-boundary D/U",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                StatusPill("$passing Pass", StatusTone.POSITIVE)
+                StatusPill("$failing Fail", if (failing == 0) StatusTone.INFO else StatusTone.WARNING)
+                StatusPill("$noData NoData", if (noData == 0) StatusTone.INFO else StatusTone.WARNING)
+                StatusPill("${assessments.size} References", StatusTone.INFO)
+            }
+            Text(
+                "Dots evaluate D/U at each protected-contour radial: green passes, red fails, gray is NoData. Purple markers are read-only Anatel reference stations.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                "This boundary evidence is not an interfering-field iso-contour.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.error,
+            )
         }
     }
 }
@@ -1056,6 +1366,153 @@ private fun DrawScope.drawCoordinateGrid(
     }
 }
 
+private data class RenderedBasemapTile(
+    val coordinate: BasemapTileCoordinate,
+    val image: ImageBitmap,
+)
+
+@Composable
+private fun rememberCoverageSurfaceImage(
+    surface: BroadcastCoverageSurface?,
+    mode: CoverageRenderMode,
+): ImageBitmap? = remember(surface, mode) {
+    surface?.let { availableSurface ->
+        runCatching {
+            val pixels = IntArray(availableSurface.valuesDbuvPerM.size) { index ->
+                val value = availableSurface.valuesDbuvPerM[index]
+                BroadcastCoveragePalette.argb(
+                    valueDbuvPerM = value.takeUnless(Float::isNaN)?.toDouble(),
+                    mode = mode,
+                )
+            }
+            Bitmap.createBitmap(
+                availableSurface.width,
+                availableSurface.height,
+                Bitmap.Config.ARGB_8888,
+            ).apply {
+                setPixels(
+                    pixels,
+                    0,
+                    availableSurface.width,
+                    0,
+                    0,
+                    availableSurface.width,
+                    availableSurface.height,
+                )
+            }.asImageBitmap()
+        }.getOrNull()
+    }
+}
+
+@Composable
+private fun rememberBasemapTileImages(tiles: List<CachedBasemapTile>): List<RenderedBasemapTile> {
+    val cacheKey = remember(tiles) {
+        tiles.map { tile ->
+            Triple(tile.absolutePath, tile.fetchedAtEpochMillis, tile.byteCount)
+        }
+    }
+    var rendered by remember { mutableStateOf(emptyList<RenderedBasemapTile>()) }
+    LaunchedEffect(cacheKey) {
+        rendered = withContext(Dispatchers.IO) {
+            tiles.mapNotNull { tile ->
+                runCatching {
+                    BitmapFactory.decodeFile(tile.absolutePath)
+                        ?.asImageBitmap()
+                        ?.let { image -> RenderedBasemapTile(tile.coordinate, image) }
+                }.getOrNull()
+            }
+        }
+    }
+    return rendered
+}
+
+private fun DrawScope.drawCoverageSurface(
+    surface: BroadcastCoverageSurface?,
+    image: ImageBitmap?,
+    renderMode: CoverageRenderMode,
+    camera: GeographicCamera,
+    viewport: ViewportSizePx,
+    tileSizePx: Double,
+) {
+    if (surface == null || image == null) return
+    val northWest = GeographicViewport.toScreen(
+        GeoPoint(surface.bounds.northLatitude, surface.bounds.westLongitude),
+        camera,
+        viewport,
+        tileSizePx,
+    )
+    val southEast = GeographicViewport.toScreen(
+        GeoPoint(surface.bounds.southLatitude, surface.bounds.eastLongitude),
+        camera,
+        viewport,
+        tileSizePx,
+    )
+    val left = floor(min(northWest.x, southEast.x)).toInt()
+    val top = floor(min(northWest.y, southEast.y)).toInt()
+    val right = kotlin.math.ceil(max(northWest.x, southEast.x)).toInt()
+    val bottom = kotlin.math.ceil(max(northWest.y, southEast.y)).toInt()
+    if (right <= 0 || bottom <= 0 || left >= viewport.width || top >= viewport.height) return
+    drawImage(
+        image = image,
+        srcOffset = IntOffset.Zero,
+        srcSize = IntSize(image.width, image.height),
+        dstOffset = IntOffset(left, top),
+        dstSize = IntSize(max(1, right - left), max(1, bottom - top)),
+        filterQuality = if (renderMode == CoverageRenderMode.BROADCAST_DISCRETE) {
+            FilterQuality.None
+        } else {
+            FilterQuality.Low
+        },
+    )
+}
+
+private fun DrawScope.drawBasemapTiles(
+    tiles: List<RenderedBasemapTile>,
+    camera: GeographicCamera,
+    viewport: ViewportSizePx,
+    displayTileSizePx: Double,
+) {
+    if (tiles.isEmpty()) return
+    val worldSize = GeographicViewport.worldSizePx(camera.zoom, displayTileSizePx)
+    tiles.forEach { tile ->
+        val dimension = (1 shl tile.coordinate.zoom).toDouble()
+        val renderedTileSize = worldSize / dimension
+        val tileCenter = GeographicViewport.unproject(
+            MercatorWorldPoint(
+                x = (tile.coordinate.x + 0.5) / dimension,
+                y = (tile.coordinate.y + 0.5) / dimension,
+            ),
+        )
+        val center = GeographicViewport.toScreen(
+            point = tileCenter,
+            camera = camera,
+            viewport = viewport,
+            tileSizePx = displayTileSizePx,
+        )
+        val left = center.x - renderedTileSize / 2.0
+        val top = center.y - renderedTileSize / 2.0
+        val right = center.x + renderedTileSize / 2.0
+        val bottom = center.y + renderedTileSize / 2.0
+        if (right < 0.0 || bottom < 0.0 || left > viewport.width || top > viewport.height) {
+            return@forEach
+        }
+        val destinationLeft = floor(left).toInt()
+        val destinationTop = floor(top).toInt()
+        val destinationRight = kotlin.math.ceil(right).toInt()
+        val destinationBottom = kotlin.math.ceil(bottom).toInt()
+        drawImage(
+            image = tile.image,
+            srcOffset = IntOffset.Zero,
+            srcSize = IntSize(tile.image.width, tile.image.height),
+            dstOffset = IntOffset(destinationLeft, destinationTop),
+            dstSize = IntSize(
+                width = max(1, destinationRight - destinationLeft),
+                height = max(1, destinationBottom - destinationTop),
+            ),
+        )
+    }
+}
+
 private fun DrawScope.drawServiceContours(
     serviceContours: List<ServiceContourOverlay>,
     camera: GeographicCamera,
@@ -1119,6 +1576,45 @@ private fun DrawScope.drawServiceContours(
                 },
             ),
         )
+    }
+}
+
+private fun DrawScope.drawDuBoundaryEvidence(
+    assessments: List<RegulatoryDuAssessment>,
+    camera: GeographicCamera,
+    viewport: ViewportSizePx,
+    tileSizePx: Double,
+) {
+    if (assessments.isEmpty()) return
+    val pointRadius = 3.25.dp.toPx()
+    assessments
+        .flatMap(RegulatoryDuAssessment::points)
+        .groupBy { point -> point.location }
+        .forEach { (location, overlapping) ->
+            val status = when {
+                overlapping.any { point -> point.status == RegulatoryDuPointStatus.FAIL } ->
+                    RegulatoryDuPointStatus.FAIL
+                overlapping.any { point -> point.status == RegulatoryDuPointStatus.NO_DATA } ->
+                    RegulatoryDuPointStatus.NO_DATA
+                else -> RegulatoryDuPointStatus.PASS
+            }
+            val projected = GeographicViewport.toScreen(location, camera, viewport, tileSizePx)
+            val center = Offset(projected.x.toFloat(), projected.y.toFloat())
+            val color = when (status) {
+                RegulatoryDuPointStatus.PASS -> Color(0xFF3DDC84)
+                RegulatoryDuPointStatus.FAIL -> Color(0xFFFF4D5E)
+                RegulatoryDuPointStatus.NO_DATA -> Color(0xFF9AA4AE)
+            }
+            drawCircle(Color.Black.copy(alpha = 0.72f), pointRadius + 1.25.dp.toPx(), center)
+            drawCircle(color, pointRadius, center)
+        }
+    assessments.forEach { assessment ->
+        val station = GeoPoint(assessment.station.latitude, assessment.station.longitude)
+        val projected = GeographicViewport.toScreen(station, camera, viewport, tileSizePx)
+        val center = Offset(projected.x.toFloat(), projected.y.toFloat())
+        drawCircle(Color.Black.copy(alpha = 0.78f), 6.dp.toPx(), center)
+        drawCircle(Color(0xFFCC66FF), 4.5.dp.toPx(), center)
+        drawCircle(Color.White, 1.5.dp.toPx(), center)
     }
 }
 
@@ -1277,8 +1773,17 @@ private fun SelectedSitePanel(
 }
 
 @Composable
-private fun BasemapDisclosureCard(hasServiceContours: Boolean) {
+private fun BasemapDisclosureCard(
+    state: BasemapUiState,
+    hasServiceContours: Boolean,
+    onSelectProvider: (String?) -> Unit,
+    onRefresh: () -> Unit,
+) {
+    val context = LocalContext.current
+    var providerMenuExpanded by remember { mutableStateOf(false) }
+    val provider = state.selectedProvider
     Card(
+        modifier = Modifier.fillMaxWidth().testTag("basemap_control_card"),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.secondaryContainer,
         ),
@@ -1295,24 +1800,142 @@ private fun BasemapDisclosureCard(hasServiceContours: Boolean) {
                 verticalArrangement = Arrangement.spacedBy(3.dp),
             ) {
                 Text(
-                    "No basemap installed",
+                    when {
+                        state.providers.isEmpty() -> "No basemap installed"
+                        provider == null -> "Coordinate grid only"
+                        else -> provider.label
+                    },
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
-                    "The canvas is an offline WGS 84 longitude/latitude coordinate overlay using " +
-                        "Web Mercator display geometry. Attribution: ATX Plan coordinate grid and " +
-                        "local project data. No third-party map tiles are rendered.",
+                    if (state.providers.isEmpty()) {
+                        "The canvas is an offline WGS 84 longitude/latitude coordinate overlay using " +
+                            "Web Mercator display geometry. Attribution: ATX Plan coordinate grid and " +
+                            "local project data. No third-party map tiles are rendered."
+                    } else {
+                        "Choose one of ${state.providers.size} approved providers. Only tiles intersecting " +
+                            "the visible viewport are requested and kept in a private 128 MiB cache; " +
+                            "multi-zoom area prefetch and offline packages are not implemented."
+                    },
                     style = MaterialTheme.typography.bodySmall,
                 )
+                if (state.providers.isNotEmpty()) {
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Box {
+                            OutlinedButton(
+                                onClick = { providerMenuExpanded = true },
+                                modifier = Modifier
+                                    .heightIn(min = 44.dp)
+                                    .testTag("basemap_provider_selector"),
+                            ) {
+                                Text(
+                                    provider?.label ?: "Coordinate Grid Only",
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = providerMenuExpanded,
+                                onDismissRequest = { providerMenuExpanded = false },
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Coordinate Grid Only") },
+                                    onClick = {
+                                        providerMenuExpanded = false
+                                        onSelectProvider(null)
+                                    },
+                                )
+                                state.providers.forEach { option ->
+                                    DropdownMenuItem(
+                                        text = { Text(option.label) },
+                                        onClick = {
+                                            providerMenuExpanded = false
+                                            onSelectProvider(option.id)
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                        OutlinedButton(
+                            onClick = onRefresh,
+                            enabled = provider != null && !state.isLoading,
+                            modifier = Modifier
+                                .heightIn(min = 44.dp)
+                                .testTag("refresh_visible_basemap"),
+                        ) {
+                            if (state.isLoading) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                                Spacer(Modifier.width(6.dp))
+                            }
+                            Text(if (state.isLoading) "Loading" else "Retry Visible View")
+                        }
+                    }
+                    if (provider != null) {
+                        Text(
+                            provider.attribution,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            provider.usageNotice,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        FlowRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            val loadSummary = when {
+                                state.isLoading -> "Loading the visible view"
+                                state.requestedTileCount == 0 -> "Waiting for a map viewport"
+                                else -> "${state.tiles.size}/${state.requestedTileCount} tiles at z${state.tileZoom}"
+                            }
+                            Text(
+                                "$loadSummary · Cache ${formatByteCount(state.cacheByteCount)}",
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                            TextButton(
+                                onClick = {
+                                    runCatching {
+                                        context.startActivity(
+                                            Intent(Intent.ACTION_VIEW, Uri.parse(provider.termsUrl)),
+                                        )
+                                    }
+                                },
+                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+                                modifier = Modifier.heightIn(min = 36.dp),
+                            ) {
+                                Text("Provider Terms")
+                            }
+                        }
+                    }
+                    state.message?.let { message ->
+                        Text(
+                            message,
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
                 Text(
-                    if (hasServiceContours) {
+                    if (state.providers.isEmpty() && !hasServiceContours) {
+                        "Terrain, clutter, GIS features, and coverage results are not rendered in this view."
+                    } else if (hasServiceContours) {
                         "Service-contour geometry is rendered only from supplied local results; this " +
                             "screen does not recalculate it. The model, ruleset, statistical basis, " +
                             "threshold, warnings, and NoData state remain visible above. Terrain, " +
-                            "clutter, other GIS features, and raster coverage are not rendered."
+                            "clutter, other GIS features, and raster coverage remain separate layers."
                     } else {
-                        "Terrain, clutter, GIS features, and coverage results are not rendered in this view."
+                        "Terrain, clutter, GIS features, and coverage results remain separate layers."
                     },
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -1671,22 +2294,46 @@ private fun IntSize.toGeographicViewport(): ViewportSizePx =
 private fun mapCanvasDescription(
     siteCount: Int,
     serviceContours: List<ServiceContourOverlay>,
+    coverageSurface: BroadcastCoverageSurface?,
+    coverageRenderMode: CoverageRenderMode,
+    duAssessments: List<RegulatoryDuAssessment>,
+    basemapProviderLabel: String?,
 ): String {
     val siteLabel = "$siteCount project ${if (siteCount == 1) "site" else "sites"}"
+    val basemapLabel = basemapProviderLabel?.let { label ->
+        "$label basemap with a WGS 84 coordinate grid"
+    } ?: "Offline geographic coordinate grid"
+    val coverageLabel = coverageSurface?.let { surface ->
+        ", a ${surface.width} by ${surface.height} ${coverageRenderMode.displayName} coverage surface"
+    }.orEmpty()
+    val duLabel = if (duAssessments.isEmpty()) {
+        ""
+    } else {
+        val failures = duAssessments.sumOf(RegulatoryDuAssessment::failingPointCount)
+        ", ${duAssessments.size} D/U reference assessments with $failures failing boundary points"
+    }
     if (serviceContours.isEmpty()) {
-        return "Offline geographic coordinate grid with $siteLabel. " +
-            "No basemap is installed. Pan with one finger and pinch to zoom."
+        return "$basemapLabel with $siteLabel$coverageLabel$duLabel. " +
+            if (basemapProviderLabel == null) {
+                "No basemap is installed. Pan with one finger and pinch to zoom."
+            } else {
+                "Pan with one finger and pinch to zoom."
+            }
     }
     val protectedCount = serviceContours.count { it.purpose == ContourPurpose.PROTECTED }
     val screeningCount = serviceContours.count { it.purpose == ContourPurpose.SCREENING }
     val completeCount = serviceContours.count { it.status == ContourStatus.COMPLETE }
     val incompleteCount = serviceContours.count { it.status == ContourStatus.INCOMPLETE }
     val noDataCount = serviceContours.count { it.status == ContourStatus.NO_DATA }
-    return "Offline geographic coordinate grid with $siteLabel and " +
+    return "$basemapLabel with $siteLabel$coverageLabel$duLabel and " +
         "${serviceContours.size} service contour ${if (serviceContours.size == 1) "record" else "records"}: " +
         "$protectedCount protected, $screeningCount statistical screening; " +
         "$completeCount complete geometry, $incompleteCount incomplete geometry, $noDataCount NoData. " +
-        "No basemap is installed. Pan with one finger and pinch to zoom."
+        if (basemapProviderLabel == null) {
+            "No basemap is installed. Pan with one finger and pinch to zoom."
+        } else {
+            "Pan with one finger and pinch to zoom."
+        }
 }
 
 private fun contourServiceLabel(service: BroadcastService): String = when (service) {
@@ -1763,6 +2410,16 @@ private fun formatScaleDistance(distanceMeters: Double): String = if (distanceMe
     String.format(Locale.US, "%.0f m", distanceMeters)
 }
 
+private fun formatByteCount(byteCount: Long): String = when {
+    byteCount >= 1024L * 1024L -> String.format(
+        Locale.US,
+        "%.1f MiB",
+        byteCount / (1024.0 * 1024.0),
+    )
+    byteCount >= 1024L -> String.format(Locale.US, "%.1f KiB", byteCount / 1024.0)
+    else -> "$byteCount B"
+}
+
 private fun siteElevationLabel(site: RadioSite): String = site.groundElevationM?.let { elevation ->
     "Elevation: Project value | ${formatCompactNumber(elevation)} m (stored, not DEM-derived)"
 } ?: "Elevation: NoData | no stored project elevation"
@@ -1808,3 +2465,4 @@ private const val MAX_GRID_LINES = 48
 private const val SELECTED_SITE_PANEL_INDEX = 3
 private const val MAX_SAVEABLE_UI_ID_LENGTH = 256
 private const val MAX_COORDINATE_DRAFT_LENGTH = 64
+private const val BASEMAP_VIEWPORT_DEBOUNCE_MILLIS = 350L

@@ -39,6 +39,8 @@ import com.gecesars.atxplan.domain.contour.BroadcastService
 import com.gecesars.atxplan.domain.contour.ContourPurpose
 import com.gecesars.atxplan.domain.contour.ContourStatus
 import com.gecesars.atxplan.domain.contour.ServiceContourOverlay
+import com.gecesars.atxplan.domain.coverage.BroadcastCoverageSurface
+import com.gecesars.atxplan.domain.coverage.CoverageGeographicBounds
 import com.gecesars.atxplan.domain.model.GeoPoint
 import com.gecesars.atxplan.domain.model.PlannerProject
 import com.gecesars.atxplan.domain.model.RadioSite
@@ -114,6 +116,36 @@ class EngineeringMapScreenTest {
                 hasText("Elevation: NoData | no stored project elevation", substring = true),
             ),
         ).assertIsDisplayed()
+    }
+
+    @Test
+    fun coverageSurfaceModesAndNoDataLegendRemainReachableAtLargeText() {
+        composeRule.setContent {
+            val deviceDensity = LocalDensity.current.density
+            CompositionLocalProvider(
+                LocalDensity provides Density(deviceDensity, fontScale = 1.3f),
+            ) {
+                AtxPlanTheme {
+                    Box(modifier = Modifier.size(width = 360.dp, height = 560.dp)) {
+                        EngineeringMapScreen(
+                            project = mapProject,
+                            coverageSurface = coverageSurface,
+                        )
+                    }
+                }
+            }
+        }
+
+        composeRule.onNodeWithTag("engineering_map_canvas").assertIsDisplayed()
+        composeRule.onNodeWithTag("coverage_render_mode").assertIsDisplayed().performClick()
+        composeRule.onNodeWithText("Continuous").performClick()
+        composeRule.onNodeWithTag("engineering_map_screen")
+            .performScrollToNode(hasTestTag("coverage_legend"))
+        composeRule.onNodeWithTag("coverage_legend").assertIsDisplayed()
+        composeRule.onNodeWithText("Continuous").assertIsDisplayed()
+        composeRule.onNodeWithText("transparent below threshold and for NoData", substring = true)
+            .assertIsDisplayed()
+        composeRule.onNodeWithText("4 of 9 cells NoData", substring = true).assertIsDisplayed()
     }
 
     @Test
@@ -527,6 +559,38 @@ class EngineeringMapScreenTest {
                 location = GeoPoint(latitude = -23.60, longitude = -46.72),
             ),
         ),
+    )
+
+    private val coverageSurface = BroadcastCoverageSurface(
+        width = 3,
+        height = 3,
+        bounds = CoverageGeographicBounds(
+            northLatitude = -23.50,
+            southLatitude = -23.60,
+            westLongitude = -46.70,
+            eastLongitude = -46.60,
+        ),
+        valuesDbuvPerM = floatArrayOf(
+            Float.NaN,
+            50.0f,
+            55.0f,
+            60.0f,
+            65.0f,
+            70.0f,
+            Float.NaN,
+            Float.NaN,
+            Float.NaN,
+        ),
+        minimumCalculatedDbuvPerM = 50.0,
+        maximumCalculatedDbuvPerM = 70.0,
+        metricId = "electric-field-strength",
+        unit = "dBµV/m",
+        modelId = "test-p1546",
+        statisticalBasis = "E(50,90) test fixture",
+        noDataMeaning = "No field-strength value was calculated for this test cell.",
+        inputFingerprint = "c".repeat(64),
+        directionalPatternApplied = false,
+        warnings = listOf("Test fixture only."),
     )
 
     private val serviceContours = listOf(

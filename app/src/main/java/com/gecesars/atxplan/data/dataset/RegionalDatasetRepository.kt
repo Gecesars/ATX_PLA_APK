@@ -556,6 +556,9 @@ class FileRegionalDatasetRepository(
             RegionalArtifactResult(
                 artifact = artifact,
                 status = RegionalTransferStatus.FAILED,
+                requestedUrl = metadata?.url ?: artifact.url,
+                effectiveUrl = metadata?.effectiveUrl.takeIf { retained },
+                acquiredAt = metadata?.acquiredAt.takeIf { retained && completedDownload },
                 bytes = staging.length().takeIf { retained },
                 sha256 = if (retained && completedDownload) {
                     sha256(staging, artifact.source.maximumArtifactBytes)
@@ -1096,9 +1099,10 @@ class FileRegionalDatasetRepository(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
+            val detail = error.conciseMessage("The processor did not provide an error detail.")
             throw RegionalDatasetException(
                 RegionalDatasetFailure.PROCESSING_FAILED,
-                "The regional artifact failed validation or processing.",
+                "The regional artifact failed validation or processing: $detail",
                 error,
             )
         }

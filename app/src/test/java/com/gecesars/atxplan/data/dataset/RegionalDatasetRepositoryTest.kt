@@ -231,6 +231,44 @@ class RegionalDatasetRepositoryTest {
     }
 
     @Test
+    fun `processor failure retains completed download provenance and bounded diagnostic`() = runTest {
+        val plan = rasterPlan()
+        val artifact = plan.artifacts.single()
+        val effectiveUrl = "${artifact.url}?served=processor-failure-test"
+        val payload = "complete-but-invalid-for-test-processor".toByteArray()
+        val transport = QueueTransport(
+            {
+                response(
+                    url = effectiveUrl,
+                    status = 200,
+                    bytes = payload,
+                    etag = "\"processor-failure-v1\"",
+                )
+            },
+        )
+        val repository = repository(
+            transport = transport,
+            processor = RegionalArtifactProcessor { _, _, _, _ ->
+                throw IOException("Injected TIFF metadata failure.")
+            },
+        )
+
+        val result = repository.acquire(plan).results.single()
+
+        assertEquals(RegionalTransferStatus.FAILED, result.status)
+        assertEquals(artifact.url, result.requestedUrl)
+        assertEquals(effectiveUrl, result.effectiveUrl)
+        assertEquals("2026-08-27T17:46:40.000Z", result.acquiredAt)
+        assertEquals(sha256(payload), result.sha256)
+        assertTrue(result.error.orEmpty().contains("Injected TIFF metadata failure"))
+        val record = checkNotNull(repository.loadInventory().artifacts[artifact.relativePath])
+        assertEquals(RegionalProcessingState.FAILED, record.processingState)
+        assertEquals(effectiveUrl, record.effectiveUrl)
+        assertEquals(result.acquiredAt, record.acquiredAt)
+        assertTrue(record.error.orEmpty().contains("Injected TIFF metadata failure"))
+    }
+
+    @Test
     fun `immutable tile is reacquired when current plan bounds change within the same path`() = runTest {
         val firstPlan = rasterPlan()
         val secondPlan = RegionalDatasetPlanner().plan(

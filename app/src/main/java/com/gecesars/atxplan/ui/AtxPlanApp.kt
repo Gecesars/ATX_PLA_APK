@@ -56,10 +56,17 @@ import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
 import com.gecesars.atxplan.ui.components.StorageErrorBanner
+import com.gecesars.atxplan.data.export.BrazilDigitalTvStudyPdfExporter
+import com.gecesars.atxplan.data.export.BrazilDigitalTvStudyReportExporter
+import com.gecesars.atxplan.data.export.BrazilDigitalTvStudyXlsxExporter
 import com.gecesars.atxplan.data.export.ServiceContourKmzExporter
+import com.gecesars.atxplan.data.regulatory.AndroidBrazilDigitalTvStudyRunner
 import com.gecesars.atxplan.ui.dataset.DataCatalogViewModel
 import com.gecesars.atxplan.ui.dataset.RegionalDataViewModel
 import com.gecesars.atxplan.domain.contour.BrazilBroadcastContourPlanner
+import com.gecesars.atxplan.domain.contour.BrazilDigitalTvRegulatoryStudyResult
+import com.gecesars.atxplan.domain.contour.BroadcastService
+import com.gecesars.atxplan.domain.contour.ContourPurpose
 import com.gecesars.atxplan.domain.contour.ServiceContourOverlay
 import com.gecesars.atxplan.domain.dataset.RegionalBounds
 import com.gecesars.atxplan.domain.model.PlannerProject
@@ -90,6 +97,7 @@ import com.gecesars.atxplan.ui.theme.AtxNavy
 import com.gecesars.atxplan.ui.theme.AtxTeal
 import com.gecesars.atxplan.ui.antenna.AntennaPatternLabViewModel
 import com.gecesars.atxplan.ui.anatel.AnatelBasicPlanViewModel
+import com.gecesars.atxplan.ui.basemap.BasemapViewModel
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
@@ -97,6 +105,7 @@ import java.security.MessageDigest
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -184,6 +193,14 @@ private fun AtxPlanShell(
     var navigationNotice by remember { mutableStateOf<String?>(null) }
     val context = LocalContext.current
     val exportScope = rememberCoroutineScope()
+    val regulatoryStudyRunner = remember(context.applicationContext) {
+        AndroidBrazilDigitalTvStudyRunner(context.applicationContext)
+    }
+    var regulatoryStudy by remember { mutableStateOf<BrazilDigitalTvRegulatoryStudyResult?>(null) }
+    var regulatoryStudyError by remember { mutableStateOf<String?>(null) }
+    var regulatoryStudyProgress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    var isRunningRegulatoryStudy by remember { mutableStateOf(false) }
+    var regulatoryStudyJob by remember { mutableStateOf<Job?>(null) }
     val activeTopLevelRoute = when (activeRoute) {
         is RfPathEditorRoute,
         is ProjectRenameRoute,
@@ -226,6 +243,15 @@ private fun AtxPlanShell(
             isEditorSavePending = false
             pendingEditorNavigation = null
         }
+    }
+
+    LaunchedEffect(uiState.selectedProject) {
+        regulatoryStudyJob?.cancel()
+        regulatoryStudyJob = null
+        regulatoryStudy = null
+        regulatoryStudyError = null
+        regulatoryStudyProgress = null
+        isRunningRegulatoryStudy = false
     }
 
     LaunchedEffect(navigationNotice) {
@@ -368,13 +394,40 @@ private fun AtxPlanShell(
                                     )
                                 }
                                 MapRoute -> NavEntry(route) {
+                                    val basemapViewModel: BasemapViewModel = viewModel(
+                                        factory = BasemapViewModel.factory(context),
+                                    )
+                                    val basemapState by basemapViewModel.state
+                                        .collectAsStateWithLifecycle()
                                     val state = currentUiState.value
-                                    val serviceContours = remember(state.selectedProject) {
-                                        BrazilBroadcastContourPlanner.plan(state.selectedProject).overlays
+                                    val serviceContours = remember(state.selectedProject, regulatoryStudy) {
+                                        val planned = BrazilBroadcastContourPlanner
+                                            .plan(state.selectedProject)
+                                            .overlays
+                                        val calculated = regulatoryStudy?.takeIf { study ->
+                                            study.projectId == state.selectedProject?.id
+                                        }
+                                        if (calculated == null) {
+                                            planned
+                                        } else {
+                                            planned.filterNot { overlay ->
+                                                overlay.siteId == calculated.siteId &&
+                                                    overlay.sectorId == calculated.sectorId &&
+                                                    overlay.service == BroadcastService.DIGITAL_TV &&
+                                                    overlay.purpose == ContourPurpose.PROTECTED
+                                            } + calculated.contour
+                                        }
                                     }
                                     EngineeringMapScreen(
                                         project = state.selectedProject,
                                         serviceContours = serviceContours,
+                                        coverageSurface = regulatoryStudy?.takeIf { study ->
+                                            study.projectId == state.selectedProject?.id
+                                        }?.coverageSurface,
+                                        duAssessments = regulatoryStudy?.takeIf { study ->
+                                            study.projectId == state.selectedProject?.id
+                                        }?.duAssessments.orEmpty(),
+                                        basemapState = basemapState,
                                         isCatalogWritable = state.isCatalogWritable,
                                         isSaving = state.isSavingCatalog,
                                         catalogMutationCompletionCount =
@@ -383,6 +436,9 @@ private fun AtxPlanShell(
                                         activeMutationRequestId = state.activeRfMutationRequestId,
                                         lastMutationReceipt = state.lastRfMutationReceipt,
                                         onMoveSite = onMutateRfAsset,
+                                        onSelectBasemapProvider = basemapViewModel::selectProvider,
+                                        onRequestVisibleBasemap = basemapViewModel::requestVisibleTiles,
+                                        onRefreshVisibleBasemap = basemapViewModel::refreshVisibleTiles,
                                         onExportServiceContours = { destination ->
                                             val contourSnapshot = serviceContours
                                             exportScope.launch {
@@ -408,6 +464,107 @@ private fun AtxPlanShell(
                                             !currentUiState.value.isSavingCatalog,
                                         onCalculate = onCalculateLink,
                                         onRunProjectLinkStudy = onRunProjectLinkStudy,
+                                        brazilDigitalTvStudy = regulatoryStudy?.takeIf { study ->
+                                            study.projectId == currentUiState.value.selectedProject?.id
+                                        },
+                                        brazilDigitalTvStudyError = regulatoryStudyError,
+                                        isRunningBrazilDigitalTvStudy = isRunningRegulatoryStudy,
+                                        brazilDigitalTvStudyProgress = regulatoryStudyProgress,
+                                        onRunBrazilDigitalTvStudy = { radiusKm ->
+                                            val projectSnapshot = currentUiState.value.selectedProject
+                                            if (projectSnapshot == null) {
+                                                regulatoryStudyError =
+                                                    "Create or select an independent project before running this study."
+                                            } else {
+                                                regulatoryStudyJob?.cancel()
+                                                regulatoryStudy = null
+                                                regulatoryStudyError = null
+                                                regulatoryStudyProgress = 0 to 1
+                                                isRunningRegulatoryStudy = true
+                                                regulatoryStudyJob = exportScope.launch {
+                                                    try {
+                                                        val calculated = regulatoryStudyRunner.run(
+                                                            project = projectSnapshot,
+                                                            radiusKm = radiusKm,
+                                                            referenceStateCode = "SP",
+                                                            onProgress = { completed, total ->
+                                                                regulatoryStudyProgress = completed to total
+                                                            },
+                                                        )
+                                                        if (
+                                                            currentUiState.value.selectedProject?.id ==
+                                                            projectSnapshot.id
+                                                        ) {
+                                                            regulatoryStudy = calculated
+                                                        }
+                                                    } catch (error: CancellationException) {
+                                                        throw error
+                                                    } catch (error: Exception) {
+                                                        regulatoryStudyError = regulatoryStudyErrorMessage(error)
+                                                    } finally {
+                                                        isRunningRegulatoryStudy = false
+                                                        regulatoryStudyProgress = null
+                                                        regulatoryStudyJob = null
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        onExportBrazilDigitalTvReport = { destination ->
+                                            val resultSnapshot = regulatoryStudy
+                                            if (resultSnapshot == null) {
+                                                regulatoryStudyError = "Run the regulatory study before exporting its report."
+                                            } else {
+                                                exportScope.launch {
+                                                    navigationNotice = exportBrazilDigitalTvReport(
+                                                        context = context,
+                                                        result = resultSnapshot,
+                                                        destination = destination,
+                                                    )
+                                                }
+                                            }
+                                        },
+                                        onExportBrazilDigitalTvPdf = { destination ->
+                                            val resultSnapshot = regulatoryStudy
+                                            if (resultSnapshot == null) {
+                                                regulatoryStudyError = "Run the regulatory study before exporting its PDF."
+                                            } else {
+                                                exportScope.launch {
+                                                    navigationNotice = exportBrazilDigitalTvPdf(
+                                                        context = context,
+                                                        result = resultSnapshot,
+                                                        destination = destination,
+                                                    )
+                                                }
+                                            }
+                                        },
+                                        onExportBrazilDigitalTvXlsx = { destination ->
+                                            val resultSnapshot = regulatoryStudy
+                                            if (resultSnapshot == null) {
+                                                regulatoryStudyError = "Run the regulatory study before exporting its workbook."
+                                            } else {
+                                                exportScope.launch {
+                                                    navigationNotice = exportBrazilDigitalTvXlsx(
+                                                        context = context,
+                                                        result = resultSnapshot,
+                                                        destination = destination,
+                                                    )
+                                                }
+                                            }
+                                        },
+                                        onExportBrazilDigitalTvKmz = { destination ->
+                                            val resultSnapshot = regulatoryStudy
+                                            if (resultSnapshot == null) {
+                                                regulatoryStudyError = "Run the regulatory study before exporting its KMZ."
+                                            } else {
+                                                exportScope.launch {
+                                                    navigationNotice = exportServiceContoursKmz(
+                                                        context = context,
+                                                        overlays = listOf(resultSnapshot.contour),
+                                                        destination = destination,
+                                                    )
+                                                }
+                                            }
+                                        },
                                     )
                                 }
                                 CatalogRoute -> NavEntry(route) {
@@ -658,6 +815,152 @@ private fun PlannerProject?.suggestedRegionalBounds(): RegionalBounds? {
     return candidate?.takeIf { bounds ->
         bounds.widthDegrees <= 1.0 && bounds.heightDegrees <= 1.0
     }
+}
+
+private fun regulatoryStudyErrorMessage(error: Exception): String = when (error) {
+    is IOException,
+    is IllegalArgumentException,
+    is IllegalStateException,
+    is SecurityException,
+    -> error.message?.take(500) ?: "The regulatory study failed validation."
+
+    else -> "The regulatory study could not be completed."
+}
+
+private suspend fun exportBrazilDigitalTvReport(
+    context: Context,
+    result: BrazilDigitalTvRegulatoryStudyResult,
+    destination: Uri,
+): String = try {
+    val report = withContext(Dispatchers.Default) {
+        BrazilDigitalTvStudyReportExporter.export(result)
+    }
+    val expectedSha256 = MessageDigest.getInstance("SHA-256")
+        .digest(report)
+        .joinToString(separator = "") { byte ->
+            "%02x".format(Locale.ROOT, byte.toInt() and 0xff)
+        }
+    withContext(Dispatchers.IO) {
+        context.contentResolver.openOutputStream(destination, "w")?.use { output ->
+            output.write(report)
+            output.flush()
+        } ?: throw IOException("The selected report destination could not be opened.")
+        val verified = context.contentResolver.openInputStream(destination)?.use { input ->
+            input.readBounded(BrazilDigitalTvStudyReportExporter.MAX_OUTPUT_BYTES)
+        } ?: throw IOException("The exported report could not be reopened for verification.")
+        if (!verified.contentEquals(report)) {
+            throw IOException("The exported report failed read-back verification.")
+        }
+        val verifiedSha256 = MessageDigest.getInstance("SHA-256")
+            .digest(verified)
+            .joinToString(separator = "") { byte ->
+                "%02x".format(Locale.ROOT, byte.toInt() and 0xff)
+            }
+        if (verifiedSha256 != expectedSha256) {
+            throw IOException("The exported report failed SHA-256 verification.")
+        }
+    }
+    "HTML report verified · ${report.size} bytes · SHA-256 ${expectedSha256.take(12)}…"
+} catch (error: CancellationException) {
+    throw error
+} catch (error: Exception) {
+    when (error) {
+        is IOException,
+        is IllegalArgumentException,
+        is SecurityException,
+        -> error.message?.take(500) ?: "The report export failed validation."
+
+        else -> "The report export could not be completed."
+    }
+}
+
+private suspend fun exportBrazilDigitalTvPdf(
+    context: Context,
+    result: BrazilDigitalTvRegulatoryStudyResult,
+    destination: Uri,
+): String = exportVerifiedRegulatoryDocument(
+    context = context,
+    destination = destination,
+    maximumBytes = BrazilDigitalTvStudyPdfExporter.MAX_OUTPUT_BYTES,
+    formatLabel = "PDF",
+    build = { BrazilDigitalTvStudyPdfExporter.export(result) },
+)
+
+private suspend fun exportBrazilDigitalTvXlsx(
+    context: Context,
+    result: BrazilDigitalTvRegulatoryStudyResult,
+    destination: Uri,
+): String = exportVerifiedRegulatoryDocument(
+    context = context,
+    destination = destination,
+    maximumBytes = BrazilDigitalTvStudyXlsxExporter.MAX_OUTPUT_BYTES,
+    formatLabel = "XLSX",
+    build = { BrazilDigitalTvStudyXlsxExporter.export(result) },
+)
+
+private suspend fun exportVerifiedRegulatoryDocument(
+    context: Context,
+    destination: Uri,
+    maximumBytes: Int,
+    formatLabel: String,
+    build: () -> ByteArray,
+): String = try {
+    val document = withContext(Dispatchers.Default) { build() }
+    val expectedSha256 = MessageDigest.getInstance("SHA-256")
+        .digest(document)
+        .joinToString(separator = "") { byte ->
+            "%02x".format(Locale.ROOT, byte.toInt() and 0xff)
+        }
+    withContext(Dispatchers.IO) {
+        context.contentResolver.openOutputStream(destination, "w")?.use { output ->
+            output.write(document)
+            output.flush()
+        } ?: throw IOException("The selected $formatLabel destination could not be opened.")
+        val verified = context.contentResolver.openInputStream(destination)?.use { input ->
+            input.readBounded(maximumBytes)
+        } ?: throw IOException("The exported $formatLabel could not be reopened for verification.")
+        if (!verified.contentEquals(document)) {
+            throw IOException("The exported $formatLabel failed read-back verification.")
+        }
+        val verifiedSha256 = MessageDigest.getInstance("SHA-256")
+            .digest(verified)
+            .joinToString(separator = "") { byte ->
+                "%02x".format(Locale.ROOT, byte.toInt() and 0xff)
+            }
+        if (verifiedSha256 != expectedSha256) {
+            throw IOException("The exported $formatLabel failed SHA-256 verification.")
+        }
+    }
+    "$formatLabel verified · ${document.size} bytes · SHA-256 ${expectedSha256.take(12)}…"
+} catch (error: CancellationException) {
+    throw error
+} catch (error: Exception) {
+    when (error) {
+        is IOException,
+        is IllegalArgumentException,
+        is SecurityException,
+        -> error.message?.take(500) ?: "The $formatLabel export failed validation."
+
+        else -> "The $formatLabel export could not be completed."
+    }
+}
+
+private fun InputStream.readBounded(maximumBytes: Int): ByteArray {
+    require(maximumBytes > 0) { "The verification byte limit must be positive." }
+    val output = ByteArrayOutputStream()
+    val buffer = ByteArray(64 * 1024)
+    var total = 0
+    while (true) {
+        val read = read(buffer)
+        if (read < 0) break
+        if (read == 0) continue
+        total += read
+        if (total > maximumBytes) {
+            throw IOException("The exported artifact exceeds its verification limit.")
+        }
+        output.write(buffer, 0, read)
+    }
+    return output.toByteArray()
 }
 
 private suspend fun exportServiceContoursKmz(

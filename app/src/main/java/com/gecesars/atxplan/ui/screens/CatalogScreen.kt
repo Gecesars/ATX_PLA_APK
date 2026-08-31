@@ -112,7 +112,7 @@ private val capabilities = listOf(
         "Regional DSM, land cover, and buildings",
         "Acquisition foundation delivered",
         StatusTone.INFO,
-        "User-bounded downloads add hashes, provenance, licenses, resumable GET partials, a disk budget, GeoTIFF metadata indexing, and experimental OSM building processing. Terrain, clutter, and RF sampling remain unavailable.",
+        "User-bounded downloads add hashes, provenance, licenses, resumable GET partials, a disk budget, GeoTIFF processing, and experimental OSM building processing. Supported Copernicus float32 tiles can supply DSM elevations to the digital-TV study; bare-earth DTM, clutter loss, and building-height interpretation remain unavailable.",
     ),
     Capability(
         "Propagation",
@@ -539,7 +539,7 @@ private fun RegionalRequestCard(
             }
             if (RegionalDatasetSelection.COPERNICUS_GLO_30_DSM in state.selections) {
                 RegionalCompactWarning(
-                    "Copernicus GLO-30 is a surface model (DSM), not a bare-earth DTM. GeoTIFF processing validates and indexes metadata only; it does not create terrain samples.",
+                    "Copernicus GLO-30 is a surface model (DSM), not a bare-earth DTM. Supported processed float32 tiles are sampled on demand by the Brazil digital-TV regulatory study.",
                 )
             }
             if (RegionalDatasetSelection.ESA_WORLDCOVER_2021 in state.selections) {
@@ -985,12 +985,12 @@ private fun RegionalReadinessNotice() {
         ) {
             Text("Engineering Readiness", style = MaterialTheme.typography.titleMedium)
             Text(
-                "Acquisition and bounded processing are a data foundation only. GeoTIFF outputs are metadata-indexed, not raster-sampled. Building GeoJSON is experimental.",
+                "Supported processed Copernicus float32 GeoTIFF tiles are sampled on demand by the Brazil digital-TV regulatory study. Building GeoJSON remains experimental.",
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                "No downloaded artifact is currently connected to terrain profiles, DTM generation, clutter loss, propagation, coverage, interference, or other RF results.",
+                "The regulatory study connects Copernicus DSM terrain to HNMT and P.526 paths only. It does not generate a DTM or apply WorldCover, buildings, clutter, or vegetation losses.",
                 style = MaterialTheme.typography.bodySmall,
             )
         }

@@ -239,7 +239,13 @@ object RegionalTiffMetadataIndexer {
             val pixelScale = entry(TAG_MODEL_PIXEL_SCALE)
                 ?.readDoubleValues(reader, header, limits, budget)
                 ?.also { values ->
-                    if (values.size != 3 || values.any { !it.isFinite() || it <= 0.0 }) {
+                    if (
+                        values.size != 3 ||
+                        values.any { !it.isFinite() } ||
+                        values[0] <= 0.0 ||
+                        values[1] <= 0.0 ||
+                        values[2] < 0.0
+                    ) {
                         throw IOException("The TIFF model pixel scale is malformed.")
                     }
                 }

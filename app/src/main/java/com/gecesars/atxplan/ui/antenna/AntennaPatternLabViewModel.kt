@@ -30,6 +30,7 @@ import com.gecesars.atxplan.domain.antenna.AntennaCompositionOutcome
 import com.gecesars.atxplan.domain.antenna.ApertureDirection
 import com.gecesars.atxplan.domain.antenna.AperturePositionMeters
 import com.gecesars.atxplan.domain.antenna.CanonicalAntennaPattern
+import com.gecesars.atxplan.domain.antenna.ElementOrientation
 import com.gecesars.atxplan.domain.antenna.PatternCutPlane
 import com.gecesars.atxplan.domain.application.AntennaPatternCatalogUseCase
 import com.gecesars.atxplan.domain.application.AntennaPatternMutationStatus
@@ -63,6 +64,9 @@ import java.security.MessageDigest
 import java.util.Locale
 import java.util.UUID
 import kotlin.math.acos
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 
 class AntennaPatternLabViewModel private constructor(
     private val applicationContext: Context,
@@ -974,7 +978,7 @@ class AntennaPatternLabViewModel private constructor(
     }
 }
 
-private fun buildArrayConfiguration(
+internal fun buildArrayConfiguration(
     request: AntennaArraySynthesisRequest,
     basePattern: CanonicalAntennaPattern,
 ): AntennaArrayConfiguration {
@@ -983,53 +987,42 @@ private fun buildArrayConfiguration(
         horizontalAngleDegrees = request.horizontalScanDegrees,
         elevationAngleDegrees = request.verticalScanDegrees,
     )
-    val amplitudeWeights = buildList {
-        repeat(request.rows) { row ->
-            repeat(request.columns) { column ->
-                add(
-                    taperAmplitude(request.columns, column, request.taper) *
-                        taperAmplitude(request.rows, row, request.taper),
-                )
-            }
-        }
+    val plannedElements = planArrayGeometry(request)
+    val amplitudeWeights = plannedElements.map { planned ->
+        taperAmplitude(planned.horizontalTaperCount, planned.horizontalTaperIndex, request.taper) *
+            taperAmplitude(planned.verticalTaperCount, planned.verticalTaperIndex, request.taper)
     }
     val totalRawPower = amplitudeWeights.sumOf { amplitude -> amplitude * amplitude }
     require(totalRawPower.isFinite() && totalRawPower > 0.0) {
         "The selected array taper produced no positive finite excitation."
     }
-    var elementIndex = 0
-    val elements = buildList {
-        repeat(request.rows) { row ->
-            repeat(request.columns) { column ->
-                val xWavelengths =
-                    (column - (request.columns - 1) / 2.0) * request.horizontalSpacingWavelengths
-                val yWavelengths =
-                    (row - (request.rows - 1) / 2.0) * request.verticalSpacingWavelengths
-                val feedPhaseDegrees = -360.0 *
-                    (xWavelengths * direction.x + yWavelengths * direction.y)
-                val amplitude = amplitudeWeights[elementIndex]
-                add(
-                    AntennaArrayElement(
-                        id = "element-${elementIndex + 1}",
-                        positionMeters = AperturePositionMeters.fromWavelengths(
-                            xWavelengths = xWavelengths,
-                            yWavelengths = yWavelengths,
-                            frequencyHz = frequencyHz,
-                        ),
-                        pattern = basePattern,
-                        powerFraction = amplitude * amplitude / totalRawPower,
-                        feedPhaseDegrees = feedPhaseDegrees,
-                    ),
-                )
-                elementIndex += 1
-            }
-        }
+    val elements = plannedElements.mapIndexed { elementIndex, planned ->
+        val feedPhaseDegrees = -360.0 * (
+            planned.xWavelengths * direction.x +
+                planned.yWavelengths * direction.y +
+                planned.zWavelengths * direction.z
+            )
+        val amplitude = amplitudeWeights[elementIndex]
+        AntennaArrayElement(
+            id = "element-${elementIndex + 1}",
+            positionMeters = AperturePositionMeters.fromWavelengths(
+                xWavelengths = planned.xWavelengths,
+                yWavelengths = planned.yWavelengths,
+                zWavelengths = planned.zWavelengths,
+                frequencyHz = frequencyHz,
+            ),
+            pattern = basePattern,
+            powerFraction = amplitude * amplitude / totalRawPower,
+            feedPhaseDegrees = feedPhaseDegrees,
+            orientation = planned.orientation,
+        )
     }
     val deterministicId = sha256(
         listOf(
             request.name,
             request.basePatternId.orEmpty(),
             request.frequencyMHz,
+            request.topology.name,
             request.columns,
             request.rows,
             request.horizontalSpacingWavelengths,
@@ -1049,12 +1042,103 @@ private fun buildArrayConfiguration(
     )
 }
 
+private data class PlannedArrayElement(
+    val xWavelengths: Double,
+    val yWavelengths: Double,
+    val zWavelengths: Double = 0.0,
+    val horizontalTaperCount: Int = 1,
+    val horizontalTaperIndex: Int = 0,
+    val verticalTaperCount: Int = 1,
+    val verticalTaperIndex: Int = 0,
+    val orientation: ElementOrientation = ElementOrientation(),
+)
+
+private fun planArrayGeometry(request: AntennaArraySynthesisRequest): List<PlannedArrayElement> =
+    when (request.topology) {
+        AntennaArrayTopology.SINGLE -> listOf(PlannedArrayElement(0.0, 0.0))
+
+        AntennaArrayTopology.VERTICAL_STACK -> List(request.rows) { row ->
+            PlannedArrayElement(
+                xWavelengths = 0.0,
+                yWavelengths =
+                    (row - (request.rows - 1) / 2.0) * request.verticalSpacingWavelengths,
+                verticalTaperCount = request.rows,
+                verticalTaperIndex = row,
+            )
+        }
+
+        AntennaArrayTopology.HORIZONTAL_LINEAR -> List(request.columns) { column ->
+            PlannedArrayElement(
+                xWavelengths =
+                    (column - (request.columns - 1) / 2.0) * request.horizontalSpacingWavelengths,
+                yWavelengths = 0.0,
+                horizontalTaperCount = request.columns,
+                horizontalTaperIndex = column,
+            )
+        }
+
+        AntennaArrayTopology.PLANAR -> buildList {
+            repeat(request.rows) { row ->
+                repeat(request.columns) { column ->
+                    add(
+                        PlannedArrayElement(
+                            xWavelengths =
+                                (column - (request.columns - 1) / 2.0) *
+                                    request.horizontalSpacingWavelengths,
+                            yWavelengths =
+                                (row - (request.rows - 1) / 2.0) *
+                                    request.verticalSpacingWavelengths,
+                            horizontalTaperCount = request.columns,
+                            horizontalTaperIndex = column,
+                            verticalTaperCount = request.rows,
+                            verticalTaperIndex = row,
+                        ),
+                    )
+                }
+            }
+        }
+
+        AntennaArrayTopology.CIRCULAR -> List(request.columns) { element ->
+            val angleRadians = 2.0 * PI * element / request.columns
+            PlannedArrayElement(
+                xWavelengths = request.horizontalSpacingWavelengths * cos(angleRadians),
+                yWavelengths = request.horizontalSpacingWavelengths * sin(angleRadians),
+            )
+        }
+
+        AntennaArrayTopology.MULTIPANEL -> buildList {
+            repeat(request.columns) { panel ->
+                val horizontalOrientation = 360.0 * panel / request.columns
+                val orientationRadians = Math.toRadians(horizontalOrientation)
+                repeat(request.rows) { row ->
+                    add(
+                        PlannedArrayElement(
+                            xWavelengths =
+                                request.horizontalSpacingWavelengths * sin(orientationRadians),
+                            yWavelengths =
+                                (row - (request.rows - 1) / 2.0) *
+                                    request.verticalSpacingWavelengths,
+                            zWavelengths =
+                                request.horizontalSpacingWavelengths * cos(orientationRadians),
+                            verticalTaperCount = request.rows,
+                            verticalTaperIndex = row,
+                            orientation = ElementOrientation(
+                                horizontalAngleDegrees = horizontalOrientation,
+                            ),
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
 private fun taperAmplitude(
     count: Int,
     index: Int,
     taper: AntennaArrayTaper,
 ): Double = when (taper) {
     AntennaArrayTaper.UNIFORM -> 1.0
+    AntennaArrayTaper.COSINE -> if (count == 1) 1.0 else sin(PI * (index + 0.5) / count)
     AntennaArrayTaper.BINOMIAL -> binomialCoefficient(count - 1, index)
 }
 

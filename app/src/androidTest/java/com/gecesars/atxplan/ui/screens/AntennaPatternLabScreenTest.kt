@@ -26,6 +26,8 @@ import com.gecesars.atxplan.domain.model.ProjectArtifactReference
 import com.gecesars.atxplan.domain.model.ProjectArtifactRole
 import com.gecesars.atxplan.ui.antenna.AntennaPrnConventionChoicePreview
 import com.gecesars.atxplan.ui.antenna.AntennaPrnValueInterpretation
+import com.gecesars.atxplan.ui.antenna.AntennaArrayTaper
+import com.gecesars.atxplan.ui.antenna.AntennaArrayTopology
 import com.gecesars.atxplan.ui.antenna.AntennaPatternExportFormat
 import com.gecesars.atxplan.ui.antenna.AntennaPatternExportPreview
 import com.gecesars.atxplan.ui.antenna.AntennaPatternImportPreview
@@ -105,6 +107,54 @@ class AntennaPatternLabScreenTest {
         composeRule.onNodeWithText("Add a transmitter sector before assigning a pattern.")
             .performScrollTo()
             .assertIsDisplayed()
+    }
+
+    @Test
+    fun composerExposesMultipanelTopologyAndCosineTaper() {
+        var selectedTopology: AntennaArrayTopology? = null
+        var selectedTaper: AntennaArrayTaper? = null
+        composeRule.setContent {
+            AtxPlanTheme {
+                AntennaPatternLabScreen(
+                    project = emptyProject,
+                    state = AntennaPatternLabUiState(),
+                    isCatalogWritable = true,
+                    onImportUri = {},
+                    onImportPairUris = {},
+                    onConfirmImport = {},
+                    onDismissImport = {},
+                    onResolvePrnConvention = { _, _ -> },
+                    onDismissPrnConvention = { _ -> },
+                    onSynthesize = { request ->
+                        selectedTopology = request.topology
+                        selectedTaper = request.taper
+                    },
+                    onPrepareExport = { _, _ -> },
+                    onExportUri = { _, _, _ -> },
+                    onDismissExport = { _ -> },
+                    onAssignTransmitPattern = { _, _, _ -> },
+                    onDeletePattern = {},
+                    onDismissMessage = {},
+                    onBack = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Composer").performClick()
+        composeRule.onNodeWithText("Planar").performScrollTo().performClick()
+        composeRule.onNodeWithText("Multipanel").performClick()
+        composeRule.onNodeWithText("Panels").assertIsDisplayed()
+        composeRule.onNodeWithText("Elements/panel").assertIsDisplayed()
+        composeRule.onNodeWithText("Uniform").performScrollTo().performClick()
+        composeRule.onNodeWithText("Cosine").performClick()
+        composeRule.onNodeWithTag("synthesize_pattern")
+            .performScrollTo()
+            .assertIsEnabled()
+            .performClick()
+        composeRule.runOnIdle {
+            assertEquals(AntennaArrayTopology.MULTIPANEL, selectedTopology)
+            assertEquals(AntennaArrayTaper.COSINE, selectedTaper)
+        }
     }
 
     @Test

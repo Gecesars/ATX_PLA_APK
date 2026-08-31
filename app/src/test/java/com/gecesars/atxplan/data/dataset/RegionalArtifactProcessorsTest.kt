@@ -103,6 +103,37 @@ class RegionalArtifactProcessorsTest {
     }
 
     @Test
+    fun `GeoTIFF pixel scale accepts the conventional zero vertical component`() {
+        val order = ByteOrder.LITTLE_ENDIAN
+        val source = sourceFile(
+            "terrain-zero-z-scale.tif",
+            classicTiff(
+                order = order,
+                entries = listOf(
+                    TiffTestEntry(256, 4, 1, unsignedValues(order, 4, 3_600)),
+                    TiffTestEntry(257, 4, 1, unsignedValues(order, 4, 3_600)),
+                    TiffTestEntry(
+                        33_550,
+                        12,
+                        3,
+                        doubles(order, 1.0 / 3_600.0, 1.0 / 3_600.0, 0.0),
+                    ),
+                    TiffTestEntry(
+                        33_922,
+                        12,
+                        6,
+                        doubles(order, 0.0, 0.0, 0.0, -47.0, -23.0, 0.0),
+                    ),
+                ),
+            ),
+        )
+
+        val index = RegionalTiffMetadataIndexer.index(source)
+
+        assertEquals(0.0, checkNotNull(index.pixelScale)[2], 0.0)
+    }
+
+    @Test
     fun `big endian BigTIFF metadata uses bounded 64 bit fields`() {
         val order = ByteOrder.BIG_ENDIAN
         val source = sourceFile(

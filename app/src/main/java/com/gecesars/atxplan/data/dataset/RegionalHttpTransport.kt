@@ -20,6 +20,7 @@ data class RegionalHttpRequest(
     val ifRangeEtag: String? = null,
     val body: String? = null,
     val contentType: String? = null,
+    val accept: String? = null,
 ) {
     init {
         require(rangeStart == null || rangeStart >= 0L) {
@@ -33,6 +34,9 @@ data class RegionalHttpRequest(
         }
         require(method == RegionalHttpRequestMethod.POST || body == null) {
             "Only POST requests may include a body."
+        }
+        require(accept == null || (accept.isNotBlank() && isSafeHeaderValue(accept))) {
+            "The HTTP Accept header is invalid."
         }
     }
 }
@@ -227,7 +231,10 @@ class AllowlistedHttpsRegionalHttpTransport private constructor(
         connection.requestMethod = method.name
         connection.setRequestProperty("Accept-Encoding", "identity")
         connection.setRequestProperty("User-Agent", userAgent)
-        connection.setRequestProperty("Accept", "application/octet-stream, application/json;q=0.9")
+        connection.setRequestProperty(
+            "Accept",
+            request.accept ?: "application/octet-stream, application/json;q=0.9",
+        )
 
         if (method == RegionalHttpRequestMethod.GET) {
             request.rangeStart?.let { start ->

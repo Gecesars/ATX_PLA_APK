@@ -1,5 +1,8 @@
 package com.gecesars.atxplan.ui.screens
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -26,6 +29,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -48,6 +52,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.gecesars.atxplan.domain.application.RunProjectLinkStudyCommand
+import com.gecesars.atxplan.domain.contour.BrazilDigitalTvRegulatoryStudyResult
 import com.gecesars.atxplan.domain.model.PlannerProject
 import com.gecesars.atxplan.domain.model.RadioSite
 import com.gecesars.atxplan.domain.model.Receiver
@@ -76,6 +81,15 @@ fun StudiesScreen(
     canSaveProjectStudy: Boolean,
     onCalculate: (LinkBudgetInput) -> Unit,
     onRunProjectLinkStudy: (RunProjectLinkStudyCommand) -> Unit,
+    brazilDigitalTvStudy: BrazilDigitalTvRegulatoryStudyResult? = null,
+    brazilDigitalTvStudyError: String? = null,
+    isRunningBrazilDigitalTvStudy: Boolean = false,
+    brazilDigitalTvStudyProgress: Pair<Int, Int>? = null,
+    onRunBrazilDigitalTvStudy: (Double) -> Unit = {},
+    onExportBrazilDigitalTvReport: (Uri) -> Unit = {},
+    onExportBrazilDigitalTvPdf: (Uri) -> Unit = {},
+    onExportBrazilDigitalTvXlsx: (Uri) -> Unit = {},
+    onExportBrazilDigitalTvKmz: (Uri) -> Unit = {},
 ) {
     var frequency by rememberSaveable { mutableStateOf("900") }
     var distance by rememberSaveable { mutableStateOf("10") }
@@ -154,6 +168,20 @@ fun StudiesScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+        }
+        item {
+            BrazilDigitalTvRegulatoryStudyCard(
+                project = project,
+                result = brazilDigitalTvStudy,
+                error = brazilDigitalTvStudyError,
+                isRunning = isRunningBrazilDigitalTvStudy,
+                progress = brazilDigitalTvStudyProgress,
+                onRun = onRunBrazilDigitalTvStudy,
+                onExportReport = onExportBrazilDigitalTvReport,
+                onExportPdf = onExportBrazilDigitalTvPdf,
+                onExportXlsx = onExportBrazilDigitalTvXlsx,
+                onExportKmz = onExportBrazilDigitalTvKmz,
+            )
         }
         item {
             ProjectLinkStudyComposer(
@@ -278,6 +306,182 @@ fun StudiesScreen(
                 ) { study ->
                     SavedProjectStudy(study)
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BrazilDigitalTvRegulatoryStudyCard(
+    project: PlannerProject?,
+    result: BrazilDigitalTvRegulatoryStudyResult?,
+    error: String?,
+    isRunning: Boolean,
+    progress: Pair<Int, Int>?,
+    onRun: (Double) -> Unit,
+    onExportReport: (Uri) -> Unit,
+    onExportPdf: (Uri) -> Unit,
+    onExportXlsx: (Uri) -> Unit,
+    onExportKmz: (Uri) -> Unit,
+) {
+    var radiusText by rememberSaveable(project?.id) { mutableStateOf("30") }
+    var localError by rememberSaveable(project?.id) { mutableStateOf<String?>(null) }
+    val reportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/html"),
+    ) { uri -> uri?.let(onExportReport) }
+    val pdfLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/pdf"),
+    ) { uri -> uri?.let(onExportPdf) }
+    val xlsxLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ),
+    ) { uri -> uri?.let(onExportXlsx) }
+    val kmzLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/vnd.google-earth.kmz"),
+    ) { uri -> uri?.let(onExportKmz) }
+    val radius = radiusText.toDoubleOrNull()
+    val validRadius = radius != null &&
+        radius in 1.0..100.0
+
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag("brazil_dtv_regulatory_study"),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp),
+        ) {
+            Text("Brazil Digital TV Regulatory Study", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "The active project transmitter is authoritative. Anatel Basic Plan channels are external references only and never populate project fields.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                StatusPill("P.1546-6 protected", StatusTone.INFO)
+                StatusPill("P.526-15 Deygout–Assis", StatusTone.INFO)
+                StatusPill("E(50,90)", StatusTone.INFO)
+                StatusPill("SP Basic Plan ±1 channel", StatusTone.INFO)
+            }
+            OutlinedTextField(
+                value = radiusText,
+                onValueChange = { value -> radiusText = value.take(8) },
+                label = { Text("Study radius") },
+                suffix = { Text("km") },
+                singleLine = true,
+                isError = radiusText.isNotBlank() && !validRadius,
+                supportingText = if (radiusText.isNotBlank() && !validRadius) {
+                    { Text("Enter a radius from 1 to 100 km.") }
+                } else {
+                    { Text("Protected-contour search boundary; 30 km for the current São Paulo study.") }
+                },
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Decimal,
+                    imeAction = ImeAction.Done,
+                ),
+                enabled = !isRunning,
+                modifier = Modifier.fillMaxWidth().testTag("brazil_dtv_radius"),
+            )
+            if (project == null) {
+                InlineNotice("Create or select an independent project before running this study.")
+            }
+            if (isRunning) {
+                val completed = progress?.first ?: 0
+                val total = progress?.second?.coerceAtLeast(1) ?: 1
+                LinearProgressIndicator(
+                    progress = { (completed.toFloat() / total).coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    "Reading terrain and evaluating regulatory paths · $completed / $total",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                )
+            }
+            val displayedError = localError ?: error
+            displayedError?.let { ErrorCard(it) }
+            Button(
+                onClick = {
+                    if (!validRadius) {
+                        localError = "Enter a study radius from 1 to 100 km."
+                    } else {
+                        localError = null
+                        onRun(checkNotNull(radius))
+                    }
+                },
+                enabled = project != null && validRadius && !isRunning,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 46.dp).testTag("run_brazil_dtv_study"),
+                shape = RoundedCornerShape(16.dp),
+            ) {
+                Icon(Icons.Outlined.Calculate, contentDescription = null)
+                Spacer(Modifier.padding(horizontal = 4.dp))
+                Text(if (isRunning) "Calculating..." else "Run Regulatory Study")
+            }
+            result?.let { study ->
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    StatusPill(
+                        if (study.filingReady) "Gates Passed" else "Not Filing-ready",
+                        if (study.filingReady) StatusTone.POSITIVE else StatusTone.WARNING,
+                    )
+                    StatusPill("Channel ${study.channel}", StatusTone.INFO)
+                    StatusPill("${study.radialEvidence.size} Radials", StatusTone.INFO)
+                    StatusPill("${study.referenceStationCount} References", StatusTone.INFO)
+                }
+                Text(
+                    "Protected contour: ${study.contour.status.name} · " +
+                        "${study.duAssessments.count { it.failingPointCount > 0 }} D/U reference failure(s)",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                study.blockers.forEach { blocker ->
+                    Text(
+                        "• $blocker",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = { reportLauncher.launch("atx-plan-channel-${study.channel}-regulatory-report.html") },
+                        modifier = Modifier.heightIn(min = 44.dp).testTag("export_brazil_dtv_report"),
+                    ) {
+                        Text("HTML", style = MaterialTheme.typography.labelMedium)
+                    }
+                    OutlinedButton(
+                        onClick = { pdfLauncher.launch("atx-plan-channel-${study.channel}-regulatory-report.pdf") },
+                        modifier = Modifier.heightIn(min = 44.dp).testTag("export_brazil_dtv_pdf"),
+                    ) {
+                        Text("PDF", style = MaterialTheme.typography.labelMedium)
+                    }
+                    OutlinedButton(
+                        onClick = { xlsxLauncher.launch("atx-plan-channel-${study.channel}-engineering-data.xlsx") },
+                        modifier = Modifier.heightIn(min = 44.dp).testTag("export_brazil_dtv_xlsx"),
+                    ) {
+                        Text("XLSX", style = MaterialTheme.typography.labelMedium)
+                    }
+                    OutlinedButton(
+                        onClick = { kmzLauncher.launch("atx-plan-channel-${study.channel}-protected-contour.kmz") },
+                        modifier = Modifier.heightIn(min = 44.dp).testTag("export_brazil_dtv_kmz"),
+                    ) {
+                        Text("KMZ", style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+                Text(
+                    "Fingerprint ${study.inputFingerprint.take(16)}…",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
