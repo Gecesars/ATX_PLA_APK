@@ -36,7 +36,23 @@ enum class AntennaArrayTopology(val label: String) {
     PLANAR("Planar"),
     CIRCULAR("Circular"),
     MULTIPANEL("Multipanel"),
+    ARBITRARY("Arbitrary elements"),
 }
+
+data class AntennaArbitraryElementRequest(
+    val id: String,
+    val patternId: String? = null,
+    val xWavelengths: Double,
+    val yWavelengths: Double,
+    val zWavelengths: Double,
+    val relativePower: Double,
+    val feedPhaseDegrees: Double,
+    val feedDelayNanoseconds: Double,
+    val horizontalOrientationDegrees: Double,
+    val elevationOrientationDegrees: Double,
+    val rollDegrees: Double,
+    val active: Boolean = true,
+)
 
 enum class AntennaPrnValueInterpretation {
     DESKTOP_POSITIVE_ATTENUATION_DB,
@@ -55,6 +71,7 @@ data class AntennaArraySynthesisRequest(
     val horizontalScanDegrees: Double,
     val verticalScanDegrees: Double,
     val taper: AntennaArrayTaper,
+    val arbitraryElements: List<AntennaArbitraryElementRequest> = emptyList(),
 )
 
 data class AntennaPatternImportPreview(

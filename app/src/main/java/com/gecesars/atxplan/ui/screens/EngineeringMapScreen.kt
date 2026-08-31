@@ -1137,6 +1137,11 @@ private fun ServiceContourLegendCard(serviceContours: List<ServiceContourOverlay
                     dashed = true,
                     label = "Statistical screening — dashed",
                 )
+                ContourLegendItem(
+                    color = Color(0xFFFF4D5E),
+                    dashed = true,
+                    label = "Legacy E(50,10) interfering envelope — dash-dot",
+                )
             }
             FlowRow(
                 modifier = Modifier.fillMaxWidth(),
@@ -1524,6 +1529,9 @@ private fun DrawScope.drawServiceContours(
     val screeningDash = PathEffect.dashPathEffect(
         floatArrayOf(8.dp.toPx(), 5.dp.toPx()),
     )
+    val interferingDash = PathEffect.dashPathEffect(
+        floatArrayOf(12.dp.toPx(), 4.dp.toPx(), 3.dp.toPx(), 4.dp.toPx()),
+    )
     serviceContours.forEach { contour ->
         if (contour.status == ContourStatus.NO_DATA || contour.points.size < 2) {
             return@forEach
@@ -1550,6 +1558,7 @@ private fun DrawScope.drawServiceContours(
         if (complete) path.close()
         val color = when (contour.purpose) {
             ContourPurpose.PROTECTED -> AtxTealLight
+            ContourPurpose.INTERFERING -> Color(0xFFFF4D5E)
             ContourPurpose.SCREENING -> AtxAmber
         }
         if (
@@ -1569,10 +1578,10 @@ private fun DrawScope.drawServiceContours(
                     screeningStrokeWidth
                 },
                 cap = StrokeCap.Round,
-                pathEffect = if (contour.purpose == ContourPurpose.SCREENING) {
-                    screeningDash
-                } else {
-                    null
+                pathEffect = when (contour.purpose) {
+                    ContourPurpose.PROTECTED -> null
+                    ContourPurpose.INTERFERING -> interferingDash
+                    ContourPurpose.SCREENING -> screeningDash
                 },
             ),
         )
@@ -2321,13 +2330,15 @@ private fun mapCanvasDescription(
             }
     }
     val protectedCount = serviceContours.count { it.purpose == ContourPurpose.PROTECTED }
+    val interferingCount = serviceContours.count { it.purpose == ContourPurpose.INTERFERING }
     val screeningCount = serviceContours.count { it.purpose == ContourPurpose.SCREENING }
     val completeCount = serviceContours.count { it.status == ContourStatus.COMPLETE }
     val incompleteCount = serviceContours.count { it.status == ContourStatus.INCOMPLETE }
     val noDataCount = serviceContours.count { it.status == ContourStatus.NO_DATA }
     return "$basemapLabel with $siteLabel$coverageLabel$duLabel and " +
         "${serviceContours.size} service contour ${if (serviceContours.size == 1) "record" else "records"}: " +
-        "$protectedCount protected, $screeningCount statistical screening; " +
+        "$protectedCount protected, $interferingCount interfering envelopes, " +
+        "$screeningCount statistical screening; " +
         "$completeCount complete geometry, $incompleteCount incomplete geometry, $noDataCount NoData. " +
         if (basemapProviderLabel == null) {
             "No basemap is installed. Pan with one finger and pinch to zoom."
@@ -2343,6 +2354,7 @@ private fun contourServiceLabel(service: BroadcastService): String = when (servi
 
 private fun contourPurposeLabel(purpose: ContourPurpose): String = when (purpose) {
     ContourPurpose.PROTECTED -> "Protected"
+    ContourPurpose.INTERFERING -> "Legacy Interfering Envelope"
     ContourPurpose.SCREENING -> "Statistical Screening"
 }
 

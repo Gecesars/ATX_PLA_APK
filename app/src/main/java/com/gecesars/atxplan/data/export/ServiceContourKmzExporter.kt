@@ -222,6 +222,9 @@ class ServiceContourKmzExporter(
         append("    <Style id=\"screening\">\n")
         append("      <LineStyle><color>ff00b3ff</color><width>2</width></LineStyle>\n")
         append("    </Style>\n")
+        append("    <Style id=\"interfering\">\n")
+        append("      <LineStyle><color>ff5e4dff</color><width>2</width></LineStyle>\n")
+        append("    </Style>\n")
     }
 
     private fun StringBuilder.appendKmlData(name: String, value: String) {
@@ -446,6 +449,7 @@ class ServiceContourKmzExporter(
 
     private fun styleId(overlay: ServiceContourOverlay): String = when (overlay.purpose) {
         ContourPurpose.SCREENING -> "screening"
+        ContourPurpose.INTERFERING -> "interfering"
         ContourPurpose.PROTECTED -> if (overlay.status == ContourStatus.COMPLETE) {
             "protected-complete"
         } else {

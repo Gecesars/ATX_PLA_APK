@@ -1,34 +1,39 @@
 # Brazil Broadcast Service Contours
 
-> Evidence baseline: August 28, 2026. Android currently provides a bounded, CPU-only reference planner and map overlay. Every generated overlay has `regulatory = false`. It is not a terrain-aware prediction, interference-compliance result, filing artifact, or certification of service.
+> Evidence baseline: August 31, 2026. Android provides bounded CPU-only reference overlays and a separate terrain-backed digital-TV D/U workflow. Every statistical contour overlay has `regulatory = false`; the strict D/U result independently fails closed when its filing gates are incomplete.
 
 ## 1. Status and purpose
 
 The current slice makes the Brazilian FM and first-generation digital-TV contour rules visible on the existing offline Engineering Map without hiding missing engineering inputs. It provides:
 
 - deterministic protected-contour **reference** geometry for eligible active FM and digital-TV sectors;
-- an explicitly non-regulatory FM `E(50,10)` statistical screening overlay;
+- explicitly non-regulatory FM and digital-TV `E(50,10)` cochannel and first-adjacent envelopes reconstructed from revoked rules;
 - explicit `NoData` for the requested but unsupported FM `E(80,80)` profile;
 - compact provenance, threshold, status, model, ruleset, and warning text next to the map;
 - pure Kotlin/CPU computation with no GPU, native runtime, remote service, or network dependency.
 
-The words **reference** and **screening** are essential. The project can now consume a calculation-ready schema-6 horizontal antenna cut, but it still does not contain radial height over mean terrain (HNMT), an approved regulatory pattern/fallback policy, a strict regulatory propagation engine, or the current Anatel interference workflow. The displayed geometry must not be used as an Anatel filing or protection conclusion.
+The word **legacy** is essential for each standalone `E(50,10)` envelope. Current Acts 8104/2022 and 9751/2022 use point-to-point ITU-R P.526 associated with Assis (1971), not a standalone E(50,10) interfering contour. The separate digital-TV study implements a bounded P.526-15 Deygout-Assis protected-boundary D/U check, but remains not filing-ready without all terrain, catalog, completeness, and review gates. Strict FM interference remains undelivered.
 
 ## 2. Current Brazilian rule profiles
 
-The rule catalog was checked on August 28, 2026 and is pinned in code by Act ID and source URL.
+The rule catalog was checked on August 31, 2026 and is pinned in code by Act or revoked-resolution ID and source URL.
 
-The exact Android identifiers are `ANATEL-ACT-8104-2022` for FM and `ANATEL-ACT-9751-2022` for first-generation digital TV. The custom FM statistical screen uses `CUSTOM-SCREENING-E50-10`; unsupported FM `E(80,80)` uses `UNSUPPORTED-E80-80` and can never be mistaken for an official profile.
+The Ministry of Communications was checked as a separate authority boundary. Its current regulatory-fiscalization page states that channel-distribution plans and station technical oversight are Anatel responsibilities. The MCom consolidation therefore does not supply a different field-strength plotting formula for this implementation; the technical formulas remain pinned to the Anatel acts, while MCom rules govern their own administrative and service processes.
+
+The current identifiers are `ANATEL-ACT-8104-2022` for FM and `ANATEL-ACT-9751-2022` for first-generation digital TV. Historical envelopes use `ANATEL-RESOLUTION-67-1998-REVOKED` and `ANATEL-RESOLUTION-398-2005-REVOKED`. Unsupported FM `E(80,80)` uses `UNSUPPORTED-E80-80`.
 
 | Purpose | Service and band | Field-strength threshold | Statistical basis | Android behavior |
 |---|---|---:|---|---|
 | Protected reference | FM | 66 dBµV/m | `E(50,50)` | Computed as a non-regulatory planning reference when the stored inputs fit the packaged model domain. |
 | Protected reference | First-generation digital TV, channels 7–13 | 43 dBµV/m | `E(50,90) = 2 × E(50,50) − E(50,10)` | Computed as a non-regulatory planning reference. A raw 90% time request is not made. |
 | Protected reference | First-generation digital TV, channels 14–51 | 51 dBµV/m | Same Anatel `E(50,90)` transform | Computed as a non-regulatory planning reference. |
-| Statistical screening | FM | 66 dBµV/m | `E(50,10)` | Drawn as a dashed, non-regulatory comparison. It is not the current Anatel interference method. |
+| Legacy interfering envelope | FM cochannel | 32 dBµV/m | `E(50,10)` | Protected 66 dBµV/m minus the revoked 34 dB D/U ratio; red dash-dot and non-regulatory. |
+| Legacy interfering envelope | FM first adjacent, ±200 kHz | 60 dBµV/m | `E(50,10)` | Protected 66 dBµV/m minus the revoked 6 dB D/U ratio; red dash-dot and non-regulatory. |
+| Legacy interfering envelope | Digital TV cochannel, channels 7–13 / 14–51 | 24 / 32 dBµV/m | `E(50,10)` | Protected 43 / 51 dBµV/m minus 19 dB; revoked method and non-regulatory. |
+| Legacy interfering envelope | Digital TV first adjacent, channels 7–13 / 14–51 | 79 / 87 dBµV/m | `E(50,10)` | Protected 43 / 51 dBµV/m minus −36 dB; revoked method and non-regulatory. |
 | Requested unsupported profile | FM | `NoData` | `E(80,80)` | Never computed or drawn. No current Anatel FM rule defines it, and P.1546 does not permit a direct 80% time prediction. |
 
-The first percentage in this document is the percentage of locations and the second is the percentage of time. Digital-TV `E(50,90)` is the transform explicitly required by Act 9751; it must not be implemented as an out-of-domain `timePercent = 90` P.1546 call. The `E(50,10)` operand is normative inside that DTV transform, while the separate FM `E(50,10)` overlay remains only a custom statistical screen.
+The first percentage is the percentage of locations and the second is the percentage of time. Digital-TV `E(50,90)` is the transform required by Act 9751; it is not an out-of-domain `timePercent = 90` P.1546 call. E(50,10) is also a normative operand inside that protected-contour transform. That fact does not make the standalone historical envelopes current regulatory interference results.
 
 Digital-TV frequencies that do not resolve to first-generation channels 7–51 produce `NoData`. The current project schema has no television-generation field, so `TV_BROADCAST` is interpreted as first-generation digital TV only from its stored channel-band frequency and the limitation is reported as a warning.
 
@@ -36,6 +41,10 @@ Authoritative sources:
 
 - [Anatel Act 8104/2022 — FM, RTR, and Radiovias](https://informacoes.anatel.gov.br/legislacao/component/content/article/159-atos-de-requisitos-tecnicos-de-gestao-do-espectro/2022/1687-ato-8104)
 - [Anatel Act 9751/2022 — TV and RTV](https://informacoes.anatel.gov.br/legislacao/component/content/article/159-atos-de-requisitos-tecnicos-de-gestao-do-espectro/2022/1688-ato-9751)
+- [Revoked Anatel Resolution 67/1998 — historical FM E(50,10)](https://informacoes.anatel.gov.br/legislacao/resolucoes/2004/resolucoes/13-1998/168-resolucao-67)
+- [Revoked Anatel Resolution 398/2005 — historical TV E(50,10)](https://informacoes.anatel.gov.br/legislacao/resolucoes/resolucoes/20-2005/288-resolucao-398)
+- [MCom regulatory-fiscalization authority boundary](https://www.gov.br/mcom/pt-br/assuntos/radio-e-tv-aberta/fiscalizacao_regulatoria)
+- [MCom SECOE Consolidation Ordinance 2/2023](https://www.gov.br/mcom/pt-br/assuntos/radio-e-tv-aberta/portaria_consolidacao)
 - [Recommendation ITU-R P.1546-6](https://www.itu.int/rec/R-REC-P.1546/en)
 
 The checked source date is not a promise that the rules will never change. A later application release must revalidate the acts, preserve the ruleset used by old results, and never silently reinterpret saved evidence under a newer rule.
@@ -49,7 +58,7 @@ The checked source date is not a promise that the rules will never change. A lat
 3. for each of 72 true-north, clockwise radials at 5-degree intervals, resolves an assigned calculation-ready HRP at `wrap360(trueBearing − sectorAzimuth)`, periodically interpolates its linear `E/Emax` amplitude, and applies `ERP_radial = ERP_peak × (E/Emax)^2` exactly once; a missing calculation-ready cut uses the explicitly warned nominal omnidirectional fallback, while zero or nonfinite assigned field produces radial `NoData` without fallback;
 4. uses stored sector antenna height AGL as an effective-height proxy because radial HNMT terrain samples are unavailable;
 5. finds the outer threshold crossing inside the packaged 1–1,000 km model domain, then generates WGS 84 points with destination geodesy on a fixed 6,371.0088 km mean-Earth sphere;
-6. closes complete protected and screening rings, marks a threshold still exceeded at 1,000 km as `INCOMPLETE`, and returns `NoData` when no valid crossing or model input exists;
+6. closes complete protected and legacy interfering rings, marks a threshold still exceeded at 1,000 km as `INCOMPLETE`, and returns `NoData` when no valid crossing or model input exists;
 7. attaches service, purpose, curve basis, threshold, ruleset, warnings, per-radial values, and a versioned SHA-256 input fingerprint to the transient overlay. The fingerprint covers the model/table hash, ruleset/source, site coordinates, raw or effective RF inputs, and solver step/bound as applicable.
 
 An assigned calculation-ready HRP can therefore produce noncircular reference geometry. Only the explicit missing-pattern fallback applies the same nominal ERP to every radial and tends toward a circular result because the same AGL height proxy is also used everywhere. Neither path is a model of a licensed regulatory contour. A strict result requires radial terrain-derived HNMT, authoritative pattern/source evidence, and the exact approved fallback policy.
@@ -86,19 +95,20 @@ Packaging the values inside the APK removes a runtime download and keeps this re
 `EngineeringMapScreen` accepts a list of `ServiceContourOverlay` values and only renders supplied results; it does not recalculate them. The existing offline Web Mercator coordinate grid remains the display surface:
 
 - protected contours use a teal solid stroke and a faint fill only when `COMPLETE`;
-- FM `E(50,10)` screening uses an amber dashed stroke with no fill;
+- legacy FM/TV `E(50,10)` interfering envelopes use a red dash-dot stroke with no fill;
+- other statistical screening geometry uses an amber dashed stroke with no fill;
 - `INCOMPLETE` geometry is never filled or closed for display; the renderer defensively removes a duplicated terminal point equal to the first point;
 - `NoData` has no geometry and is never drawn;
 - **Fit** includes complete and incomplete contour points as well as sites;
 - sites and active-sector azimuths render above contour geometry;
 - the compact legend shows styling and complete/incomplete/`NoData` counts, while its collapsed-by-default details expose service, purpose, statistical basis, threshold or `Threshold NoData`, status, model, ruleset, and every warning;
-- accessibility semantics summarize protected, screening, complete, incomplete, and `NoData` counts.
+- accessibility semantics summarize protected, legacy interfering, screening, complete, incomplete, and `NoData` counts.
 
 This remains a coordinate-grid overlay, not a basemap or general GIS renderer. The transient contour plan is not a persisted `RegulatoryStudyRecord` or immutable filing snapshot. A separate bounded SAF action can export the supplied overlays as a deterministic KMZ containing `doc.kml` and an evidence `manifest.json`; complete protected geometry becomes a polygon, statistical screening and incomplete geometry remain lines, and `NoData` is omitted from KML but retained with an explicit manifest reason. The destination is reopened and its exact bytes/SHA-256 are verified. That KMZ neither recalculates nor approves the result and is not an antenna source, executable study, or regulatory filing package.
 
-## 6. Strict regulatory work that remains blocked
+## 6. Current regulatory interference contract and remaining work
 
-Current Anatel interference compliance is not an `E(50,10)` polygon. Acts 8104 and 9751 require point-to-point ITU-R P.526 associated with the Assis method and service/channel-relation D/U evaluation on the wanted protected contour. That workflow remains blocked.
+Current Anatel interference compliance is not an `E(50,10)` polygon. Acts 8104 and 9751 require point-to-point ITU-R P.526 associated with Assis and service/channel-relation D/U evaluation on the wanted protected contour. Android delivers this as a bounded digital-TV protected-boundary workflow with explicit evidence and filing gates. The equivalent strict FM workflow, an area/grid D/U workflow, and independently validated regulatory vectors remain open.
 
 For the same-technology relationships currently in scope, the pinned acts specify these minimum desired-to-undesired ratios:
 
@@ -124,13 +134,13 @@ Strict protected or interference results additionally require:
 - immutable persistence of the complete input/engine/table fingerprint, a portable executable-study schema, and independent external verification beyond the delivered bounded visualization/evidence KMZ;
 - legal and professional review plus an inconclusive-result policy.
 
-Until those gates close, all contour overlays remain planning references with `regulatory = false`, and interference compliance remains `NoData` rather than an inferred pass or fail.
+All standalone contour overlays remain planning references with `regulatory = false`. The digital-TV D/U workflow reports pass/fail only for complete evaluated boundary points and reports `NoData` or not-filing-ready when a required gate is missing; no legacy E(50,10) curve can satisfy those gates.
 
 ## 7. Automated evidence
 
-Focused JVM cases cover rule/band selection, table hashes and reference values, class-distance checks, the DTV transform, FM protected/statistical-screening/unsupported states, 72-radial evidence, peak ERP conversion, relative-azimuth interpolation, the single squared-field application, directional geometry, explicit missing-cut fallback, zero-field radial `NoData`, assigned-pattern fingerprint determinants, an open incomplete ring at the 1,000 km model boundary, antimeridian destination geodesy, sector eligibility, height-domain `NoData`, deterministic planning across collection order, and a site-move regression proving that WGS 84 geometry and its fingerprint change while unchanged RF inputs preserve radial distances.
+Focused JVM cases cover current D/U constants, revoked FM/TV E(50,10) threshold derivation, rule/band selection, table hashes and reference values, class-distance checks, the DTV transform, protected/legacy/unsupported states, 72-radial evidence, directional ERP, `NoData`, model boundaries, geodesy, deterministic fingerprints, and distinct KMZ styling/provenance.
 
-The targeted 10-case `EngineeringMapScreenTest` suite passed on the Android 16/API 36 `Medium_Phone_API_36.1` emulator with no failures or skips. Its new contour case exercises a 360 × 560 dp host at font scale 1.30 and verifies canvas semantics, protected/statistical-screening styling labels, complete/incomplete/`NoData` counts, collapsed details for information density, expanded provenance, the `NoData` disclosure, and return to the compact state. These focused cases are not independent P.1546 regulatory parity, a general accessibility/device matrix, map performance evidence, or an end-to-end filing workflow.
+The targeted 10-case `EngineeringMapScreenTest` suite and the full 99-case Android aggregate passed on the Android 16/API 36 `Medium_Phone_API_36.1` emulator with no failures or skips. The contour case exercises a 360 × 560 dp host at font scale 1.30 and verifies protected/legacy/screening labels, geometry-state counts, collapsed details for information density, expanded provenance, and `NoData`. These cases are not independent P.1546 regulatory parity, a general accessibility/device matrix, map performance evidence, or an end-to-end filing workflow.
 
 Separate pure JVM KMZ cases cover byte determinism across overlay order, fixed stored entries/timestamps, XML escaping and coordinate order, protected/screening geometry classification, complete radial and warning evidence, explicit `NoData` omission, exact write summary/hash, and fail-closed output/identity/text bounds. They do not establish conformance across external KMZ readers or convert the package into regulatory evidence.
 
@@ -146,7 +156,7 @@ The implementation and tests must continue to prove:
 - deterministic threshold crossing and stable input fingerprints;
 - fingerprint changes for assigned-pattern identity, artifact/source/canonical hashes, or calculation-ready horizontal-cut content;
 - `NoData` for unsupported bands, invalid/out-of-range inputs, absent crossings, and `E(80,80)`;
-- renderer distinctions among protected, screening, incomplete, and `NoData` states;
+- renderer distinctions among protected, legacy interfering, screening, incomplete, and `NoData` states;
 - deterministic KMZ classification, complete manifest evidence, bounded output, explicit `NoData` omission, and byte/hash read-back without RF recalculation;
 - compact layout and accessibility at the tested phone density and font scale.
 

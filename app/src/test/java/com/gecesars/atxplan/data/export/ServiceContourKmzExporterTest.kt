@@ -74,6 +74,19 @@ class ServiceContourKmzExporterTest {
     }
 
     @Test
+    fun `legacy interfering envelope uses its own KML style and manifest provenance`() {
+        val interfering = interferingOverlay()
+        val archive = unzip(ServiceContourKmzExporter().export(listOf(interfering)))
+        val kml = archive.getValue("doc.kml").bytes.toString(Charsets.UTF_8)
+        val manifest = archive.getValue("manifest.json").bytes.toString(Charsets.UTF_8)
+
+        assertTrue(kml.contains("<Style id=\"interfering\">"))
+        assertTrue(kml.contains("<styleUrl>#interfering</styleUrl>"))
+        assertTrue(manifest.contains("ANATEL-RESOLUTION-67-1998-REVOKED"))
+        assertTrue(manifest.contains("INTERFERING"))
+    }
+
+    @Test
     fun `manifest preserves warnings radial evidence and explicit NoData omission`() {
         val warning = "Quoted \"warning\"\nsource C:\\data & <review>"
         val protected = protectedOverlay(warnings = listOf(warning))
@@ -228,10 +241,19 @@ class ServiceContourKmzExporterTest {
         ),
         status = ContourStatus.COMPLETE,
         model = "ITU-R P.1546-6 land reference",
-        rulesetId = "CUSTOM-SCREENING-E50-10",
+        rulesetId = "TEST-SCREENING-E50-10",
         warnings = listOf("Statistical screening is not an interference-compliance result."),
         regulatory = false,
         inputFingerprint = "b".repeat(64),
+    )
+
+    private fun interferingOverlay(): ServiceContourOverlay = screeningOverlay().copy(
+        id = "interfering-fm-legacy",
+        purpose = ContourPurpose.INTERFERING,
+        statisticalBasis = "E(50,10) legacy cochannel interfering envelope",
+        thresholdDbuvPerM = 32.0,
+        rulesetId = "ANATEL-RESOLUTION-67-1998-REVOKED",
+        warnings = listOf("Revoked method; not a current regulatory result."),
     )
 
     private fun noDataOverlay(

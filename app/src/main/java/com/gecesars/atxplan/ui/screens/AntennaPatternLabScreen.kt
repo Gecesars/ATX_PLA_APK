@@ -47,6 +47,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -67,6 +68,7 @@ import com.gecesars.atxplan.domain.model.Sector
 import com.gecesars.atxplan.ui.antenna.AntennaArraySynthesisRequest
 import com.gecesars.atxplan.ui.antenna.AntennaArrayTaper
 import com.gecesars.atxplan.ui.antenna.AntennaArrayTopology
+import com.gecesars.atxplan.ui.antenna.AntennaArbitraryElementRequest
 import com.gecesars.atxplan.ui.antenna.AntennaPrnValueInterpretation
 import com.gecesars.atxplan.ui.antenna.AntennaPatternExportFormat
 import com.gecesars.atxplan.ui.antenna.AntennaPatternExportPreview
@@ -82,6 +84,62 @@ private enum class AntennaLabTab(val label: String) {
     COMPOSER("Composer"),
     ASSIGNMENTS("Assignments"),
 }
+
+private data class ArbitraryElementDraft(
+    val id: String = "element-1",
+    val patternId: String = "",
+    val xWavelengths: String = "0.0",
+    val yWavelengths: String = "0.0",
+    val zWavelengths: String = "0.0",
+    val relativePower: String = "1.0",
+    val feedPhaseDegrees: String = "0.0",
+    val feedDelayNanoseconds: String = "0.0",
+    val horizontalOrientationDegrees: String = "0.0",
+    val elevationOrientationDegrees: String = "0.0",
+    val rollDegrees: String = "0.0",
+    val active: Boolean = true,
+)
+
+private val arbitraryElementDraftsSaver = listSaver<List<ArbitraryElementDraft>, String>(
+    save = { drafts ->
+        drafts.flatMap { draft ->
+            listOf(
+                draft.id,
+                draft.patternId,
+                draft.xWavelengths,
+                draft.yWavelengths,
+                draft.zWavelengths,
+                draft.relativePower,
+                draft.feedPhaseDegrees,
+                draft.feedDelayNanoseconds,
+                draft.horizontalOrientationDegrees,
+                draft.elevationOrientationDegrees,
+                draft.rollDegrees,
+                draft.active.toString(),
+            )
+        }
+    },
+    restore = { values ->
+        values.chunked(12).mapNotNull { fields ->
+            fields.takeIf { it.size == 12 }?.let {
+                ArbitraryElementDraft(
+                    id = it[0],
+                    patternId = it[1],
+                    xWavelengths = it[2],
+                    yWavelengths = it[3],
+                    zWavelengths = it[4],
+                    relativePower = it[5],
+                    feedPhaseDegrees = it[6],
+                    feedDelayNanoseconds = it[7],
+                    horizontalOrientationDegrees = it[8],
+                    elevationOrientationDegrees = it[9],
+                    rollDegrees = it[10],
+                    active = it[11].toBooleanStrictOrNull() ?: true,
+                )
+            }
+        }.ifEmpty { listOf(ArbitraryElementDraft()) }
+    },
+)
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -733,6 +791,10 @@ private fun AntennaComposerPanel(
     var basePatternId by rememberSaveable { mutableStateOf<String?>(null) }
     var topologyName by rememberSaveable { mutableStateOf(AntennaArrayTopology.PLANAR.name) }
     var taperName by rememberSaveable { mutableStateOf(AntennaArrayTaper.UNIFORM.name) }
+    var arbitraryElements by rememberSaveable(stateSaver = arbitraryElementDraftsSaver) {
+        mutableStateOf(listOf(ArbitraryElementDraft()))
+    }
+    var selectedArbitraryElementIndex by rememberSaveable { mutableIntStateOf(0) }
     var baseExpanded by remember { mutableStateOf(false) }
     var topologyExpanded by remember { mutableStateOf(false) }
     var taperExpanded by remember { mutableStateOf(false) }
@@ -750,6 +812,7 @@ private fun AntennaComposerPanel(
         scanAzimuth = scanAzimuth,
         scanElevation = scanElevation,
         taperName = taperName,
+        arbitraryElements = arbitraryElements,
     )
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -796,6 +859,44 @@ private fun AntennaComposerPanel(
             }
             when (topology) {
                 AntennaArrayTopology.SINGLE -> Unit
+                AntennaArrayTopology.ARBITRARY -> {
+                    ArbitraryElementEditor(
+                        drafts = arbitraryElements,
+                        selectedIndex = selectedArbitraryElementIndex,
+                        patterns = patterns,
+                        onSelect = { selectedArbitraryElementIndex = it },
+                        onChange = { index, draft ->
+                            arbitraryElements = arbitraryElements.toMutableList().also { items ->
+                                items[index] = draft
+                            }
+                        },
+                        onAdd = {
+                            if (arbitraryElements.size < 512) {
+                                val nextId = nextArbitraryElementId(arbitraryElements)
+                                arbitraryElements = arbitraryElements + ArbitraryElementDraft(id = nextId)
+                                selectedArbitraryElementIndex = arbitraryElements.lastIndex
+                            }
+                        },
+                        onDuplicate = {
+                            if (arbitraryElements.size < 512) {
+                                val duplicate = arbitraryElements[selectedArbitraryElementIndex].copy(
+                                    id = nextArbitraryElementId(arbitraryElements),
+                                )
+                                arbitraryElements = arbitraryElements + duplicate
+                                selectedArbitraryElementIndex = arbitraryElements.lastIndex
+                            }
+                        },
+                        onRemove = {
+                            if (arbitraryElements.size > 1) {
+                                arbitraryElements = arbitraryElements.filterIndexed { index, _ ->
+                                    index != selectedArbitraryElementIndex
+                                }
+                                selectedArbitraryElementIndex = selectedArbitraryElementIndex
+                                    .coerceAtMost(arbitraryElements.lastIndex)
+                            }
+                        },
+                    )
+                }
                 AntennaArrayTopology.VERTICAL_STACK -> {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         DenseField(rows, { rows = it }, "Elements", KeyboardType.Number, Modifier.weight(1f))
@@ -851,21 +952,23 @@ private fun AntennaComposerPanel(
                     }
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                DenseField(
-                    scanAzimuth,
-                    { scanAzimuth = it },
-                    "H scan (deg)",
-                    KeyboardType.Decimal,
-                    Modifier.weight(1f),
-                )
-                DenseField(
-                    scanElevation,
-                    { scanElevation = it },
-                    "V scan (deg)",
-                    KeyboardType.Decimal,
-                    Modifier.weight(1f),
-                )
+            if (topology != AntennaArrayTopology.ARBITRARY) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    DenseField(
+                        scanAzimuth,
+                        { scanAzimuth = it },
+                        "H scan (deg)",
+                        KeyboardType.Decimal,
+                        Modifier.weight(1f),
+                    )
+                    DenseField(
+                        scanElevation,
+                        { scanElevation = it },
+                        "V scan (deg)",
+                        KeyboardType.Decimal,
+                        Modifier.weight(1f),
+                    )
+                }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Box(modifier = Modifier.weight(1f)) {
@@ -893,27 +996,33 @@ private fun AntennaComposerPanel(
                         }
                     }
                 }
-                Box(modifier = Modifier.weight(1f)) {
-                    OutlinedButton(
-                        onClick = { taperExpanded = true },
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                    ) {
-                        Text(taperName.lowercase().replaceFirstChar(Char::uppercase))
-                    }
-                    DropdownMenu(expanded = taperExpanded, onDismissRequest = { taperExpanded = false }) {
-                        AntennaArrayTaper.entries.forEach { taper ->
-                            DropdownMenuItem(
-                                text = { Text(taper.name.lowercase().replaceFirstChar(Char::uppercase)) },
-                                onClick = { taperName = taper.name; taperExpanded = false },
-                            )
+                if (topology != AntennaArrayTopology.ARBITRARY) {
+                    Box(modifier = Modifier.weight(1f)) {
+                        OutlinedButton(
+                            onClick = { taperExpanded = true },
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        ) {
+                            Text(taperName.lowercase().replaceFirstChar(Char::uppercase))
+                        }
+                        DropdownMenu(expanded = taperExpanded, onDismissRequest = { taperExpanded = false }) {
+                            AntennaArrayTaper.entries.forEach { taper ->
+                                DropdownMenuItem(
+                                    text = { Text(taper.name.lowercase().replaceFirstChar(Char::uppercase)) },
+                                    onClick = { taperName = taper.name; taperExpanded = false },
+                                )
+                            }
                         }
                     }
                 }
             }
             if (request == null) {
                 Text(
-                    "Use a name, positive frequency, 1–32 elements per dimension, no more than " +
-                        "512 active elements, 0.05–5.0 λ spacing/radius, and scan angles from -60° to +60°.",
+                    if (topology == AntennaArrayTopology.ARBITRARY) {
+                        "Use 1–512 uniquely named elements, finite coordinates, valid orientation, and at least one active positive power weight."
+                    } else {
+                        "Use a name, positive frequency, 1–32 elements per dimension, no more than " +
+                            "512 active elements, 0.05–5.0 λ spacing/radius, and scan angles from -60° to +60°."
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.error,
                 )
@@ -928,6 +1037,208 @@ private fun AntennaComposerPanel(
             }
         }
     }
+}
+
+@Composable
+private fun ArbitraryElementEditor(
+    drafts: List<ArbitraryElementDraft>,
+    selectedIndex: Int,
+    patterns: List<AntennaPatternRecord>,
+    onSelect: (Int) -> Unit,
+    onChange: (Int, ArbitraryElementDraft) -> Unit,
+    onAdd: () -> Unit,
+    onDuplicate: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    val safeIndex = selectedIndex.coerceIn(0, drafts.lastIndex)
+    val draft = drafts[safeIndex]
+    val verifiedPatterns = patterns.filter { pattern ->
+        pattern.hasVerifiedNormalizedContentIdentity()
+    }
+    var patternExpanded by remember { mutableStateOf(false) }
+    val activeCount = drafts.count { it.active }
+    val positivePower = drafts.sumOf { item ->
+        if (item.active) item.relativePower.toDoubleOrNull()?.takeIf(Double::isFinite) ?: 0.0 else 0.0
+    }
+
+    Surface(
+        tonalElevation = 1.dp,
+        modifier = Modifier.fillMaxWidth().testTag("arbitrary_element_editor"),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                "${drafts.size} elements · $activeCount active · ${formatNumber(positivePower, 3)} total weight",
+                style = MaterialTheme.typography.labelSmall,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(
+                    onClick = { onSelect(safeIndex - 1) },
+                    enabled = safeIndex > 0,
+                ) { Text("Previous") }
+                Text(
+                    "Element ${safeIndex + 1} of ${drafts.size}",
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                TextButton(
+                    onClick = { onSelect(safeIndex + 1) },
+                    enabled = safeIndex < drafts.lastIndex,
+                ) { Text("Next") }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                TextButton(
+                    onClick = onAdd,
+                    enabled = drafts.size < 512,
+                    modifier = Modifier.weight(1f).testTag("arbitrary_add_element"),
+                ) { Text("Add") }
+                TextButton(
+                    onClick = onDuplicate,
+                    enabled = drafts.size < 512,
+                    modifier = Modifier.weight(1f).testTag("arbitrary_duplicate_element"),
+                ) { Text("Duplicate") }
+                TextButton(
+                    onClick = onRemove,
+                    enabled = drafts.size > 1,
+                    modifier = Modifier.weight(1f).testTag("arbitrary_remove_element"),
+                ) { Text("Remove") }
+            }
+            DenseField(
+                value = draft.id,
+                onValueChange = { onChange(safeIndex, draft.copy(id = it.take(80))) },
+                label = "Element ID",
+                keyboardType = KeyboardType.Text,
+            )
+            Box {
+                OutlinedButton(
+                    onClick = { patternExpanded = true },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 46.dp),
+                ) {
+                    Text(
+                        verifiedPatterns.firstOrNull { it.id == draft.patternId }?.name
+                            ?: "Use array base pattern",
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                DropdownMenu(
+                    expanded = patternExpanded,
+                    onDismissRequest = { patternExpanded = false },
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Use array base pattern") },
+                        onClick = {
+                            onChange(safeIndex, draft.copy(patternId = ""))
+                            patternExpanded = false
+                        },
+                    )
+                    verifiedPatterns.forEach { pattern ->
+                        DropdownMenuItem(
+                            text = { Text(pattern.name) },
+                            onClick = {
+                                onChange(safeIndex, draft.copy(patternId = pattern.id))
+                                patternExpanded = false
+                            },
+                        )
+                    }
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                DenseField(
+                    draft.xWavelengths,
+                    { onChange(safeIndex, draft.copy(xWavelengths = it)) },
+                    "X (λ)",
+                    KeyboardType.Decimal,
+                    Modifier.weight(1f),
+                )
+                DenseField(
+                    draft.yWavelengths,
+                    { onChange(safeIndex, draft.copy(yWavelengths = it)) },
+                    "Y (λ)",
+                    KeyboardType.Decimal,
+                    Modifier.weight(1f),
+                )
+                DenseField(
+                    draft.zWavelengths,
+                    { onChange(safeIndex, draft.copy(zWavelengths = it)) },
+                    "Z (λ)",
+                    KeyboardType.Decimal,
+                    Modifier.weight(1f),
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                DenseField(
+                    draft.relativePower,
+                    { onChange(safeIndex, draft.copy(relativePower = it)) },
+                    "Power weight",
+                    KeyboardType.Decimal,
+                    Modifier.weight(1f),
+                )
+                DenseField(
+                    draft.feedPhaseDegrees,
+                    { onChange(safeIndex, draft.copy(feedPhaseDegrees = it)) },
+                    "Phase (deg)",
+                    KeyboardType.Decimal,
+                    Modifier.weight(1f),
+                )
+                DenseField(
+                    draft.feedDelayNanoseconds,
+                    { onChange(safeIndex, draft.copy(feedDelayNanoseconds = it)) },
+                    "Delay (ns)",
+                    KeyboardType.Decimal,
+                    Modifier.weight(1f),
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                DenseField(
+                    draft.horizontalOrientationDegrees,
+                    { onChange(safeIndex, draft.copy(horizontalOrientationDegrees = it)) },
+                    "Azimuth (deg)",
+                    KeyboardType.Decimal,
+                    Modifier.weight(1f),
+                )
+                DenseField(
+                    draft.elevationOrientationDegrees,
+                    { onChange(safeIndex, draft.copy(elevationOrientationDegrees = it)) },
+                    "Elevation (deg)",
+                    KeyboardType.Decimal,
+                    Modifier.weight(1f),
+                )
+                DenseField(
+                    draft.rollDegrees,
+                    { onChange(safeIndex, draft.copy(rollDegrees = it)) },
+                    "Roll (deg)",
+                    KeyboardType.Decimal,
+                    Modifier.weight(1f),
+                )
+            }
+            OutlinedButton(
+                onClick = { onChange(safeIndex, draft.copy(active = !draft.active)) },
+                modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp).testTag("arbitrary_toggle_active"),
+            ) {
+                Text(if (draft.active) "Active element" else "Inactive element")
+            }
+            Text(
+                "Coordinates use wavelengths at the array frequency. Feed delay is converted to phase as −360 · f · delay. Active weights are normalized to total power 1.",
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
+    }
+}
+
+private fun nextArbitraryElementId(drafts: List<ArbitraryElementDraft>): String {
+    val existing = drafts.mapTo(mutableSetOf()) { it.id }
+    var suffix = drafts.size + 1
+    while ("element-$suffix" in existing) suffix += 1
+    return "element-$suffix"
 }
 
 @Composable
@@ -1070,12 +1381,31 @@ private fun parseSynthesisRequest(
     scanAzimuth: String,
     scanElevation: String,
     taperName: String,
+    arbitraryElements: List<ArbitraryElementDraft> = emptyList(),
 ): AntennaArraySynthesisRequest? {
     val cleanName = name.trim().takeIf { it.length in 2..160 } ?: return null
     val frequency = frequencyMHz.toDoubleOrNull()?.takeIf { it.isFinite() && it > 0.0 } ?: return null
+    val topology = AntennaArrayTopology.entries.firstOrNull { it.name == topologyName } ?: return null
+    val taper = AntennaArrayTaper.entries.firstOrNull { it.name == taperName } ?: return null
+    if (topology == AntennaArrayTopology.ARBITRARY) {
+        val elements = parseArbitraryElements(arbitraryElements) ?: return null
+        return AntennaArraySynthesisRequest(
+            name = cleanName,
+            basePatternId = basePatternId,
+            frequencyMHz = frequency,
+            topology = topology,
+            columns = 1,
+            rows = 1,
+            horizontalSpacingWavelengths = 0.5,
+            verticalSpacingWavelengths = 0.5,
+            horizontalScanDegrees = 0.0,
+            verticalScanDegrees = 0.0,
+            taper = taper,
+            arbitraryElements = elements,
+        )
+    }
     val columnCount = columns.toIntOrNull()?.takeIf { it in 1..32 } ?: return null
     val rowCount = rows.toIntOrNull()?.takeIf { it in 1..32 } ?: return null
-    val topology = AntennaArrayTopology.entries.firstOrNull { it.name == topologyName } ?: return null
     val elementCount = when (topology) {
         AntennaArrayTopology.SINGLE -> 1
         AntennaArrayTopology.VERTICAL_STACK -> rowCount
@@ -1085,6 +1415,7 @@ private fun parseSynthesisRequest(
         AntennaArrayTopology.PLANAR,
         AntennaArrayTopology.MULTIPANEL,
         -> columnCount * rowCount
+        AntennaArrayTopology.ARBITRARY -> return null
     }
     if (elementCount > 512) return null
     val horizontalSpacing = spacingX.toDoubleOrNull()?.takeIf { it.isFinite() && it in 0.05..5.0 }
@@ -1095,7 +1426,6 @@ private fun parseSynthesisRequest(
         ?: return null
     val verticalScan = scanElevation.toDoubleOrNull()?.takeIf { it.isFinite() && it in -60.0..60.0 }
         ?: return null
-    val taper = AntennaArrayTaper.entries.firstOrNull { it.name == taperName } ?: return null
     return AntennaArraySynthesisRequest(
         name = cleanName,
         basePatternId = basePatternId,
@@ -1109,6 +1439,51 @@ private fun parseSynthesisRequest(
         verticalScanDegrees = verticalScan,
         taper = taper,
     )
+}
+
+private fun parseArbitraryElements(
+    drafts: List<ArbitraryElementDraft>,
+): List<AntennaArbitraryElementRequest>? {
+    if (drafts.size !in 1..512) return null
+    val cleanIds = drafts.map { draft -> draft.id.trim() }
+    if (
+        cleanIds.distinct().size != cleanIds.size ||
+        cleanIds.any { id -> id.length !in 1..80 || id.any(Char::isISOControl) }
+    ) return null
+    val parsed = drafts.mapIndexed { index, draft ->
+        fun boundedDouble(value: String, range: ClosedFloatingPointRange<Double>): Double? =
+            value.toDoubleOrNull()?.takeIf { it.isFinite() && it in range }
+
+        AntennaArbitraryElementRequest(
+            id = cleanIds[index],
+            patternId = draft.patternId.ifBlank { null },
+            xWavelengths = boundedDouble(draft.xWavelengths, -10_000.0..10_000.0)
+                ?: return null,
+            yWavelengths = boundedDouble(draft.yWavelengths, -10_000.0..10_000.0)
+                ?: return null,
+            zWavelengths = boundedDouble(draft.zWavelengths, -10_000.0..10_000.0)
+                ?: return null,
+            relativePower = boundedDouble(draft.relativePower, 0.0..1.0e12) ?: return null,
+            feedPhaseDegrees = boundedDouble(draft.feedPhaseDegrees, -1.0e6..1.0e6)
+                ?: return null,
+            feedDelayNanoseconds = boundedDouble(draft.feedDelayNanoseconds, -1.0e6..1.0e6)
+                ?: return null,
+            horizontalOrientationDegrees = boundedDouble(
+                draft.horizontalOrientationDegrees,
+                0.0..359.999_999_999,
+            ) ?: return null,
+            elevationOrientationDegrees = boundedDouble(
+                draft.elevationOrientationDegrees,
+                -90.0..90.0,
+            ) ?: return null,
+            rollDegrees = boundedDouble(draft.rollDegrees, -180.0..180.0) ?: return null,
+            active = draft.active,
+        )
+    }
+    val activePower = parsed.sumOf { element ->
+        if (element.active) element.relativePower else 0.0
+    }
+    return parsed.takeIf { activePower.isFinite() && activePower > 0.0 }
 }
 
 private fun formatNumber(value: Double, decimals: Int): String =

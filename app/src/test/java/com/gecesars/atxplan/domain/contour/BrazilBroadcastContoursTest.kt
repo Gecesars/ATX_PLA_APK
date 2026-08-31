@@ -93,6 +93,58 @@ class BrazilBroadcastContoursTest {
     }
 
     @Test
+    fun `current and revoked interference rules remain explicitly separated`() {
+        assertEquals(
+            30.0,
+            BrazilBroadcastRules.currentProtectionRatioDb(
+                BroadcastService.FM,
+                BroadcastInterferenceRelation.COCHANNEL,
+            ),
+            STRICT_TOLERANCE,
+        )
+        assertEquals(
+            6.0,
+            BrazilBroadcastRules.currentProtectionRatioDb(
+                BroadcastService.FM,
+                BroadcastInterferenceRelation.FIRST_ADJACENT,
+            ),
+            STRICT_TOLERANCE,
+        )
+        assertEquals(
+            listOf(32.0, 60.0),
+            BrazilBroadcastRules.legacyInterferingProfiles(BroadcastService.FM, 100.1)
+                .map(BrazilLegacyInterferingContourProfile::thresholdDbuvPerM),
+        )
+
+        listOf(177.0 to listOf(24.0, 79.0), 473.0 to listOf(32.0, 87.0))
+            .forEach { (frequencyMHz, expectedThresholds) ->
+                val profiles = BrazilBroadcastRules.legacyInterferingProfiles(
+                    BroadcastService.DIGITAL_TV,
+                    frequencyMHz,
+                )
+                assertEquals(expectedThresholds, profiles.map { it.thresholdDbuvPerM })
+                assertTrue(profiles.all { it.statisticalBasis.startsWith("E(50,10) legacy") })
+                assertTrue(profiles.all { it.rulesetId.endsWith("REVOKED") })
+            }
+        assertEquals(
+            19.0,
+            BrazilBroadcastRules.currentProtectionRatioDb(
+                BroadcastService.DIGITAL_TV,
+                BroadcastInterferenceRelation.COCHANNEL,
+            ),
+            STRICT_TOLERANCE,
+        )
+        assertEquals(
+            -36.0,
+            BrazilBroadcastRules.currentProtectionRatioDb(
+                BroadcastService.DIGITAL_TV,
+                BroadcastInterferenceRelation.FIRST_ADJACENT,
+            ),
+            STRICT_TOLERANCE,
+        )
+    }
+
+    @Test
     fun `digital TV low VHF fails closed in rules and planner`() {
         assertNull(BrazilBroadcastRules.protectedProfile(BroadcastService.DIGITAL_TV, 85.0))
 
@@ -184,7 +236,9 @@ class BrazilBroadcastContoursTest {
             ),
         )
 
-        val overlay = BrazilBroadcastContourPlanner.plan(project).overlays.single()
+        val overlay = BrazilBroadcastContourPlanner.plan(project).overlays.single { candidate ->
+            candidate.purpose == ContourPurpose.PROTECTED
+        }
         val radial = overlay.radials.single { item -> item.azimuthDegrees == 0.0 }
         val distanceKm = requireNotNull(radial.distanceKm)
         val e50 = P1546LandReference.fieldStrengthDbuvPerM(
@@ -211,17 +265,17 @@ class BrazilBroadcastContoursTest {
     }
 
     @Test
-    fun `FM planner exposes protected screening and unsupported NoData overlays`() {
+    fun `FM planner exposes protected legacy interfering and unsupported NoData overlays`() {
         val plan = BrazilBroadcastContourPlanner.plan(fmProject())
 
         assertEquals(0, plan.skippedSectorCount)
-        assertEquals(3, plan.overlays.size)
+        assertEquals(4, plan.overlays.size)
 
         val protected = plan.overlays.single { overlay ->
             overlay.purpose == ContourPurpose.PROTECTED
         }
-        val e5010 = plan.overlays.single { overlay ->
-            overlay.statisticalBasis.contains("E(50,10)")
+        val e5010 = plan.overlays.filter { overlay ->
+            overlay.purpose == ContourPurpose.INTERFERING
         }
         val e8080 = plan.overlays.single { overlay ->
             overlay.statisticalBasis.contains("E(80,80)")
@@ -232,11 +286,13 @@ class BrazilBroadcastContoursTest {
         assertEquals(ContourStatus.COMPLETE, protected.status)
         assertEquals(BrazilBroadcastRules.FM_RULESET_ID, protected.rulesetId)
 
-        assertEquals(ContourPurpose.SCREENING, e5010.purpose)
-        assertEquals(ContourStatus.COMPLETE, e5010.status)
-        assertEquals(66.0, requireNotNull(e5010.thresholdDbuvPerM), STRICT_TOLERANCE)
-        assertEquals("CUSTOM-SCREENING-E50-10", e5010.rulesetId)
-        assertTrue(e5010.warnings.any { warning -> warning.contains("not the current Anatel interference method") })
+        assertEquals(2, e5010.size)
+        assertEquals(listOf(32.0, 60.0), e5010.map { requireNotNull(it.thresholdDbuvPerM) }.sorted())
+        assertTrue(e5010.all { it.status == ContourStatus.COMPLETE })
+        assertTrue(e5010.all { it.rulesetId == BrazilBroadcastRules.LEGACY_FM_RULESET_ID })
+        assertTrue(e5010.all { overlay -> overlay.warnings.any { it.contains("revoked") } })
+        assertTrue(e5010.all { overlay -> overlay.warnings.any { it.contains("P.526") } })
+        assertTrue(e5010.none(ServiceContourOverlay::regulatory))
 
         assertEquals(ContourPurpose.SCREENING, e8080.purpose)
         assertEquals(ContourStatus.NO_DATA, e8080.status)
@@ -553,7 +609,7 @@ class BrazilBroadcastContoursTest {
         val plan = BrazilBroadcastContourPlanner.plan(project)
 
         assertEquals(4, plan.skippedSectorCount)
-        assertEquals(3, plan.overlays.size)
+        assertEquals(4, plan.overlays.size)
         assertEquals(setOf("included"), plan.overlays.map(ServiceContourOverlay::sectorId).toSet())
     }
 
@@ -572,7 +628,7 @@ class BrazilBroadcastContoursTest {
 
         val plan = BrazilBroadcastContourPlanner.plan(project)
 
-        assertEquals(3, plan.overlays.size)
+        assertEquals(4, plan.overlays.size)
         assertTrue(plan.overlays.all { overlay -> overlay.status == ContourStatus.NO_DATA })
         assertTrue(plan.overlays.all { overlay -> overlay.points.isEmpty() })
         assertTrue(plan.overlays.all { overlay -> overlay.radials.isEmpty() })

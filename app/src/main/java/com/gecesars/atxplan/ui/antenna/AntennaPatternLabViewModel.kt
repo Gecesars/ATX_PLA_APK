@@ -319,34 +319,20 @@ class AntennaPatternLabViewModel private constructor(
     fun synthesize(request: AntennaArraySynthesisRequest) = launchOperation("Synthesizing array") {
         val latestProject = repository.loadCatalog().projects.firstOrNull { project -> project.id == projectId }
             ?: throw IllegalStateException("The project is no longer available.")
-        val basePattern = request.basePatternId?.let { patternId ->
-            val record = latestProject.antennaPatterns.firstOrNull { pattern -> pattern.id == patternId }
-                ?: throw IllegalArgumentException("The selected base pattern is unavailable.")
-            val artifactId = record.dataArtifactId
-                ?: throw IllegalArgumentException(
-                    "The selected base pattern has no canonical artifact reference.",
-                )
-            val artifact = latestProject.artifacts.singleOrNull { candidate ->
-                candidate.id == artifactId
-            } ?: throw IllegalArgumentException(
-                "The selected base pattern canonical artifact is missing from the project.",
-            )
-            val canonicalBytes = ByteArrayOutputStream()
-            repository.copyArtifact(
-                reference = artifact,
-                output = canonicalBytes,
-                maximumBytes = AntennaPatternCodecLimits.MAX_INPUT_BYTES.toLong(),
-            )
-            withContext(Dispatchers.Default) {
-                AntennaPatternCanonicalArtifactVerifier.verify(
-                    record = record,
-                    artifact = artifact,
-                    payload = canonicalBytes.toByteArray(),
-                ).pattern
-            }
-        } ?: CanonicalAntennaPattern.isotropic(nominalFrequencyHz = request.frequencyMHz * 1.0e6)
+        val requestedPatternIds = buildSet {
+            request.basePatternId?.let(::add)
+            request.arbitraryElements.mapNotNullTo(this) { element -> element.patternId }
+        }
+        require(requestedPatternIds.size <= 513) {
+            "The array references too many distinct canonical antenna patterns."
+        }
+        val verifiedPatterns = requestedPatternIds.associateWith { patternId ->
+            loadVerifiedPattern(latestProject, patternId)
+        }
+        val basePattern = request.basePatternId?.let(verifiedPatterns::getValue)
+            ?: CanonicalAntennaPattern.isotropic(nominalFrequencyHz = request.frequencyMHz * 1.0e6)
         val configuration = withContext(Dispatchers.Default) {
-            buildArrayConfiguration(request, basePattern)
+            buildArrayConfiguration(request, basePattern, verifiedPatterns)
         }
         val outcome = withContext(Dispatchers.Default) {
             AntennaArrayComposer.compose(configuration)
@@ -429,6 +415,35 @@ class AntennaPatternLabViewModel private constructor(
             )
 
             else -> throw IllegalStateException("The synthesized pattern could not be committed safely.")
+        }
+    }
+
+    private suspend fun loadVerifiedPattern(
+        project: PlannerProject,
+        patternId: String,
+    ): CanonicalAntennaPattern {
+        val record = project.antennaPatterns.firstOrNull { pattern -> pattern.id == patternId }
+            ?: throw IllegalArgumentException("An element references an unavailable base pattern.")
+        val artifactId = record.dataArtifactId
+            ?: throw IllegalArgumentException(
+                "An element base pattern has no canonical artifact reference.",
+            )
+        val artifact = project.artifacts.singleOrNull { candidate -> candidate.id == artifactId }
+            ?: throw IllegalArgumentException(
+                "An element base pattern canonical artifact is missing from the project.",
+            )
+        val canonicalBytes = ByteArrayOutputStream()
+        repository.copyArtifact(
+            reference = artifact,
+            output = canonicalBytes,
+            maximumBytes = AntennaPatternCodecLimits.MAX_INPUT_BYTES.toLong(),
+        )
+        return withContext(Dispatchers.Default) {
+            AntennaPatternCanonicalArtifactVerifier.verify(
+                record = record,
+                artifact = artifact,
+                payload = canonicalBytes.toByteArray(),
+            ).pattern
         }
     }
 
@@ -981,8 +996,20 @@ class AntennaPatternLabViewModel private constructor(
 internal fun buildArrayConfiguration(
     request: AntennaArraySynthesisRequest,
     basePattern: CanonicalAntennaPattern,
+    elementPatterns: Map<String, CanonicalAntennaPattern> = emptyMap(),
 ): AntennaArrayConfiguration {
     val frequencyHz = request.frequencyMHz * 1.0e6
+    if (request.topology == AntennaArrayTopology.ARBITRARY) {
+        return buildArbitraryArrayConfiguration(
+            request = request,
+            basePattern = basePattern,
+            elementPatterns = elementPatterns,
+            frequencyHz = frequencyHz,
+        )
+    }
+    require(request.arbitraryElements.isEmpty()) {
+        "Only the arbitrary topology accepts per-element geometry."
+    }
     val direction = ApertureDirection.fromAngles(
         horizontalAngleDegrees = request.horizontalScanDegrees,
         elevationAngleDegrees = request.verticalScanDegrees,
@@ -1041,6 +1068,115 @@ internal fun buildArrayConfiguration(
         declaredScanAngleDegrees = scanFromBoresight,
     )
 }
+
+private fun buildArbitraryArrayConfiguration(
+    request: AntennaArraySynthesisRequest,
+    basePattern: CanonicalAntennaPattern,
+    elementPatterns: Map<String, CanonicalAntennaPattern>,
+    frequencyHz: Double,
+): AntennaArrayConfiguration {
+    require(request.arbitraryElements.size in 1..512) {
+        "An arbitrary array must contain between 1 and 512 elements."
+    }
+    val ids = request.arbitraryElements.map { element -> element.id }
+    require(ids.distinct().size == ids.size) { "Arbitrary array element IDs must be unique." }
+    request.arbitraryElements.forEach { element ->
+        require(
+            element.id == element.id.trim() &&
+                element.id.length in 1..80 &&
+                element.id.none(Char::isISOControl),
+        ) { "An arbitrary element ID must contain 1–80 safe characters." }
+        require(
+            listOf(element.xWavelengths, element.yWavelengths, element.zWavelengths).all { value ->
+                value.isFinite() && kotlin.math.abs(value) <= 10_000.0
+            },
+        ) { "Arbitrary element coordinates must be finite and within ±10000 wavelengths." }
+        require(
+            element.relativePower.isFinite() && element.relativePower in 0.0..1.0e12,
+        ) { "An arbitrary element relative power must be finite and in [0, 1e12]." }
+        require(element.feedPhaseDegrees.isFinite() && kotlin.math.abs(element.feedPhaseDegrees) <= 1.0e6) {
+            "An arbitrary element feed phase must be finite and within ±1000000 degrees."
+        }
+        require(
+            element.feedDelayNanoseconds.isFinite() &&
+                kotlin.math.abs(element.feedDelayNanoseconds) <= 1.0e6,
+        ) { "An arbitrary element feed delay must be finite and within ±1000000 ns." }
+        require(element.horizontalOrientationDegrees in 0.0..<360.0) {
+            "An arbitrary element azimuth orientation must be in [0, 360) degrees."
+        }
+        require(element.elevationOrientationDegrees in -90.0..90.0) {
+            "An arbitrary element elevation orientation must be in [-90, 90] degrees."
+        }
+        require(element.rollDegrees in -180.0..180.0) {
+            "An arbitrary element roll must be in [-180, 180] degrees."
+        }
+    }
+    val totalRelativePower = request.arbitraryElements.sumOf { element ->
+        if (element.active) element.relativePower else 0.0
+    }
+    require(totalRelativePower.isFinite() && totalRelativePower > 0.0) {
+        "An arbitrary array requires at least one active element with positive relative power."
+    }
+    val elements = request.arbitraryElements.map { element ->
+        val pattern = element.patternId?.let { patternId ->
+            elementPatterns[patternId]
+                ?: throw IllegalArgumentException("Element ${element.id} references an unavailable pattern.")
+        } ?: basePattern
+        val delayPhaseDegrees = -360.0 * frequencyHz * element.feedDelayNanoseconds * 1.0e-9
+        AntennaArrayElement(
+            id = element.id,
+            positionMeters = AperturePositionMeters.fromWavelengths(
+                xWavelengths = element.xWavelengths,
+                yWavelengths = element.yWavelengths,
+                zWavelengths = element.zWavelengths,
+                frequencyHz = frequencyHz,
+            ),
+            pattern = pattern,
+            powerFraction = if (element.active) element.relativePower / totalRelativePower else 0.0,
+            feedPhaseDegrees = wrapPhaseDegrees(element.feedPhaseDegrees + delayPhaseDegrees),
+            orientation = ElementOrientation(
+                horizontalAngleDegrees = element.horizontalOrientationDegrees,
+                elevationAngleDegrees = element.elevationOrientationDegrees,
+                rollDegrees = element.rollDegrees,
+            ),
+            active = element.active,
+        )
+    }
+    val elementSignature = request.arbitraryElements.joinToString("\u0001") { element ->
+        listOf(
+            element.id,
+            element.patternId.orEmpty(),
+            element.xWavelengths,
+            element.yWavelengths,
+            element.zWavelengths,
+            element.relativePower,
+            element.feedPhaseDegrees,
+            element.feedDelayNanoseconds,
+            element.horizontalOrientationDegrees,
+            element.elevationOrientationDegrees,
+            element.rollDegrees,
+            element.active,
+        ).joinToString("\u0000")
+    }
+    val deterministicId = sha256(
+        listOf(
+            request.name,
+            request.basePatternId.orEmpty(),
+            request.frequencyMHz,
+            request.topology.name,
+            elementSignature,
+        ).joinToString("\u0000").toByteArray(Charsets.UTF_8),
+    ).take(24)
+    return AntennaArrayConfiguration(
+        id = "array-$deterministicId",
+        name = request.name,
+        frequencyHz = frequencyHz,
+        elements = elements,
+        declaredScanAngleDegrees = null,
+    )
+}
+
+private fun wrapPhaseDegrees(value: Double): Double = ((value + 180.0) % 360.0 + 360.0) % 360.0 - 180.0
 
 private data class PlannedArrayElement(
     val xWavelengths: Double,
@@ -1130,6 +1266,10 @@ private fun planArrayGeometry(request: AntennaArraySynthesisRequest): List<Plann
                 }
             }
         }
+
+        AntennaArrayTopology.ARBITRARY -> error(
+            "Arbitrary elements are built directly and do not use structured geometry planning.",
+        )
     }
 
 private fun taperAmplitude(

@@ -26,6 +26,7 @@ enum class BroadcastService {
 
 enum class ContourPurpose {
     PROTECTED,
+    INTERFERING,
     SCREENING,
 }
 
@@ -130,7 +131,23 @@ data class BrazilProtectedContourProfile(
     val sourceUrl: String,
 )
 
-/** Current first-generation FM and digital-TV planning rules checked on 2026-08-28. */
+enum class BroadcastInterferenceRelation(val label: String) {
+    COCHANNEL("cochannel"),
+    FIRST_ADJACENT("first-adjacent"),
+}
+
+data class BrazilLegacyInterferingContourProfile(
+    val service: BroadcastService,
+    val channel: Int,
+    val relation: BroadcastInterferenceRelation,
+    val statisticalBasis: String,
+    val thresholdDbuvPerM: Double,
+    val protectionRatioDb: Double,
+    val rulesetId: String,
+    val sourceUrl: String,
+)
+
+/** Current and historical first-generation FM/digital-TV rules checked on 2026-08-31. */
 object BrazilBroadcastRules {
     const val FM_RULESET_ID = "ANATEL-ACT-8104-2022"
     const val DIGITAL_TV_RULESET_ID = "ANATEL-ACT-9751-2022"
@@ -138,10 +155,37 @@ object BrazilBroadcastRules {
         "https://informacoes.anatel.gov.br/legislacao/atos-de-requisitos-tecnicos-de-gestao-do-espectro/2022/1687-ato-8104"
     const val DIGITAL_TV_SOURCE_URL =
         "https://informacoes.anatel.gov.br/legislacao/atos-de-requisitos-tecnicos-de-gestao-do-espectro/2022/1688-ato-9751"
+    const val LEGACY_FM_RULESET_ID = "ANATEL-RESOLUTION-67-1998-REVOKED"
+    const val LEGACY_FM_SOURCE_URL =
+        "https://informacoes.anatel.gov.br/legislacao/resolucoes/2004/resolucoes/13-1998/168-resolucao-67"
+    const val LEGACY_TV_RULESET_ID = "ANATEL-RESOLUTION-398-2005-REVOKED"
+    const val LEGACY_TV_SOURCE_URL =
+        "https://informacoes.anatel.gov.br/legislacao/resolucoes/resolucoes/20-2005/288-resolucao-398"
 
     const val FM_PROTECTED_THRESHOLD_DBUV_PER_M = 66.0
     const val DIGITAL_TV_HIGH_VHF_THRESHOLD_DBUV_PER_M = 43.0
     const val DIGITAL_TV_UHF_THRESHOLD_DBUV_PER_M = 51.0
+    const val FM_CURRENT_COCHANNEL_DU_DB = 30.0
+    const val FM_CURRENT_FIRST_ADJACENT_DU_DB = 6.0
+    const val FM_LEGACY_COCHANNEL_DU_DB = 34.0
+    const val FM_LEGACY_FIRST_ADJACENT_DU_DB = 6.0
+    const val DIGITAL_TV_COCHANNEL_DU_DB = BrazilDigitalTvRegulatoryStudyPlanner.TVD_COCHANNEL_DU_DB
+    const val DIGITAL_TV_FIRST_ADJACENT_DU_DB = BrazilDigitalTvRegulatoryStudyPlanner.TVD_ADJACENT_DU_DB
+
+    fun currentProtectionRatioDb(
+        service: BroadcastService,
+        relation: BroadcastInterferenceRelation,
+    ): Double = when (service) {
+        BroadcastService.FM -> when (relation) {
+            BroadcastInterferenceRelation.COCHANNEL -> FM_CURRENT_COCHANNEL_DU_DB
+            BroadcastInterferenceRelation.FIRST_ADJACENT -> FM_CURRENT_FIRST_ADJACENT_DU_DB
+        }
+
+        BroadcastService.DIGITAL_TV -> when (relation) {
+            BroadcastInterferenceRelation.COCHANNEL -> DIGITAL_TV_COCHANNEL_DU_DB
+            BroadcastInterferenceRelation.FIRST_ADJACENT -> DIGITAL_TV_FIRST_ADJACENT_DU_DB
+        }
+    }
 
     fun protectedProfile(
         service: BroadcastService,
@@ -163,6 +207,63 @@ object BrazilBroadcastRules {
             }
 
             BroadcastService.DIGITAL_TV -> digitalTvProfile(frequencyMHz)
+        }
+    }
+
+    /**
+     * Reconstructs the statistical E(50,10) envelopes used by revoked FM/TV rules. These are
+     * deliberately separate from the current Acts 8104/2022 and 9751/2022, whose interfering
+     * signal method is point-to-point ITU-R P.526 associated with Assis (1971).
+     */
+    fun legacyInterferingProfiles(
+        service: BroadcastService,
+        frequencyMHz: Double,
+    ): List<BrazilLegacyInterferingContourProfile> {
+        val protected = protectedProfile(service, frequencyMHz) ?: return emptyList()
+        val channel = protected.channel ?: return emptyList()
+        val inputs = when (service) {
+            BroadcastService.FM -> listOf(
+                Triple(
+                    BroadcastInterferenceRelation.COCHANNEL,
+                    FM_LEGACY_COCHANNEL_DU_DB,
+                    LEGACY_FM_RULESET_ID,
+                ),
+                Triple(
+                    BroadcastInterferenceRelation.FIRST_ADJACENT,
+                    FM_LEGACY_FIRST_ADJACENT_DU_DB,
+                    LEGACY_FM_RULESET_ID,
+                ),
+            )
+
+            BroadcastService.DIGITAL_TV -> listOf(
+                Triple(
+                    BroadcastInterferenceRelation.COCHANNEL,
+                    DIGITAL_TV_COCHANNEL_DU_DB,
+                    LEGACY_TV_RULESET_ID,
+                ),
+                Triple(
+                    BroadcastInterferenceRelation.FIRST_ADJACENT,
+                    DIGITAL_TV_FIRST_ADJACENT_DU_DB,
+                    LEGACY_TV_RULESET_ID,
+                ),
+            )
+        }
+        val sourceUrl = when (service) {
+            BroadcastService.FM -> LEGACY_FM_SOURCE_URL
+            BroadcastService.DIGITAL_TV -> LEGACY_TV_SOURCE_URL
+        }
+        return inputs.map { (relation, protectionRatioDb, rulesetId) ->
+            BrazilLegacyInterferingContourProfile(
+                service = service,
+                channel = channel,
+                relation = relation,
+                statisticalBasis =
+                    "E(50,10) legacy ${relation.label} interfering envelope",
+                thresholdDbuvPerM = protected.thresholdDbuvPerM - protectionRatioDb,
+                protectionRatioDb = protectionRatioDb,
+                rulesetId = rulesetId,
+                sourceUrl = sourceUrl,
+            )
         }
     }
 
@@ -256,14 +357,15 @@ object BrazilBroadcastContourPlanner {
                     service,
                     assignedPattern,
                 )
+                overlays += buildLegacyInterferingOverlays(
+                    project.id,
+                    site,
+                    sector,
+                    network,
+                    service,
+                    assignedPattern,
+                )
                 if (service == BroadcastService.FM) {
-                    overlays += buildFmScreeningOverlay(
-                        project.id,
-                        site,
-                        sector,
-                        network,
-                        assignedPattern,
-                    )
                     overlays += unsupportedFmEightyEighty(
                         project.id,
                         site,
@@ -367,62 +469,49 @@ object BrazilBroadcastContourPlanner {
         )
     }
 
-    private fun buildFmScreeningOverlay(
+    private fun buildLegacyInterferingOverlays(
         projectId: String,
         site: RadioSite,
         sector: Sector,
         network: RfNetwork,
+        service: BroadcastService,
         assignedPattern: AntennaPatternRecord?,
-    ): ServiceContourOverlay {
-        if (BrazilBroadcastRules.protectedProfile(BroadcastService.FM, sector.frequencyMHz) == null) {
-            return noDataOverlay(
+    ): List<ServiceContourOverlay> = BrazilBroadcastRules
+        .legacyInterferingProfiles(service, sector.frequencyMHz)
+        .map { legacy ->
+            val profile = BrazilProtectedContourProfile(
+                service = legacy.service,
+                channel = legacy.channel,
+                statisticalBasis = legacy.statisticalBasis,
+                thresholdDbuvPerM = legacy.thresholdDbuvPerM,
+                rulesetId = legacy.rulesetId,
+                sourceUrl = legacy.sourceUrl,
+            )
+            calculatedOverlay(
                 projectId = projectId,
                 site = site,
                 sector = sector,
                 network = network,
                 assignedPattern = assignedPattern,
-                service = BroadcastService.FM,
-                purpose = ContourPurpose.SCREENING,
-                statisticalBasis = "E(50,10) screening overlay — non-regulatory",
-                rulesetId = "CUSTOM-SCREENING-E50-10",
-                sourceUrl = BrazilBroadcastRules.FM_SOURCE_URL,
-                warning =
-                    "The stored frequency does not resolve to a supported FM channel 141–197 or 201–300.",
-                thresholdDbuvPerM = BrazilBroadcastRules.FM_PROTECTED_THRESHOLD_DBUV_PER_M,
+                service = service,
+                purpose = ContourPurpose.INTERFERING,
+                profile = profile,
+                fieldAtDistance = { distanceKm, erpKw, heightM ->
+                    P1546LandReference.fieldStrengthDbuvPerM(
+                        frequencyMHz = sector.frequencyMHz,
+                        timePercent = 10,
+                        effectiveHeightM = heightM,
+                        distanceKm = distanceKm,
+                        erpKw = erpKw,
+                    )
+                },
+                additionalWarnings = listOf(
+                    "This E(50,10) envelope reconstructs a revoked planning method and is not a result under the current Anatel rules.",
+                    "Its ${formatRuleValue(legacy.thresholdDbuvPerM)} dBµV/m threshold equals the protected-field threshold minus the historical ${formatRuleValue(legacy.protectionRatioDb)} dB ${legacy.relation.label} D/U ratio.",
+                    INTERFERENCE_WARNING,
+                ),
             )
         }
-        val profile = BrazilProtectedContourProfile(
-            service = BroadcastService.FM,
-            channel = null,
-            statisticalBasis = "E(50,10) screening overlay — non-regulatory",
-            thresholdDbuvPerM = BrazilBroadcastRules.FM_PROTECTED_THRESHOLD_DBUV_PER_M,
-            rulesetId = "CUSTOM-SCREENING-E50-10",
-            sourceUrl = BrazilBroadcastRules.FM_SOURCE_URL,
-        )
-        return calculatedOverlay(
-            projectId = projectId,
-            site = site,
-            sector = sector,
-            network = network,
-            assignedPattern = assignedPattern,
-            service = BroadcastService.FM,
-            purpose = ContourPurpose.SCREENING,
-            profile = profile,
-            fieldAtDistance = { distanceKm, erpKw, heightM ->
-                P1546LandReference.fieldStrengthDbuvPerM(
-                    frequencyMHz = sector.frequencyMHz,
-                    timePercent = 10,
-                    effectiveHeightM = heightM,
-                    distanceKm = distanceKm,
-                    erpKw = erpKw,
-                )
-            },
-            additionalWarnings = listOf(
-                "E(50,10) is shown only as a statistical screening overlay and is not the current Anatel interference method.",
-                INTERFERENCE_WARNING,
-            ),
-        )
-    }
 
     private fun unsupportedFmEightyEighty(
         projectId: String,
@@ -445,6 +534,8 @@ object BrazilBroadcastContourPlanner {
             "No current Anatel FM rule defines E(80,80), and P.1546 does not permit a direct 80% time prediction; the overlay is NoData.",
         suffix = "e80-80-nodata",
     )
+
+    private fun formatRuleValue(value: Double): String = String.format(Locale.US, "%.1f", value)
 
     private fun calculatedOverlay(
         projectId: String,

@@ -16,11 +16,16 @@ class AntennaArrayConfigurationFactoryTest {
             AntennaArrayTopology.PLANAR to 12,
             AntennaArrayTopology.CIRCULAR to 4,
             AntennaArrayTopology.MULTIPANEL to 12,
+            AntennaArrayTopology.ARBITRARY to 2,
         )
         expectedCounts.forEach { (topology, expectedCount) ->
             val configuration = buildArrayConfiguration(
                 request(topology),
                 CanonicalAntennaPattern.isotropic(nominalFrequencyHz = 100_000_000.0),
+                mapOf(
+                    "element-pattern" to
+                        CanonicalAntennaPattern.isotropic(nominalFrequencyHz = 101_000_000.0),
+                ),
             )
             assertEquals(topology.name, expectedCount, configuration.elements.size)
             assertEquals(
@@ -82,6 +87,61 @@ class AntennaArrayConfigurationFactoryTest {
         assertEquals(1.0, powers.sum(), 1e-12)
     }
 
+    @Test
+    fun arbitraryElementsPreserveGeometryOrientationPatternAndNormalizedExcitation() {
+        val frequencyHz = 100_000_000.0
+        val wavelength = AntennaPatternEngine.SPEED_OF_LIGHT_METERS_PER_SECOND / frequencyHz
+        val globalPattern = CanonicalAntennaPattern.isotropic(nominalFrequencyHz = frequencyHz)
+        val elementPattern = CanonicalAntennaPattern.isotropic(nominalFrequencyHz = 101_000_000.0)
+        val configuration = buildArrayConfiguration(
+            request(AntennaArrayTopology.ARBITRARY),
+            globalPattern,
+            mapOf("element-pattern" to elementPattern),
+        )
+
+        assertEquals(null, configuration.declaredScanAngleDegrees)
+        assertEquals(listOf("driver", "passive"), configuration.elements.map { it.id })
+        assertEquals(1.0, configuration.elements[0].positionMeters.xMeters / wavelength, 1e-12)
+        assertEquals(-0.5, configuration.elements[0].positionMeters.yMeters / wavelength, 1e-12)
+        assertEquals(0.25, configuration.elements[0].positionMeters.zMeters / wavelength, 1e-12)
+        assertEquals(1.0, configuration.elements[0].powerFraction, 1e-12)
+        assertEquals(-90.0, configuration.elements[0].feedPhaseDegrees, 1e-9)
+        assertEquals(45.0, configuration.elements[0].orientation.horizontalAngleDegrees, 1e-12)
+        assertEquals(5.0, configuration.elements[0].orientation.elevationAngleDegrees, 1e-12)
+        assertEquals(-10.0, configuration.elements[0].orientation.rollDegrees, 1e-12)
+        assertEquals(elementPattern, configuration.elements[0].pattern)
+        assertTrue(!configuration.elements[1].active)
+        assertEquals(0.0, configuration.elements[1].powerFraction, 1e-12)
+    }
+
+    @Test
+    fun arbitraryElementsRejectDuplicateIdsAndArraysWithoutActivePower() {
+        val base = CanonicalAntennaPattern.isotropic(nominalFrequencyHz = 100_000_000.0)
+        val duplicate = request(AntennaArrayTopology.ARBITRARY).let { request ->
+            request.copy(
+                arbitraryElements = request.arbitraryElements.map { element ->
+                    element.copy(id = "duplicate")
+                },
+            )
+        }
+        val noPower = request(AntennaArrayTopology.ARBITRARY).let { request ->
+            request.copy(
+                arbitraryElements = request.arbitraryElements.map { element ->
+                    element.copy(active = false)
+                },
+            )
+        }
+
+        assertTrue(
+            runCatching { buildArrayConfiguration(duplicate, base) }.exceptionOrNull()
+                is IllegalArgumentException,
+        )
+        assertTrue(
+            runCatching { buildArrayConfiguration(noPower, base) }.exceptionOrNull()
+                is IllegalArgumentException,
+        )
+    }
+
     private fun request(
         topology: AntennaArrayTopology,
         taper: AntennaArrayTaper = AntennaArrayTaper.UNIFORM,
@@ -97,5 +157,37 @@ class AntennaArrayConfigurationFactoryTest {
         horizontalScanDegrees = 0.0,
         verticalScanDegrees = 0.0,
         taper = taper,
+        arbitraryElements = if (topology == AntennaArrayTopology.ARBITRARY) {
+            listOf(
+                AntennaArbitraryElementRequest(
+                    id = "driver",
+                    patternId = "element-pattern",
+                    xWavelengths = 1.0,
+                    yWavelengths = -0.5,
+                    zWavelengths = 0.25,
+                    relativePower = 3.0,
+                    feedPhaseDegrees = 0.0,
+                    feedDelayNanoseconds = 2.5,
+                    horizontalOrientationDegrees = 45.0,
+                    elevationOrientationDegrees = 5.0,
+                    rollDegrees = -10.0,
+                ),
+                AntennaArbitraryElementRequest(
+                    id = "passive",
+                    xWavelengths = 0.0,
+                    yWavelengths = 0.0,
+                    zWavelengths = 0.0,
+                    relativePower = 9.0,
+                    feedPhaseDegrees = 15.0,
+                    feedDelayNanoseconds = 0.0,
+                    horizontalOrientationDegrees = 0.0,
+                    elevationOrientationDegrees = 0.0,
+                    rollDegrees = 0.0,
+                    active = false,
+                ),
+            )
+        } else {
+            emptyList()
+        },
     )
 }

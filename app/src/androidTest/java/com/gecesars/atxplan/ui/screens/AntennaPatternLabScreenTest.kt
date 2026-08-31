@@ -158,6 +158,55 @@ class AntennaPatternLabScreenTest {
     }
 
     @Test
+    fun arbitraryEditorAddsUniqueElementsAndSubmitsBoundedElementData() {
+        var selectedTopology: AntennaArrayTopology? = null
+        var elementIds: List<String> = emptyList()
+        composeRule.setContent {
+            AtxPlanTheme {
+                AntennaPatternLabScreen(
+                    project = emptyProject,
+                    state = AntennaPatternLabUiState(),
+                    isCatalogWritable = true,
+                    onImportUri = {},
+                    onImportPairUris = {},
+                    onConfirmImport = {},
+                    onDismissImport = {},
+                    onResolvePrnConvention = { _, _ -> },
+                    onDismissPrnConvention = { _ -> },
+                    onSynthesize = { request ->
+                        selectedTopology = request.topology
+                        elementIds = request.arbitraryElements.map { it.id }
+                    },
+                    onPrepareExport = { _, _ -> },
+                    onExportUri = { _, _, _ -> },
+                    onDismissExport = { _ -> },
+                    onAssignTransmitPattern = { _, _, _ -> },
+                    onDeletePattern = {},
+                    onDismissMessage = {},
+                    onBack = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Composer").performClick()
+        composeRule.onNodeWithText("Planar").performScrollTo().performClick()
+        composeRule.onNodeWithText("Arbitrary elements").performClick()
+        composeRule.onNodeWithTag("arbitrary_element_editor").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("arbitrary_duplicate_element").performClick()
+        composeRule.onNodeWithText("2 elements", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Element 2 of 2").assertIsDisplayed()
+        composeRule.onNodeWithTag("synthesize_pattern")
+            .performScrollTo()
+            .assertIsEnabled()
+            .performClick()
+        composeRule.runOnIdle {
+            assertEquals(AntennaArrayTopology.ARBITRARY, selectedTopology)
+            assertEquals(2, elementIds.size)
+            assertEquals(2, elementIds.distinct().size)
+        }
+    }
+
+    @Test
     fun readOnlyCatalogDisablesImportAndSynthesis() {
         composeRule.setContent {
             AtxPlanTheme {

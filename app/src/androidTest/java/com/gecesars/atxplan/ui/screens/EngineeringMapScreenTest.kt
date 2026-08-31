@@ -172,11 +172,11 @@ class EngineeringMapScreenTest {
 
         composeRule.onNodeWithTag("compact_contour_map_host").assertIsDisplayed()
         composeRule.onNodeWithContentDescription(
-            "3 service contour records",
+            "4 service contour records",
             substring = true,
         ).assertIsDisplayed()
         composeRule.onNodeWithContentDescription(
-            "1 complete geometry, 1 incomplete geometry, 1 NoData",
+            "2 complete geometry, 1 incomplete geometry, 1 NoData",
             substring = true,
         ).assertIsDisplayed()
         composeRule.onNodeWithTag("export_service_contours_kmz").assertIsDisplayed()
@@ -185,8 +185,9 @@ class EngineeringMapScreenTest {
             .performScrollToNode(hasTestTag("service_contour_legend"))
         composeRule.onNodeWithTag("service_contour_legend").assertIsDisplayed()
         composeRule.onNodeWithText("Protected — solid; complete geometry filled").assertIsDisplayed()
+        composeRule.onNodeWithText("Legacy E(50,10) interfering envelope — dash-dot").assertIsDisplayed()
         composeRule.onNodeWithText("Statistical screening — dashed").assertIsDisplayed()
-        composeRule.onNodeWithText("Complete geometry: 1").assertIsDisplayed()
+        composeRule.onNodeWithText("Complete geometry: 2").assertIsDisplayed()
         composeRule.onNodeWithText("Incomplete geometry: 1").assertIsDisplayed()
         composeRule.onNodeWithText("NoData: 1").assertIsDisplayed()
         composeRule.onNodeWithText("FM Protected").assertDoesNotExist()
@@ -203,7 +204,7 @@ class EngineeringMapScreenTest {
         composeRule.onNodeWithTag("service_contour_details_toggle")
             .performScrollTo()
             .performClick()
-        composeRule.onNodeWithText("Show details (3)").assertIsDisplayed()
+        composeRule.onNodeWithText("Show details (4)").assertIsDisplayed()
         composeRule.onNodeWithText(
             "Service-contour geometry is rendered only from supplied local results",
             substring = true,
@@ -613,6 +614,26 @@ class EngineeringMapScreenTest {
             model = "Validated broadcast contour fixture",
             rulesetId = "anatel-fm-fixture-v1",
             warnings = emptyList(),
+        ),
+        ServiceContourOverlay(
+            id = "fm-interfering-legacy",
+            siteId = "ridge",
+            sectorId = "ridge-fm",
+            service = BroadcastService.FM,
+            purpose = ContourPurpose.INTERFERING,
+            statisticalBasis = "E(50,10) legacy cochannel interfering envelope",
+            thresholdDbuvPerM = 32.0,
+            points = listOf(
+                GeoPoint(-23.46, -46.72),
+                GeoPoint(-23.46, -46.54),
+                GeoPoint(-23.64, -46.54),
+                GeoPoint(-23.64, -46.72),
+                GeoPoint(-23.46, -46.72),
+            ),
+            status = ContourStatus.COMPLETE,
+            model = "Validated legacy contour fixture",
+            rulesetId = "ANATEL-RESOLUTION-67-1998-REVOKED",
+            warnings = listOf("Revoked method; not a current regulatory result."),
         ),
         ServiceContourOverlay(
             id = "tv-screening",
