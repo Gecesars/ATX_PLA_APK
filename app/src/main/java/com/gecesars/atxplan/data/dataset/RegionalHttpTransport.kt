@@ -17,6 +17,7 @@ data class RegionalHttpRequest(
     val url: String,
     val method: RegionalHttpRequestMethod,
     val rangeStart: Long? = null,
+    val rangeEndInclusive: Long? = null,
     val ifRangeEtag: String? = null,
     val body: String? = null,
     val contentType: String? = null,
@@ -26,8 +27,14 @@ data class RegionalHttpRequest(
         require(rangeStart == null || rangeStart >= 0L) {
             "The HTTP range start must not be negative."
         }
+        require(rangeEndInclusive == null || rangeStart != null && rangeEndInclusive >= rangeStart) {
+            "The HTTP range end requires a start and must not precede it."
+        }
         require(method == RegionalHttpRequestMethod.GET || rangeStart == null) {
             "Only GET requests may use byte ranges."
+        }
+        require(method == RegionalHttpRequestMethod.GET || rangeEndInclusive == null) {
+            "Only GET requests may use bounded byte ranges."
         }
         require(method == RegionalHttpRequestMethod.GET || ifRangeEtag == null) {
             "Only GET requests may use an If-Range validator."
@@ -238,7 +245,8 @@ class AllowlistedHttpsRegionalHttpTransport private constructor(
 
         if (method == RegionalHttpRequestMethod.GET) {
             request.rangeStart?.let { start ->
-                connection.setRequestProperty("Range", "bytes=$start-")
+                val end = request.rangeEndInclusive?.toString().orEmpty()
+                connection.setRequestProperty("Range", "bytes=$start-$end")
                 request.ifRangeEtag?.takeIf(::isSafeHeaderValue)?.let { etag ->
                     connection.setRequestProperty("If-Range", etag)
                 }

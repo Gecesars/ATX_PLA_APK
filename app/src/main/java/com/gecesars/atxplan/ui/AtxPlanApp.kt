@@ -61,7 +61,9 @@ import com.gecesars.atxplan.data.export.BrazilDigitalTvStudyReportExporter
 import com.gecesars.atxplan.data.export.BrazilDigitalTvStudyXlsxExporter
 import com.gecesars.atxplan.data.export.ServiceContourKmzExporter
 import com.gecesars.atxplan.data.regulatory.AndroidBrazilDigitalTvStudyRunner
+import com.gecesars.atxplan.data.regulatory.RegulatoryArtifactProgress
 import com.gecesars.atxplan.ui.dataset.DataCatalogViewModel
+import com.gecesars.atxplan.ui.dataset.IbgeCatalogStatus
 import com.gecesars.atxplan.ui.dataset.RegionalDataViewModel
 import com.gecesars.atxplan.domain.contour.BrazilBroadcastContourPlanner
 import com.gecesars.atxplan.domain.contour.BrazilDigitalTvRegulatoryStudyResult
@@ -193,12 +195,18 @@ private fun AtxPlanShell(
     var navigationNotice by remember { mutableStateOf<String?>(null) }
     val context = LocalContext.current
     val exportScope = rememberCoroutineScope()
+    val regulatoryIbgeViewModel: DataCatalogViewModel = viewModel(
+        key = "regulatory-ibge-catalog",
+        factory = DataCatalogViewModel.factory(context),
+    )
+    val regulatoryIbgeState by regulatoryIbgeViewModel.state.collectAsStateWithLifecycle()
     val regulatoryStudyRunner = remember(context.applicationContext) {
         AndroidBrazilDigitalTvStudyRunner(context.applicationContext)
     }
     var regulatoryStudy by remember { mutableStateOf<BrazilDigitalTvRegulatoryStudyResult?>(null) }
     var regulatoryStudyError by remember { mutableStateOf<String?>(null) }
     var regulatoryStudyProgress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    var regulatoryStudyPreparation by remember { mutableStateOf<RegulatoryArtifactProgress?>(null) }
     var isRunningRegulatoryStudy by remember { mutableStateOf(false) }
     var regulatoryStudyJob by remember { mutableStateOf<Job?>(null) }
     val activeTopLevelRoute = when (activeRoute) {
@@ -413,9 +421,10 @@ private fun AtxPlanShell(
                                             planned.filterNot { overlay ->
                                                 overlay.siteId == calculated.siteId &&
                                                     overlay.sectorId == calculated.sectorId &&
-                                                    overlay.service == BroadcastService.DIGITAL_TV &&
+                                                    overlay.service == calculated.service &&
                                                     overlay.purpose == ContourPurpose.PROTECTED
-                                            } + calculated.contour
+                                            } + calculated.contour +
+                                                calculated.referenceContours.map { it.contour }
                                         }
                                     }
                                     EngineeringMapScreen(
@@ -427,6 +436,9 @@ private fun AtxPlanShell(
                                         duAssessments = regulatoryStudy?.takeIf { study ->
                                             study.projectId == state.selectedProject?.id
                                         }?.duAssessments.orEmpty(),
+                                        censusGeometry = regulatoryStudy?.takeIf { study ->
+                                            study.projectId == state.selectedProject?.id
+                                        }?.censusGeometry,
                                         basemapState = basemapState,
                                         isCatalogWritable = state.isCatalogWritable,
                                         isSaving = state.isSavingCatalog,
@@ -470,7 +482,20 @@ private fun AtxPlanShell(
                                         brazilDigitalTvStudyError = regulatoryStudyError,
                                         isRunningBrazilDigitalTvStudy = isRunningRegulatoryStudy,
                                         brazilDigitalTvStudyProgress = regulatoryStudyProgress,
-                                        onRunBrazilDigitalTvStudy = { radiusKm ->
+                                        brazilDigitalTvStudyPreparation = regulatoryStudyPreparation,
+                                        municipalityQuery = regulatoryIbgeState.municipalityQuery,
+                                        municipalityResults = regulatoryIbgeState.municipalityResults,
+                                        selectedMunicipality = regulatoryIbgeState.selectedMunicipality,
+                                        isMunicipalityCatalogReady =
+                                            regulatoryIbgeState.ibgeStatus == IbgeCatalogStatus.READY,
+                                        isSearchingMunicipalities =
+                                            regulatoryIbgeState.isSearchingMunicipalities,
+                                        municipalityError = regulatoryIbgeState.datasetErrorMessage
+                                            ?: regulatoryIbgeState.searchErrorMessage,
+                                        onMunicipalityQueryChange =
+                                            regulatoryIbgeViewModel::updateMunicipalityQuery,
+                                        onMunicipalitySelected = regulatoryIbgeViewModel::selectMunicipality,
+                                        onRunBrazilDigitalTvStudy = { radiusKm, municipality ->
                                             val projectSnapshot = currentUiState.value.selectedProject
                                             if (projectSnapshot == null) {
                                                 regulatoryStudyError =
@@ -480,14 +505,19 @@ private fun AtxPlanShell(
                                                 regulatoryStudy = null
                                                 regulatoryStudyError = null
                                                 regulatoryStudyProgress = 0 to 1
+                                                regulatoryStudyPreparation = null
                                                 isRunningRegulatoryStudy = true
                                                 regulatoryStudyJob = exportScope.launch {
                                                     try {
                                                         val calculated = regulatoryStudyRunner.run(
                                                             project = projectSnapshot,
                                                             radiusKm = radiusKm,
-                                                            referenceStateCode = "SP",
+                                                            municipality = municipality,
+                                                            onPreparation = { preparation ->
+                                                                regulatoryStudyPreparation = preparation
+                                                            },
                                                             onProgress = { completed, total ->
+                                                                regulatoryStudyPreparation = null
                                                                 regulatoryStudyProgress = completed to total
                                                             },
                                                         )
@@ -504,6 +534,7 @@ private fun AtxPlanShell(
                                                     } finally {
                                                         isRunningRegulatoryStudy = false
                                                         regulatoryStudyProgress = null
+                                                        regulatoryStudyPreparation = null
                                                         regulatoryStudyJob = null
                                                     }
                                                 }
@@ -559,7 +590,8 @@ private fun AtxPlanShell(
                                                 exportScope.launch {
                                                     navigationNotice = exportServiceContoursKmz(
                                                         context = context,
-                                                        overlays = listOf(resultSnapshot.contour),
+                                                        overlays = listOf(resultSnapshot.contour) +
+                                                            resultSnapshot.referenceContours.map { it.contour },
                                                         destination = destination,
                                                     )
                                                 }

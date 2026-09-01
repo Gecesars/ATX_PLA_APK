@@ -2,150 +2,129 @@ package com.gecesars.atxplan.data.regulatory
 
 import android.content.Context
 import com.gecesars.atxplan.data.anatel.AndroidAnatelBasicPlanCatalog
-import com.gecesars.atxplan.data.dataset.CopernicusGeoTiffTerrainSource
-import com.gecesars.atxplan.data.dataset.REGIONAL_DATA_DIRECTORY
-import com.gecesars.atxplan.data.dataset.RegionalDataComposition
+import com.gecesars.atxplan.data.dataset.BundledIbgeDatasetRepository
 import com.gecesars.atxplan.domain.anatel.AnatelBasicPlanCatalogLimits
 import com.gecesars.atxplan.domain.anatel.AnatelBasicPlanQuery
 import com.gecesars.atxplan.domain.anatel.AnatelBasicPlanRecord
 import com.gecesars.atxplan.domain.anatel.AnatelBroadcastService
-import com.gecesars.atxplan.domain.contour.BrazilDigitalTvRegulatoryStudyPlanner
+import com.gecesars.atxplan.domain.contour.BrazilBroadcastRegulatoryStudyPlanner
 import com.gecesars.atxplan.domain.contour.BrazilDigitalTvRegulatoryStudyResult
-import com.gecesars.atxplan.domain.contour.RegulatoryTerrainProvenance
-import com.gecesars.atxplan.domain.contour.RegulatoryTerrainArtifactProvenance
-import com.gecesars.atxplan.domain.dataset.RegionalDataType
-import com.gecesars.atxplan.domain.dataset.RegionalInventoryRecord
-import com.gecesars.atxplan.domain.dataset.RegionalProcessingState
-import com.gecesars.atxplan.domain.dataset.RegionalTransferStatus
+import com.gecesars.atxplan.domain.contour.BroadcastService
+import com.gecesars.atxplan.domain.contour.BrazilBroadcastRegulatoryContext
+import com.gecesars.atxplan.domain.contour.RegulatoryMunicipalityContext
+import com.gecesars.atxplan.domain.dataset.RegionalBounds
+import com.gecesars.atxplan.domain.model.GeoPoint
 import com.gecesars.atxplan.domain.model.PlannerProject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.FileInputStream
 import java.io.IOException
-import java.security.MessageDigest
-import java.util.Locale
 import kotlin.coroutines.coroutineContext
+import kotlin.math.cos
 
-/** Android composition boundary for a bounded, local Brazil digital-TV regulatory study. */
+/** Android composition boundary for a bounded, local Brazil FM or digital-TV regulatory study. */
 class AndroidBrazilDigitalTvStudyRunner(
     context: Context,
 ) {
     private val applicationContext = context.applicationContext
-    private val regionalRepository = RegionalDataComposition.datasetRepository(applicationContext)
     private val catalog = AndroidAnatelBasicPlanCatalog(applicationContext)
-    private val regionalRoot = File(applicationContext.noBackupFilesDir, REGIONAL_DATA_DIRECTORY)
+    private val ibgeAttributes = BundledIbgeDatasetRepository(applicationContext)
+    private val regulatoryRoot = File(applicationContext.noBackupFilesDir, REGULATORY_INPUT_DIRECTORY)
 
     suspend fun run(
         project: PlannerProject,
         radiusKm: Double,
-        referenceStateCode: String,
+        municipality: RegulatoryMunicipalityContext,
+        onPreparation: (RegulatoryArtifactProgress) -> Unit = {},
         onProgress: (completed: Int, total: Int) -> Unit = { _, _ -> },
     ): BrazilDigitalTvRegulatoryStudyResult {
-        val normalizedState = referenceStateCode.trim().uppercase(Locale.ROOT)
-        require(normalizedState.matches(Regex("[A-Z]{2}"))) {
-            "The reference-state code must contain two letters."
-        }
+        val projectService = projectBroadcastServiceAndChannel(project)
         val prepared = withContext(Dispatchers.IO) {
-            val inventory = regionalRepository.loadInventory()
-            val terrainRecords = inventory.artifacts.values
-                .filter(::isReadyCopernicusTerrain)
-                .sortedWith(
-                    compareBy<RegionalInventoryRecord>(RegionalInventoryRecord::relativePath)
-                        .thenByDescending { it.acquiredAt.orEmpty() },
-                )
-                .distinctBy(RegionalInventoryRecord::relativePath)
-                .take(MAXIMUM_TERRAIN_ARTIFACTS)
-            if (terrainRecords.isEmpty()) {
-                throw IOException(
-                    "No processed Copernicus GLO-30 terrain tile is ready. Use Data > Regional Data first.",
-                )
-            }
-            val terrains = terrainRecords.map { record ->
-                PreparedTerrain(record, resolveVerifiedArtifact(record))
-            }
+            ibgeAttributes.prepare()
+            val censusGeometry = IbgeCensusGeometryRepository(
+                root = regulatoryRoot,
+                ibgeAttributes = ibgeAttributes,
+            ).prepareMunicipality(
+                municipality = municipality,
+                transmitter = projectService.center,
+                onProgress = onPreparation,
+            )
+            val licensedBaseline = McomLicensedBroadcastRepository(regulatoryRoot).prepareAndQuery(
+                service = projectService.service,
+                channel = projectService.channel,
+                center = projectService.center,
+                maximumDistanceKm = MAXIMUM_LICENSED_QUERY_DISTANCE_KM,
+                onProgress = onPreparation,
+            )
             val status = catalog.status()
             val snapshot = status.snapshot
-                ?: throw IOException(
-                    "No verified Anatel Basic Plan snapshot is ready. Use Data > Anatel Basic Plan first.",
-                )
-            val channel = projectDigitalTvChannel(project)
-            val referenceRecords = buildList {
-                for (candidateChannel in (channel - 1)..(channel + 1)) {
-                    addAll(queryChannel(normalizedState, candidateChannel))
+            val referenceRecords = if (snapshot == null) {
+                emptyList()
+            } else {
+                buildList {
+                    for (candidateChannel in (projectService.channel - 1)..(projectService.channel + 1)) {
+                        addAll(queryChannel(projectService.service, candidateChannel))
+                    }
+                }.distinctBy { recordItem ->
+                    listOf(
+                        recordItem.origin.name,
+                        recordItem.sourceRowId.orEmpty(),
+                        recordItem.provenance.entryName,
+                        recordItem.provenance.sourceRowNumber.toString(),
+                    ).joinToString("\u0000")
                 }
-            }.distinctBy { recordItem ->
-                listOf(
-                    recordItem.origin.name,
-                    recordItem.sourceRowId.orEmpty(),
-                    recordItem.provenance.entryName,
-                    recordItem.provenance.sourceRowNumber.toString(),
-                ).joinToString("\u0000")
             }
-            PreparedInput(terrains, snapshot, referenceRecords)
+            val terrainMosaic = AnademTerrainMosaic.open(
+                bounds = terrainBounds(projectService.center, MAXIMUM_TERRAIN_DISTANCE_KM),
+                cacheRoot = regulatoryRoot,
+            )
+            PreparedInput(
+                terrainMosaic = terrainMosaic,
+                catalogSnapshot = snapshot,
+                referenceRecords = referenceRecords,
+                regulatoryContext = BrazilBroadcastRegulatoryContext(
+                    municipality = municipality,
+                    censusGeometry = censusGeometry,
+                    licensedBaseline = licensedBaseline,
+                ),
+            )
         }
 
         return withContext(Dispatchers.Default) {
-            val sources = prepared.terrains.map { terrain ->
-                terrain to CopernicusGeoTiffTerrainSource(terrain.file)
-            }
             try {
-                val primary = sources.first()
-                val record = primary.first.record
-                val snapshot = record.sourceSnapshot
-                BrazilDigitalTvRegulatoryStudyPlanner.calculate(
+                BrazilBroadcastRegulatoryStudyPlanner.calculate(
                     project = project,
                     radiusKm = radiusKm,
                     terrain = { latitude, longitude ->
                         coroutineContext.ensureActive()
-                        sources.firstNotNullOfOrNull { (_, source) ->
-                            source.elevationMeters(latitude, longitude)
-                        }
+                        prepared.terrainMosaic.elevationMeters(latitude, longitude)
                     },
-                    terrainProvenance = RegulatoryTerrainProvenance(
-                        datasetId = record.datasetId,
-                        datasetTitle = snapshot.title,
-                        dataType = snapshot.dataType.name,
-                        relativePath = record.relativePath,
-                        sha256 = checkNotNull(record.sha256),
-                        acquiredAt = record.acquiredAt,
-                        sourceUrl = record.effectiveUrl ?: record.requestedUrl,
-                        licenseTitle = snapshot.license.title,
-                        attribution = snapshot.license.attribution,
-                        nominalResolutionM = checkNotNull(snapshot.nominalResolutionMeters),
-                        sampleMethod = "nearest source pixel across a verified tile mosaic",
-                        additionalArtifacts = sources.drop(1).map { (terrain, _) ->
-                            val additional = terrain.record
-                            RegulatoryTerrainArtifactProvenance(
-                                relativePath = additional.relativePath,
-                                sha256 = checkNotNull(additional.sha256),
-                                acquiredAt = additional.acquiredAt,
-                                artifactUrl = additional.effectiveUrl ?: additional.requestedUrl,
-                            )
-                        },
-                    ),
+                    terrainProvenance = prepared.terrainMosaic.provenance(),
                     referenceRecords = prepared.referenceRecords,
                     catalogSnapshot = prepared.catalogSnapshot,
+                    regulatoryContext = prepared.regulatoryContext,
                     isCancelled = { !coroutineContext.isActive },
                     onProgress = onProgress,
-                )
+                ).copy(terrainProvenance = prepared.terrainMosaic.provenance())
             } finally {
-                sources.asReversed().forEach { (_, source) -> source.close() }
+                prepared.terrainMosaic.close()
             }
         }
     }
 
-    private fun queryChannel(stateCode: String, channel: Int): List<AnatelBasicPlanRecord> {
+    private fun queryChannel(service: BroadcastService, channel: Int): List<AnatelBasicPlanRecord> {
         if (channel !in 1..999) return emptyList()
         val records = mutableListOf<AnatelBasicPlanRecord>()
         var offset = 0
         repeat(MAXIMUM_QUERY_PAGES) {
             val page = catalog.query(
                 AnatelBasicPlanQuery(
-                    service = AnatelBroadcastService.TELEVISION,
-                    stateCode = stateCode,
+                    service = when (service) {
+                        BroadcastService.FM -> AnatelBroadcastService.FM
+                        BroadcastService.DIGITAL_TV -> AnatelBroadcastService.TELEVISION
+                    },
                     channel = channel,
                     pageSize = AnatelBasicPlanCatalogLimits.MAX_PAGE_SIZE,
                     offset = offset,
@@ -157,82 +136,66 @@ class AndroidBrazilDigitalTvStudyRunner(
         throw IOException("The bounded Anatel reference query exceeded $MAXIMUM_QUERY_PAGES pages.")
     }
 
-    private fun resolveVerifiedArtifact(record: RegionalInventoryRecord): File {
-        val normalizedRoot = regionalRoot.canonicalFile
-        val candidate = File(normalizedRoot, record.relativePath).canonicalFile
-        val rootPrefix = normalizedRoot.path.trimEnd(File.separatorChar) + File.separator
-        if (candidate.parentFile == null || !candidate.path.startsWith(rootPrefix)) {
-            throw IOException("The terrain inventory path escapes private regional storage.")
-        }
-        if (!candidate.isFile || candidate.length() != record.bytes) {
-            throw IOException("The committed terrain file is missing or its byte count changed.")
-        }
-        val expectedHash = record.sha256
-            ?: throw IOException("The committed terrain file has no SHA-256 evidence.")
-        if (sha256(candidate) != expectedHash) {
-            throw IOException("The committed terrain file failed SHA-256 verification.")
-        }
-        return candidate
-    }
-
-    private fun sha256(file: File): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        FileInputStream(file).use { input ->
-            val buffer = ByteArray(64 * 1024)
-            while (true) {
-                val read = input.read(buffer)
-                if (read < 0) break
-                if (read > 0) digest.update(buffer, 0, read)
-            }
-        }
-        return digest.digest().joinToString("") { byte ->
-            "%02x".format(Locale.ROOT, byte.toInt() and 0xff)
-        }
-    }
-
-    private fun isReadyCopernicusTerrain(record: RegionalInventoryRecord): Boolean =
-        record.sourceSnapshot.dataType == RegionalDataType.DIGITAL_SURFACE_MODEL &&
-            record.sourceSnapshot.datasetFamily == COPERNICUS_DATASET_FAMILY &&
-            record.processingState == RegionalProcessingState.READY &&
-            record.status in setOf(RegionalTransferStatus.READY, RegionalTransferStatus.EXISTING) &&
-            record.bytes != null && record.sha256 != null
-
-    private fun projectDigitalTvChannel(project: PlannerProject): Int {
+    private fun projectBroadcastServiceAndChannel(project: PlannerProject): ProjectBroadcastSelection {
         val networks = project.networks.associateBy { it.id }
         val sectors = project.sites.flatMap { site ->
-            site.sectors.filter { sector ->
+            site.sectors.mapNotNull { sector ->
                 val network = sector.networkId?.let(networks::get)
-                sector.active && network?.active == true &&
-                    network.system == com.gecesars.atxplan.domain.model.RadioSystem.TV_BROADCAST
+                val service = when (network?.system) {
+                    com.gecesars.atxplan.domain.model.RadioSystem.FM_BROADCAST -> BroadcastService.FM
+                    com.gecesars.atxplan.domain.model.RadioSystem.TV_BROADCAST -> BroadcastService.DIGITAL_TV
+                    else -> null
+                }
+                Triple(site.location, sector, service).takeIf {
+                    sector.active && network?.active == true && service != null
+                }
             }
         }
         require(sectors.size == 1) {
-            "A regulatory TV study requires exactly one active project TV sector."
+            "A regulatory broadcast study requires exactly one active FM or TV project sector."
         }
-        return com.gecesars.atxplan.domain.contour.BrazilBroadcastRules
+        val (center, sector, service) = sectors.single()
+        val resolvedService = checkNotNull(service)
+        val channel = com.gecesars.atxplan.domain.contour.BrazilBroadcastRules
             .protectedProfile(
-                com.gecesars.atxplan.domain.contour.BroadcastService.DIGITAL_TV,
-                sectors.single().frequencyMHz,
+                resolvedService,
+                sector.frequencyMHz,
             )?.channel
             ?: throw IllegalArgumentException(
-                "The active TV sector frequency does not resolve to a supported digital channel 7–51.",
+                "The active broadcast sector frequency does not resolve to a supported current Brazilian channel.",
             )
+        return ProjectBroadcastSelection(resolvedService, channel, center)
+    }
+
+    private fun terrainBounds(center: GeoPoint, radiusKm: Double): RegionalBounds {
+        val latitudeDelta = radiusKm / 110.574
+        val longitudeDelta = radiusKm /
+            (111.320 * cos(Math.toRadians(center.latitude)).coerceAtLeast(0.05))
+        return RegionalBounds(
+            west = (center.longitude - longitudeDelta).coerceAtLeast(-180.0),
+            south = (center.latitude - latitudeDelta).coerceAtLeast(-79.999999),
+            east = (center.longitude + longitudeDelta).coerceAtMost(180.0),
+            north = (center.latitude + latitudeDelta).coerceAtMost(83.999999),
+        )
     }
 
     private data class PreparedInput(
-        val terrains: List<PreparedTerrain>,
-        val catalogSnapshot: com.gecesars.atxplan.domain.anatel.AnatelBasicPlanCatalogSnapshot,
+        val terrainMosaic: AnademTerrainMosaic,
+        val catalogSnapshot: com.gecesars.atxplan.domain.anatel.AnatelBasicPlanCatalogSnapshot?,
         val referenceRecords: List<AnatelBasicPlanRecord>,
+        val regulatoryContext: BrazilBroadcastRegulatoryContext,
     )
 
-    private data class PreparedTerrain(
-        val record: RegionalInventoryRecord,
-        val file: File,
+    private data class ProjectBroadcastSelection(
+        val service: BroadcastService,
+        val channel: Int,
+        val center: GeoPoint,
     )
 
     private companion object {
-        const val COPERNICUS_DATASET_FAMILY = "copernicus-dem-glo30"
-        const val MAXIMUM_QUERY_PAGES = 5
-        const val MAXIMUM_TERRAIN_ARTIFACTS = 32
+        const val MAXIMUM_QUERY_PAGES = 256
+        const val MAXIMUM_LICENSED_QUERY_DISTANCE_KM = 500.0
+        const val MAXIMUM_TERRAIN_DISTANCE_KM = 620.0
+        const val REGULATORY_INPUT_DIRECTORY = "regulatory-inputs-v1"
     }
 }

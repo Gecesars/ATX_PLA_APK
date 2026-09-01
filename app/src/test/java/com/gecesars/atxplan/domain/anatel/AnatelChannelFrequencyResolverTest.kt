@@ -20,22 +20,35 @@ class AnatelChannelFrequencyResolverTest {
     }
 
     @Test
-    fun supportedFmAndTelevisionChannelsUseDocumentedFallbackCentres() {
+    fun supportedFmAndDigitalTelevisionChannelsUseDocumentedFallbackCentres() {
         val cases = listOf(
             Triple(AnatelBroadcastService.FM, "141", 76.1),
+            Triple(AnatelBroadcastService.FM, "197", 87.3),
             Triple(AnatelBroadcastService.FM, "201.0", 88.1),
-            Triple(AnatelBroadcastService.TELEVISION, "2", 57.0),
-            Triple(AnatelBroadcastService.TELEVISION, "6", 85.0),
             Triple(AnatelBroadcastService.TELEVISION, "7", 177.0),
             Triple(AnatelBroadcastService.TELEVISION, "13", 213.0),
             Triple(AnatelBroadcastService.TELEVISION, "14", 473.0),
-            Triple(AnatelBroadcastService.TELEVISION, "69", 803.0),
+            Triple(AnatelBroadcastService.TELEVISION, "51", 695.0),
         )
 
         cases.forEach { (service, channel, expectedMHz) ->
             val resolved = AnatelChannelFrequencyResolver.resolve(service, "", channel)
             assertEquals(expectedMHz, resolved.frequencyMHz!!, 1.0e-9)
             assertEquals(AnatelFrequencyOrigin.CHANNEL_FALLBACK, resolved.origin)
+        }
+    }
+
+    @Test
+    fun legacyAnalogTelevisionChannelsHaveNoFallbackIncludingFormerChannelsFiveAndSix() {
+        listOf("2", "3", "4", "5", "6", "52", "69").forEach { channel ->
+            val resolved = AnatelChannelFrequencyResolver.resolve(
+                service = AnatelBroadcastService.TELEVISION,
+                sourceFrequencyRaw = "",
+                channelRaw = channel,
+            )
+
+            assertNull(resolved.frequencyMHz)
+            assertEquals(AnatelFrequencyOrigin.NO_DATA, resolved.origin)
         }
     }
 

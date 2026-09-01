@@ -147,7 +147,7 @@ data class BrazilLegacyInterferingContourProfile(
     val sourceUrl: String,
 )
 
-/** Current and historical first-generation FM/digital-TV rules checked on 2026-08-31. */
+/** Current and historical first-generation FM/digital-TV rules checked on 2026-09-01. */
 object BrazilBroadcastRules {
     const val FM_RULESET_ID = "ANATEL-ACT-8104-2022"
     const val DIGITAL_TV_RULESET_ID = "ANATEL-ACT-9751-2022"

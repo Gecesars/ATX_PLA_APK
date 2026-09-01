@@ -12,6 +12,7 @@ import com.gecesars.atxplan.domain.dataset.IbgeDatasetFailure
 import com.gecesars.atxplan.domain.dataset.IbgeDatasetPreparationPhase
 import com.gecesars.atxplan.domain.dataset.IbgeDatasetPreparationProgress
 import com.gecesars.atxplan.domain.dataset.IbgeDatasetRepository
+import com.gecesars.atxplan.domain.dataset.IbgeCensusSectorAttribute
 import com.gecesars.atxplan.domain.dataset.IbgeMunicipalitySummary
 import com.gecesars.atxplan.domain.dataset.MAX_MUNICIPALITY_QUERY_LENGTH
 import com.gecesars.atxplan.domain.dataset.MAX_MUNICIPALITY_RESULT_LIMIT
@@ -168,6 +169,81 @@ class BundledIbgeDatasetRepository private constructor(
                 )
             }
         }
+    }
+
+    suspend fun municipalityByCode(code: String): IbgeMunicipalitySummary? {
+        require(code.length == 7 && code.all(Char::isDigit)) {
+            "An IBGE municipality code must contain seven digits."
+        }
+        val prepared = requirePreparedDataset()
+        return withContext(ioDispatcher) {
+            try {
+                openReadOnly(prepared.database).use { database ->
+                    database.rawQuery(
+                        "$MUNICIPALITY_SELECT WHERE m.code = ? LIMIT 1",
+                        arrayOf(code),
+                    ).use { cursor -> readMunicipalities(cursor).singleOrNull() }
+                }
+            } catch (error: Exception) {
+                throw IbgeDatasetException(
+                    failure = IbgeDatasetFailure.QUERY_FAILED,
+                    message = "The offline IBGE municipality lookup could not be completed.",
+                    cause = error,
+                )
+            }
+        }
+    }
+
+    suspend fun urbanSectorAttributes(municipalityCode: String): List<IbgeCensusSectorAttribute> {
+        require(municipalityCode.length == 7 && municipalityCode.all(Char::isDigit)) {
+            "An IBGE municipality code must contain seven digits."
+        }
+        val prepared = requirePreparedDataset()
+        return withContext(ioDispatcher) {
+            try {
+                openReadOnly(prepared.database).use { database ->
+                    database.rawQuery(
+                        "SELECT sector_code, municipality_code, situation_code, area_km2, population " +
+                            "FROM sector WHERE municipality_code = ? AND situation_code = 1 " +
+                            "ORDER BY sector_code",
+                        arrayOf(municipalityCode),
+                    ).use { cursor ->
+                        buildList {
+                            while (cursor.moveToNext()) {
+                                if (size >= MAXIMUM_MUNICIPALITY_SECTORS) {
+                                    throw IOException("The IBGE municipality sector query exceeds its safety bound.")
+                                }
+                                add(
+                                    IbgeCensusSectorAttribute(
+                                        sectorCode = cursor.getString(0),
+                                        municipalityCode = cursor.getString(1),
+                                        situationCode = cursor.getInt(2),
+                                        areaKm2 = cursor.getDouble(3),
+                                        residentPopulation = cursor.getLong(4),
+                                    ),
+                                )
+                            }
+                        }
+                    }
+                }
+            } catch (error: IbgeDatasetException) {
+                throw error
+            } catch (error: Exception) {
+                throw IbgeDatasetException(
+                    failure = IbgeDatasetFailure.QUERY_FAILED,
+                    message = "The offline IBGE urban-sector query could not be completed.",
+                    cause = error,
+                )
+            }
+        }
+    }
+
+    private suspend fun requirePreparedDataset(): PreparedDataset = preparedDataset ?: run {
+        prepare()
+        preparedDataset ?: throw IbgeDatasetException(
+            failure = IbgeDatasetFailure.QUERY_FAILED,
+            message = "The IBGE dataset did not become ready for queries.",
+        )
     }
 
     private fun readManifest(): IbgeAssetManifest {
@@ -744,6 +820,7 @@ private const val MAX_MANIFEST_BYTES = 64 * 1024
 private const val MAX_METADATA_ENTRIES = 128
 private const val MAX_METADATA_KEY_LENGTH = 128
 private const val MAX_METADATA_VALUE_LENGTH = 4 * 1024
+private const val MAXIMUM_MUNICIPALITY_SECTORS = 100_000
 private const val SUPPORTED_MANIFEST_SCHEMA = 1
 private const val SUPPORTED_DATABASE_SCHEMA = 1
 private const val EXPECTED_DATABASE_APPLICATION_ID = 0x41545849

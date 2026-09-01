@@ -8,14 +8,14 @@ import kotlin.math.abs
  * A positive finite source frequency attribute always wins, even when it differs from the nominal
  * channel centre. The fallback is used only when that attribute is absent or invalid:
  *
- * - FM channels 141–197 and 200–300: `87.9 + 0.2 * (channel - 200)` MHz.
- * - TV channels 2–4: 57, 63 and 69 MHz.
- * - TV channels 5–6: 79 and 85 MHz.
- * - TV channels 7–13: `177 + 6 * (channel - 7)` MHz.
- * - TV channels 14–69: `473 + 6 * (channel - 14)` MHz.
+ * - Extended-FM channels 141–197 and conventional-FM channels 200–300:
+ *   `87.9 + 0.2 * (channel - 200)` MHz.
+ * - Digital-TV channels 7–13: `177 + 6 * (channel - 7)` MHz.
+ * - Digital-TV channels 14–51: `473 + 6 * (channel - 14)` MHz.
  *
- * These values are channel-centre recovery metadata, not a declaration that every historical
- * channel remains assignable under current regulation.
+ * These values are channel-centre recovery metadata. Legacy analog-TV channel fallbacks are
+ * deliberately absent. In particular, former TV channels 5 and 6 occupy spectrum reassigned to
+ * extended FM, whose channel numbers are 141-197.
  */
 object AnatelChannelFrequencyResolver {
     private const val MAX_REASONABLE_FREQUENCY_MHZ = 1_000_000.0
@@ -102,13 +102,8 @@ object AnatelChannelFrequencyResolver {
             ?.let { value -> 87.9 + (value - 200) * 0.2 }
 
     private fun tvCenterFrequencyMHz(channel: Int): Double? = when (channel) {
-        2 -> 57.0
-        3 -> 63.0
-        4 -> 69.0
-        5 -> 79.0
-        6 -> 85.0
         in 7..13 -> 177.0 + (channel - 7) * 6.0
-        in 14..69 -> 473.0 + (channel - 14) * 6.0
+        in 14..51 -> 473.0 + (channel - 14) * 6.0
         else -> null
     }
 

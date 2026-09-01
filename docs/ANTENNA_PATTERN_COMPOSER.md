@@ -401,13 +401,15 @@ assigned cut returns zero or non-finite field on a radial, that radial is
 is closed. Incomplete geometry remains an open longest contiguous run and is
 never filled by the map renderer.
 
-This directional shape remains `regulatory = false`. Sector AGL is still used
-as a proxy for radial HNMT; no downloaded terrain is sampled; VRP, electrical
-tilt, mounting, polarization, and frequency-dependent pattern changes are not
-applied; the bundled P.1546 land subset is still a bounded reference; and the
-current P.526 plus Assis/D-U interference workflow is absent. Pattern-aware
-radials remove the old circular-only limitation but do not clear any strict
-Anatel gate.
+This standalone directional overlay remains `regulatory = false`. Sector AGL
+is still used as a proxy for radial HNMT; no downloaded terrain is sampled;
+VRP, electrical tilt, mounting, polarization, and frequency-dependent pattern
+changes are not applied; and the bundled P.1546 land subset is still a bounded
+reference. The separate current-rule FM/DTV study consumes acquired terrain,
+builds protected contours, and evaluates bidirectional P.526-15
+Deygout-Assis D/U evidence. Pattern-aware radials do not by themselves clear
+the study's terrain, urban-coverage, licensed-baseline, completeness,
+independent-validation, or professional-review gates.
 
 ## 8. Numerical and physical limitations
 

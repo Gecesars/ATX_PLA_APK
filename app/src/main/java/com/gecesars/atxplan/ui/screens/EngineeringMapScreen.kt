@@ -110,6 +110,7 @@ import com.gecesars.atxplan.domain.contour.ContourPurpose
 import com.gecesars.atxplan.domain.contour.ContourStatus
 import com.gecesars.atxplan.domain.contour.RegulatoryDuAssessment
 import com.gecesars.atxplan.domain.contour.RegulatoryDuPointStatus
+import com.gecesars.atxplan.domain.contour.RegulatoryCensusGeometrySnapshot
 import com.gecesars.atxplan.domain.contour.ServiceContourOverlay
 import com.gecesars.atxplan.domain.coverage.BroadcastCoveragePalette
 import com.gecesars.atxplan.domain.coverage.BroadcastCoverageSurface
@@ -161,6 +162,7 @@ fun EngineeringMapScreen(
     serviceContours: List<ServiceContourOverlay> = emptyList(),
     coverageSurface: BroadcastCoverageSurface? = null,
     duAssessments: List<RegulatoryDuAssessment> = emptyList(),
+    censusGeometry: RegulatoryCensusGeometrySnapshot? = null,
     basemapState: BasemapUiState = BasemapUiState.gridOnly,
     isCatalogWritable: Boolean = false,
     isSaving: Boolean = false,
@@ -217,6 +219,13 @@ fun EngineeringMapScreen(
         surface = coverageSurface,
         mode = coverageRenderMode,
     )
+    val censusMapRings = remember(censusGeometry?.sourceSha256) {
+        censusGeometry?.sectors.orEmpty().flatMap { sector ->
+            sector.polygons.flatMap { polygon ->
+                polygon.rings.map { ring -> CensusMapRing.of(ring.points) }
+            }
+        }
+    }
 
     fun currentCamera(): GeographicCamera = GeographicCamera(
         center = GeographicViewport.canonicalPoint(
@@ -253,7 +262,15 @@ fun EngineeringMapScreen(
             .filter { contour -> contour.status != ContourStatus.NO_DATA }
             .flatMap(ServiceContourOverlay::points)
         val coveragePoints = coverageSurface?.bounds?.cornerPoints.orEmpty()
-        val visibleGeometry = sites.map(RadioSite::location) + contourPoints + coveragePoints
+        val censusPoints = if (censusMapRings.isEmpty()) {
+            emptyList()
+        } else {
+            listOf(
+                GeoPoint(censusMapRings.minOf(CensusMapRing::south), censusMapRings.minOf(CensusMapRing::west)),
+                GeoPoint(censusMapRings.maxOf(CensusMapRing::north), censusMapRings.maxOf(CensusMapRing::east)),
+            )
+        }
+        val visibleGeometry = sites.map(RadioSite::location) + contourPoints + coveragePoints + censusPoints
         if (visibleGeometry.isEmpty()) {
             updateCamera(DEFAULT_GEOGRAPHIC_CAMERA)
             return
@@ -574,6 +591,7 @@ fun EngineeringMapScreen(
                     renderedCoverageSurface = renderedCoverageSurface,
                     coverageRenderMode = coverageRenderMode,
                     duAssessments = duAssessments,
+                    censusMapRings = censusMapRings,
                     basemapState = basemapState,
                     basemapTiles = renderedBasemapTiles,
                     selectedSiteId = selectedSiteId,
@@ -616,6 +634,16 @@ fun EngineeringMapScreen(
             }
             if (duAssessments.isNotEmpty()) {
                 item { DuBoundaryLegendCard(duAssessments) }
+            }
+            if (censusMapRings.isNotEmpty()) {
+                item {
+                    Text(
+                        "${censusGeometry?.sectors?.size ?: 0} official urban census sectors are available. " +
+                            "Exact boundaries render at zoom ${CENSUS_MINIMUM_RENDER_ZOOM}+ to protect phone frame time.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             item {
                 BasemapDisclosureCard(
@@ -726,6 +754,7 @@ private fun GeographicMapCard(
     renderedCoverageSurface: ImageBitmap?,
     coverageRenderMode: CoverageRenderMode,
     duAssessments: List<RegulatoryDuAssessment>,
+    censusMapRings: List<CensusMapRing>,
     basemapState: BasemapUiState,
     basemapTiles: List<RenderedBasemapTile>,
     selectedSiteId: String?,
@@ -744,7 +773,8 @@ private fun GeographicMapCard(
     val renderableContourCount = serviceContours.count { contour ->
         contour.status != ContourStatus.NO_DATA && contour.points.size >= 2
     }
-    val fitEnabled = sites.isNotEmpty() || renderableContourCount > 0 || coverageSurface != null
+    val fitEnabled = sites.isNotEmpty() || renderableContourCount > 0 || coverageSurface != null ||
+        censusMapRings.isNotEmpty()
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val mapHeight = (maxWidth * 0.90f).coerceIn(340.dp, 460.dp)
         Column(
@@ -889,6 +919,7 @@ private fun GeographicMapCard(
                         tileSizePx = tileSizePx,
                     )
                     drawCoordinateGrid(camera, viewport, tileSizePx)
+                    drawCensusGeometry(censusMapRings, camera, viewport, tileSizePx)
                     drawServiceContours(serviceContours, camera, viewport, tileSizePx)
                     drawDuBoundaryEvidence(duAssessments, camera, viewport, tileSizePx)
                     drawSiteGeometry(sites, selectedSiteId, camera, viewport, tileSizePx)
@@ -1072,10 +1103,10 @@ private fun DuBoundaryLegendCard(assessments: List<RegulatoryDuAssessment>) {
                 StatusPill("$passing Pass", StatusTone.POSITIVE)
                 StatusPill("$failing Fail", if (failing == 0) StatusTone.INFO else StatusTone.WARNING)
                 StatusPill("$noData NoData", if (noData == 0) StatusTone.INFO else StatusTone.WARNING)
-                StatusPill("${assessments.size} References", StatusTone.INFO)
+                StatusPill("${assessments.size} Directional checks", StatusTone.INFO)
             }
             Text(
-                "Dots evaluate D/U at each protected-contour radial: green passes, red fails, gray is NoData. Purple markers are read-only Anatel reference stations.",
+                "Dots evaluate both D/U directions at each wanted protected contour. Colocated adjacent digital pairs use one ERP-ratio point per direction. Purple markers are read-only Anatel references.",
                 style = MaterialTheme.typography.bodySmall,
             )
             Text(
@@ -1588,6 +1619,67 @@ private fun DrawScope.drawServiceContours(
     }
 }
 
+private fun DrawScope.drawCensusGeometry(
+    rings: List<CensusMapRing>,
+    camera: GeographicCamera,
+    viewport: ViewportSizePx,
+    tileSizePx: Double,
+) {
+    if (rings.isEmpty() || camera.zoom < CENSUS_MINIMUM_RENDER_ZOOM) return
+    val stroke = Stroke(width = 0.8.dp.toPx())
+    val color = Color(0xFF78DCE8).copy(alpha = 0.48f)
+    rings.forEach { ring ->
+        val northWest = GeographicViewport.toScreen(
+            GeoPoint(ring.north, ring.west),
+            camera,
+            viewport,
+            tileSizePx,
+        )
+        val southEast = GeographicViewport.toScreen(
+            GeoPoint(ring.south, ring.east),
+            camera,
+            viewport,
+            tileSizePx,
+        )
+        val left = min(northWest.x, southEast.x)
+        val right = max(northWest.x, southEast.x)
+        val top = min(northWest.y, southEast.y)
+        val bottom = max(northWest.y, southEast.y)
+        if (right < 0.0 || bottom < 0.0 || left > viewport.width || top > viewport.height) {
+            return@forEach
+        }
+        val path = Path()
+        ring.points.forEachIndexed { index, point ->
+            val projected = GeographicViewport.toScreen(point, camera, viewport, tileSizePx)
+            if (index == 0) {
+                path.moveTo(projected.x.toFloat(), projected.y.toFloat())
+            } else {
+                path.lineTo(projected.x.toFloat(), projected.y.toFloat())
+            }
+        }
+        path.close()
+        drawPath(path, color, style = stroke)
+    }
+}
+
+private data class CensusMapRing(
+    val points: List<GeoPoint>,
+    val west: Double,
+    val south: Double,
+    val east: Double,
+    val north: Double,
+) {
+    companion object {
+        fun of(points: List<GeoPoint>) = CensusMapRing(
+            points = points,
+            west = points.minOf(GeoPoint::longitude),
+            south = points.minOf(GeoPoint::latitude),
+            east = points.maxOf(GeoPoint::longitude),
+            north = points.maxOf(GeoPoint::latitude),
+        )
+    }
+}
+
 private fun DrawScope.drawDuBoundaryEvidence(
     assessments: List<RegulatoryDuAssessment>,
     camera: GeographicCamera,
@@ -1617,7 +1709,7 @@ private fun DrawScope.drawDuBoundaryEvidence(
             drawCircle(Color.Black.copy(alpha = 0.72f), pointRadius + 1.25.dp.toPx(), center)
             drawCircle(color, pointRadius, center)
         }
-    assessments.forEach { assessment ->
+    assessments.distinctBy { it.station.sourceRowId }.forEach { assessment ->
         val station = GeoPoint(assessment.station.latitude, assessment.station.longitude)
         val projected = GeographicViewport.toScreen(station, camera, viewport, tileSizePx)
         val center = Offset(projected.x.toFloat(), projected.y.toFloat())
@@ -2473,6 +2565,7 @@ private const val DEFAULT_CAMERA_ZOOM = 1.0
 private const val SITE_FOCUS_ZOOM = 12.0
 private const val MIN_MAP_UI_ZOOM = 0.0
 private const val MAX_MAP_UI_ZOOM = 20.0
+private const val CENSUS_MINIMUM_RENDER_ZOOM = 12.0
 private const val MAX_GRID_LINES = 48
 private const val SELECTED_SITE_PANEL_INDEX = 3
 private const val MAX_SAVEABLE_UI_ID_LENGTH = 256

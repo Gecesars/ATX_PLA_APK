@@ -37,6 +37,12 @@ class EnglishOnlySourceTest {
             // Exact external XML attribute names required by the official Anatel schema.
             .replace("Frequencia", "")
             .replace("PadraoAntena_dBd", "")
+            // Exact external IBGE table/file identifiers and MCom CSV column names.
+            .replace(Regex("[A-Za-z0-9_$\\{}]+_setores_CD2022"), "")
+            .replace("malhas_de_setores_censitarios__divisoes_intramunicipais", "")
+            .replace("malhas-de-setores-censitarios-divisoes-intramunicipais", "")
+            .replace("censo_2022/setores/gpkg/UF", "")
+            .replace(Regex("licenca_[A-Za-z0-9_]+"), "")
 
     private companion object {
         val portugueseUiTerm = Regex(

@@ -2,6 +2,7 @@ package com.gecesars.atxplan.domain.coverage
 
 import com.gecesars.atxplan.domain.application.hasVerifiedNormalizedContentIdentity
 import com.gecesars.atxplan.domain.contour.BrazilDigitalTvRegulatoryStudyPlanner
+import com.gecesars.atxplan.domain.contour.BroadcastService
 import com.gecesars.atxplan.domain.contour.P1546LandReference
 import com.gecesars.atxplan.domain.contour.RegulatoryContourRadialEvidence
 import com.gecesars.atxplan.domain.contour.TerrainElevationProvider
@@ -187,7 +188,7 @@ object BroadcastCoveragePalette {
 }
 
 /**
- * CPU-only operational field surface for a completed digital-TV study. This does not replace the
+ * CPU-only operational field surface for a completed FM or digital-TV study. This does not replace the
  * protected regulatory contour and is not itself a filing result.
  */
 object BrazilDigitalTvCoverageSurfacePlanner {
@@ -208,6 +209,7 @@ object BrazilDigitalTvCoverageSurfacePlanner {
         radialEvidence: List<RegulatoryContourRadialEvidence>,
         terrain: TerrainElevationProvider,
         inputFingerprint: String,
+        service: BroadcastService = BroadcastService.DIGITAL_TV,
         isCancelled: () -> Boolean = { false },
         onRowComplete: () -> Unit = {},
     ): BroadcastCoverageSurface {
@@ -281,14 +283,19 @@ object BrazilDigitalTvCoverageSurfacePlanner {
                     distanceKm,
                     directionalErpKw,
                 )
-                val e10 = P1546LandReference.fieldStrengthDbuvPerM(
-                    frequencyMHz,
-                    10,
-                    hnmtM,
-                    distanceKm,
-                    directionalErpKw,
-                )
-                val field = 2.0 * e50 - e10
+                val field = when (service) {
+                    BroadcastService.FM -> e50
+                    BroadcastService.DIGITAL_TV -> {
+                        val e10 = P1546LandReference.fieldStrengthDbuvPerM(
+                            frequencyMHz,
+                            10,
+                            hnmtM,
+                            distanceKm,
+                            directionalErpKw,
+                        )
+                        2.0 * e50 - e10
+                    }
+                }
                 if (!field.isFinite()) return@cell
                 values[row * GRID_SIZE + column] = field.toFloat()
                 minimum = minimum?.let { minOf(it, field) } ?: field
@@ -306,7 +313,10 @@ object BrazilDigitalTvCoverageSurfacePlanner {
             metricId = METRIC_ID,
             unit = BroadcastCoveragePalette.UNIT,
             modelId = BrazilDigitalTvRegulatoryStudyPlanner.P1546_MODEL_ID,
-            statisticalBasis = "E(50,90), derived as 2 × E(50,50) - E(50,10)",
+            statisticalBasis = when (service) {
+                BroadcastService.FM -> "E(50,50)"
+                BroadcastService.DIGITAL_TV -> "E(50,90), derived as 2 × E(50,50) - E(50,10)"
+            },
             noDataMeaning = NO_DATA_MEANING,
             inputFingerprint = inputFingerprint,
             directionalPatternApplied = pattern != null,

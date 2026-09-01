@@ -19,6 +19,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.gecesars.atxplan.domain.application.RunProjectLinkStudyCommand
+import com.gecesars.atxplan.domain.dataset.IbgeMunicipalitySummary
 import com.gecesars.atxplan.domain.model.AzimuthDegrees
 import com.gecesars.atxplan.domain.model.GainDbi
 import com.gecesars.atxplan.domain.model.GeoCoordinate
@@ -316,10 +317,111 @@ class StudiesScreenTest {
         }
 
         composeRule.onNodeWithTag("studies_list")
-            .performScrollToNode(hasTestTag("project_receiver_selector"))
+            .performScrollToNode(
+                androidx.compose.ui.test.hasText(
+                    "No receiver supports the selected sector network.",
+                ),
+            )
         composeRule.onNodeWithText("No receiver supports the selected sector network.")
             .assertIsDisplayed()
         composeRule.onNodeWithTag("run_project_link_study").assertDoesNotExist()
+    }
+
+    @Test
+    fun compactFmProjectExposesCurrentRegulatoryMethodAndRunsIndependently() {
+        val base = project()
+        val fmNetwork = base.networks.single().copy(
+            name = "Independent FM Network",
+            system = RadioSystem.FM_BROADCAST,
+            downlinkFrequencyMHz = 98.1,
+            bandwidthMHz = 0.2,
+        )
+        val fmProject = base.copy(
+            networks = listOf(fmNetwork),
+            sites = listOf(
+                base.sites.single().copy(
+                    sectors = listOf(
+                        base.sites.single().sectors.single().copy(
+                            name = "FM Channel 251",
+                            frequencyMHz = 98.1,
+                            networkId = fmNetwork.id,
+                        ),
+                    ),
+                ),
+            ),
+            receivers = emptyList(),
+        )
+        val submittedRadius = mutableStateOf<Double?>(null)
+        val municipality = IbgeMunicipalitySummary(
+            code = "3550308",
+            stateCode = "35",
+            stateAbbreviation = "SP",
+            stateName = "São Paulo",
+            name = "São Paulo",
+            sectorCount = 27_301,
+            urbanSectorCount = 27_000,
+            ruralSectorCount = 301,
+            unspecifiedSectorCount = 0,
+            missingPopulationSectorCount = 0,
+            populationTotal = 11_451_999L,
+            urbanPopulation = 11_400_000L,
+            ruralPopulation = 51_999L,
+            unspecifiedPopulation = 0L,
+            areaTotalKm2 = 1_521.2,
+            urbanAreaKm2 = 900.0,
+            ruralAreaKm2 = 621.2,
+            unspecifiedAreaKm2 = 0.0,
+            west = -46.83,
+            south = -24.01,
+            east = -46.36,
+            north = -23.35,
+        )
+        composeRule.setContent {
+            val deviceDensity = LocalDensity.current.density
+            CompositionLocalProvider(LocalDensity provides Density(deviceDensity, fontScale = 1.3f)) {
+                AtxPlanTheme {
+                    Box(
+                        modifier = Modifier
+                            .size(width = 360.dp, height = 480.dp)
+                            .testTag("compact_fm_study_host"),
+                    ) {
+                        StudiesScreen(
+                            project = fmProject,
+                            resultInput = null,
+                            result = null,
+                            calculatorError = null,
+                            isCalculating = false,
+                            isRunningProjectLinkStudy = false,
+                            canSaveProjectStudy = true,
+                            onCalculate = {},
+                            onRunProjectLinkStudy = {},
+                            municipalityResults = listOf(municipality),
+                            selectedMunicipality = municipality,
+                            isMunicipalityCatalogReady = true,
+                            onRunBrazilDigitalTvStudy = { radius, _ -> submittedRadius.value = radius },
+                        )
+                    }
+                }
+            }
+        }
+
+        composeRule.onNodeWithTag("compact_fm_study_host").assertIsDisplayed()
+        composeRule.onNodeWithTag("studies_list")
+            .performScrollToNode(hasTestTag("brazil_dtv_regulatory_study"))
+        composeRule.onNodeWithText("Brazil Broadcast Regulatory Study").assertIsDisplayed()
+        composeRule.onNodeWithText("Current FM viability.", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("P.526-15 Deygout–Assis").assertIsDisplayed()
+        composeRule.onNodeWithText("E(50,50)").assertIsDisplayed()
+        composeRule.onNodeWithText("Nationwide Basic Plan ±1").assertIsDisplayed()
+        composeRule.onNodeWithText("Bidirectional D/U").assertIsDisplayed()
+        composeRule.onNodeWithTag("studies_list")
+            .performScrollToNode(hasTestTag("regulatory_sources_reviewed"))
+        composeRule.onNodeWithTag("regulatory_sources_reviewed").performClick()
+        composeRule.onNodeWithTag("studies_list")
+            .performScrollToNode(hasTestTag("run_brazil_dtv_study"))
+        composeRule.onNodeWithTag("run_brazil_dtv_study").performClick()
+
+        assertEquals(30.0, submittedRadius.value)
     }
 
     private fun project(): PlannerProject {

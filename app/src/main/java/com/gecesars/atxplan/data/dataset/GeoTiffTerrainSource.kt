@@ -31,11 +31,29 @@ data class GeoTiffTerrainEvidence(
  * Android regional-data catalog. Unsupported TIFF variants fail closed; they are never treated as
  * flat terrain or zero elevation.
  */
-class CopernicusGeoTiffTerrainSource(
-    private val file: File,
+internal interface GeoTiffRandomAccessSource : AutoCloseable {
+    val length: Long
+    fun readFully(offset: Long, destination: ByteArray)
+}
+
+private class FileGeoTiffRandomAccessSource(file: File) : GeoTiffRandomAccessSource {
+    private val fileHandle = RandomAccessFile(file, "r")
+    override val length: Long = file.length()
+
+    @Synchronized
+    override fun readFully(offset: Long, destination: ByteArray) {
+        fileHandle.seek(offset)
+        fileHandle.readFully(destination)
+    }
+
+    override fun close() = fileHandle.close()
+}
+
+internal class Float32GeoTiffTerrainSource(
+    private val source: GeoTiffRandomAccessSource,
+    maximumSourceBytes: Long,
     maximumCachedTiles: Int = DEFAULT_MAXIMUM_CACHED_TILES,
 ) : AutoCloseable {
-    private val randomAccessFile: RandomAccessFile
     private val layout: Layout
     private val cache = object : LinkedHashMap<Int, FloatArray>(maximumCachedTiles, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, FloatArray>?): Boolean =
@@ -47,15 +65,16 @@ class CopernicusGeoTiffTerrainSource(
         require(maximumCachedTiles in 1..MAXIMUM_CACHED_TILES) {
             "The terrain tile-cache size is outside the approved bound."
         }
-        if (!file.isFile) throw IOException("The terrain GeoTIFF is not a regular file.")
-        if (file.length() !in MINIMUM_TIFF_BYTES..MAXIMUM_SOURCE_BYTES) {
+        require(maximumSourceBytes in MINIMUM_TIFF_BYTES..MAXIMUM_APPROVED_SOURCE_BYTES) {
+            "The terrain source-size policy is invalid."
+        }
+        if (source.length !in MINIMUM_TIFF_BYTES..maximumSourceBytes) {
             throw IOException("The terrain GeoTIFF is outside the approved file-size bound.")
         }
-        randomAccessFile = RandomAccessFile(file, "r")
         layout = try {
-            readLayout(randomAccessFile, file.length())
+            readLayout(source, source.length)
         } catch (error: Exception) {
-            randomAccessFile.close()
+            source.close()
             throw error
         }
     }
@@ -103,7 +122,7 @@ class CopernicusGeoTiffTerrainSource(
         if (closed) return
         closed = true
         cache.clear()
-        randomAccessFile.close()
+        source.close()
     }
 
     private fun decodeTile(tileIndex: Int): FloatArray {
@@ -115,10 +134,9 @@ class CopernicusGeoTiffTerrainSource(
         if (byteCount !in 1..MAXIMUM_COMPRESSED_TILE_BYTES) {
             throw IOException("A terrain TIFF tile exceeds the approved compressed-size bound.")
         }
-        requireRange(offset, byteCount.toLong(), randomAccessFile.length())
+        requireRange(offset, byteCount.toLong(), source.length)
         val compressed = ByteArray(byteCount)
-        randomAccessFile.seek(offset)
-        randomAccessFile.readFully(compressed)
+        source.readFully(offset, compressed)
         val expectedBytes = checkedProduct(layout.tileWidth, layout.tileHeight, FLOAT_BYTES)
         if (expectedBytes > MAXIMUM_INFLATED_TILE_BYTES) {
             throw IOException("A terrain TIFF tile exceeds the approved decoded-size bound.")
@@ -191,7 +209,7 @@ class CopernicusGeoTiffTerrainSource(
         val inlineValue: ByteArray,
     )
 
-    private fun readLayout(source: RandomAccessFile, length: Long): Layout {
+    private fun readLayout(source: GeoTiffRandomAccessSource, length: Long): Layout {
         val marker = readAt(source, 0L, 2)
         if (!marker.contentEquals(byteArrayOf(0x49, 0x49))) {
             throw IOException("The terrain reader supports only little-endian classic TIFF files.")
@@ -325,7 +343,7 @@ class CopernicusGeoTiffTerrainSource(
     }
 
     private fun entryBytes(
-        source: RandomAccessFile,
+        source: GeoTiffRandomAccessSource,
         entry: Entry,
         length: Long,
         order: ByteOrder,
@@ -353,15 +371,14 @@ class CopernicusGeoTiffTerrainSource(
     }
 
     private fun readAt(
-        source: RandomAccessFile,
+        source: GeoTiffRandomAccessSource,
         offset: Long,
         count: Int,
-        length: Long = source.length(),
+        length: Long = source.length,
     ): ByteArray {
         requireRange(offset, count.toLong(), length)
         return ByteArray(count).also { bytes ->
-            source.seek(offset)
-            source.readFully(bytes)
+            source.readFully(offset, bytes)
         }
     }
 
@@ -403,7 +420,7 @@ class CopernicusGeoTiffTerrainSource(
 
     companion object {
         private const val MINIMUM_TIFF_BYTES = 8L
-        private const val MAXIMUM_SOURCE_BYTES = 512L * 1024L * 1024L
+        private const val MAXIMUM_APPROVED_SOURCE_BYTES = 4_294_967_295L
         private const val MAXIMUM_DIMENSION = 100_000
         private const val MAXIMUM_TILE_DIMENSION = 2_048
         private const val MAXIMUM_IFD_ENTRIES = 4_096
@@ -467,4 +484,29 @@ class CopernicusGeoTiffTerrainSource(
             TAG_GDAL_NO_DATA,
         )
     }
+}
+
+/** Local Copernicus GLO-30 adapter retained for the regional-data workflow. */
+class CopernicusGeoTiffTerrainSource(
+    file: File,
+    maximumCachedTiles: Int = 4,
+) : AutoCloseable {
+    private val delegate: Float32GeoTiffTerrainSource
+
+    init {
+        if (!file.isFile) throw IOException("The terrain GeoTIFF is not a regular file.")
+        delegate = Float32GeoTiffTerrainSource(
+            source = FileGeoTiffRandomAccessSource(file),
+            maximumSourceBytes = 512L * 1024L * 1024L,
+            maximumCachedTiles = maximumCachedTiles,
+        )
+    }
+
+    val evidence: GeoTiffTerrainEvidence
+        get() = delegate.evidence
+
+    fun elevationMeters(latitude: Double, longitude: Double): Double? =
+        delegate.elevationMeters(latitude, longitude)
+
+    override fun close() = delegate.close()
 }

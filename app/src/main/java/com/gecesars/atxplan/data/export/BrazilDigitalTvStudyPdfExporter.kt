@@ -1,6 +1,7 @@
 package com.gecesars.atxplan.data.export
 
 import com.gecesars.atxplan.domain.contour.BrazilDigitalTvRegulatoryStudyResult
+import com.gecesars.atxplan.domain.contour.BroadcastService
 import java.io.ByteArrayOutputStream
 import java.nio.charset.Charset
 import java.text.SimpleDateFormat
@@ -39,7 +40,8 @@ object BrazilDigitalTvStudyPdfExporter {
         result: BrazilDigitalTvRegulatoryStudyResult,
         exportedAtEpochMillis: Long,
     ): List<ReportLine> = buildList {
-        add(title("Brazil Digital TV Regulatory Study"))
+        val serviceLabel = if (result.service == BroadcastService.FM) "FM" else "Digital TV"
+        add(title("Brazil $serviceLabel Regulatory Study"))
         add(subtitle("${result.projectName} | Channel ${result.channel} | ${number(result.frequencyMHz, 3)} MHz"))
         add(
             alert(
@@ -51,6 +53,7 @@ object BrazilDigitalTvStudyPdfExporter {
             ),
         )
         add(body("This project transmitter is independent. No transmitter, site, antenna, ERP, or height value was copied from the Anatel Basic Plan; catalog stations are read-only references."))
+        add(keyValue("Engineering gates", if (result.engineeringReady) "PASSED; external review remains" else "OPEN"))
 
         add(heading("Project-owned inputs"))
         add(keyValue("Project ID", result.projectId))
@@ -66,7 +69,17 @@ object BrazilDigitalTvStudyPdfExporter {
         add(keyValue("Protected contour", "${result.p1546ModelId}; ${result.protectedStatisticalBasis}"))
         add(keyValue("Protected threshold", "${number(result.protectedThresholdDbuvPerM, 2)} dBµV/m"))
         add(keyValue("D/U paths", "${result.diffractionModelId}; k=4/3; terrain spacing ${number(result.terrainSpacingM, 1)} m"))
-        add(keyValue("D/U criteria", "Cochannel 19 dB; first adjacent -36 dB"))
+        add(
+            keyValue(
+                "D/U criteria",
+                if (result.service == BroadcastService.FM) {
+                    "Cochannel 30 dB; first adjacent +/-200 kHz 6 dB"
+                } else {
+                    "Digital-to-digital cochannel +19 dB; first adjacent -36 dB"
+                },
+            ),
+        )
+        add(keyValue("D/U direction", "Both directions at each wanted protected contour"))
         add(keyValue("Coverage", "${result.coverageSurface.width} x ${result.coverageSurface.height}; ${result.coverageSurface.statisticalBasis}"))
         add(keyValue("Coverage use", "Operational visualization, not a regulatory filing contour"))
         add(
@@ -80,6 +93,15 @@ object BrazilDigitalTvStudyPdfExporter {
             ),
         )
         add(keyValue("Coverage NoData", result.coverageSurface.noDataMeaning))
+        result.coverageGate?.let { gate ->
+            add(heading("Official urban coverage gate"))
+            add(keyValue("Municipality", "${gate.municipality.name}/${gate.municipality.stateAbbreviation} (${gate.municipality.ibgeCode})"))
+            add(keyValue("Area requirement", "${gate.requirementPercent}% | status ${gate.status.name}"))
+            add(keyValue("Coverage interval", "${gate.areaCoverageLowerPercent?.let { number(it, 3) } ?: "NoData"}% to ${gate.areaCoverageUpperPercent?.let { number(it, 3) } ?: "NoData"}%"))
+            add(keyValue("Urban area", "eligible ${number(gate.eligibleUrbanAreaKm2, 4)} km2 | covered ${number(gate.coveredUrbanAreaKm2, 4)} km2"))
+            add(keyValue("Raster", "${number(gate.rasterSpacingM, 1)} m | ${gate.sectorCount} sectors | ${gate.noDataCellCount} NoData cells"))
+            add(small(gate.method))
+        }
 
         add(heading("Blocking conditions"))
         if (result.blockers.isEmpty()) add(body("None."))
@@ -90,6 +112,8 @@ object BrazilDigitalTvStudyPdfExporter {
 
         add(heading("Dataset provenance"))
         add(keyValue("Terrain", "${result.terrainProvenance.datasetTitle} (${result.terrainProvenance.dataType})"))
+        add(keyValue("Terrain integrity", result.terrainProvenance.integrityScope.name))
+        add(body(result.terrainProvenance.integrityEvidenceDescription))
         add(keyValue("Sampling", "${number(result.terrainProvenance.nominalResolutionM, 1)} m nominal; ${result.terrainProvenance.sampleMethod}"))
         add(keyValue("License", result.terrainProvenance.licenseTitle))
         add(keyValue("Attribution", result.terrainProvenance.attribution))
@@ -98,8 +122,34 @@ object BrazilDigitalTvStudyPdfExporter {
             add(mono("SHA256  ${artifact.sha256}"))
             add(body("Source: ${artifact.artifactUrl}"))
         }
+        result.terrainProvenance.rangeCacheEvidence.forEach { evidence ->
+            add(mono("RANGES ${evidence.sourceId} ${evidence.cachedRangeCount} / ${evidence.cachedByteCount} bytes"))
+            add(mono("MANIFEST ${evidence.rangeManifestSha256}"))
+        }
         add(keyValue("Anatel archive SHA-256", result.anatelArchiveSha256 ?: "NoData"))
         add(keyValue("Anatel index", result.anatelIndexArtifactName ?: "NoData"))
+        result.censusGeometry?.let { census ->
+            add(keyValue("IBGE census geometry", "${census.sourceRelease}; ${census.sourceCrs}; ${census.sectors.size} urban sectors"))
+            add(mono("IBGE SHA256 ${census.sourceSha256}"))
+            add(body("IBGE source: ${census.sourceUrl}"))
+        }
+        result.licensedBaseline?.let { baseline ->
+            add(keyValue("MCom baseline", "${baseline.generatedOn} / ${baseline.referenceDate}; ${baseline.stations.size} bounded records; ${baseline.unlocatedSameChannelStationCount} unlocated"))
+            add(mono("MCOM SHA256 ${baseline.sourceSha256}"))
+            add(body("MCom source: ${baseline.sourceUrl}"))
+        }
+
+        add(heading("Licensed existing versus proposed scenarios"))
+        if (result.scenarioComparisons.isEmpty()) add(body("No calculation-ready licensed wanted station in the bounded query."))
+        result.scenarioComparisons.forEach { scenario ->
+            add(subheading("${scenario.wantedStationLabel} | ${scenario.status.name}"))
+            add(
+                body(
+                    "Existing interferers ${scenario.baselineInterfererCount} | existing worst ${scenario.baselineWorstMarginDb?.let { number(it, 2) } ?: "None"} dB | " +
+                        "project ${scenario.proposedProjectMarginDb?.let { number(it, 2) } ?: "NoData"} dB | proposed worst ${scenario.proposedWorstMarginDb?.let { number(it, 2) } ?: "NoData"} dB | NoData ${scenario.noDataAssessmentCount}",
+                ),
+            )
+        }
 
         add(heading("Protected-contour radial evidence"))
         add(mono("AZ(deg)  DIST(km)  HNMT(m)  DESIRED(dBµV/m)  STATUS"))
@@ -120,14 +170,15 @@ object BrazilDigitalTvStudyPdfExporter {
             radial.warning?.let { warning -> add(small("  Note: $warning")) }
         }
 
-        add(heading("Anatel reference-station D/U summary"))
-        if (result.duAssessments.isEmpty()) add(body("No calculation-ready cochannel or first-adjacent reference station was available inside the bounded search."))
+        add(heading("Anatel reference-station bidirectional D/U summary"))
+        if (result.duAssessments.isEmpty()) add(body("No calculation-ready cochannel or first-adjacent reference station was available in the complete query."))
         result.duAssessments.forEach { assessment ->
             val stationId = assessment.station.basicPlanId ?: assessment.station.sourceRowId
-            add(subheading("$stationId | channel ${assessment.station.channel} | ${assessment.channelRelation}"))
+            add(subheading("$stationId | ${assessment.direction.name} | ${assessment.method.name}"))
             add(
                 body(
                     "Required ${number(assessment.requiredDuDb, 1)} dB | worst ${assessment.worstDuDb?.let { number(it, 2) } ?: "NoData"} dB | " +
+                        "margin ${assessment.minimumMarginDb?.let { number(it, 2) } ?: "NoData"} dB | " +
                         "pass ${assessment.passingPointCount}, fail ${assessment.failingPointCount}, NoData ${assessment.noDataPointCount} | ${assessment.status.name}",
                 ),
             )
@@ -135,7 +186,7 @@ object BrazilDigitalTvStudyPdfExporter {
 
         if (result.duAssessments.isNotEmpty()) {
             add(heading("D/U protected-boundary point evidence"))
-            add(mono("REFERENCE       RAD  LATITUDE    LONGITUDE   D       U       LOSS    D/U     REQ   STATUS"))
+            add(mono("REFERENCE      DIR RAD LATITUDE   LONGITUDE   D      U     LOSS   D/U    REQ  MARGIN STATUS"))
             result.duAssessments.forEach { assessment ->
                 val stationId = (assessment.station.basicPlanId ?: assessment.station.sourceRowId).take(14)
                 assessment.points.forEach { point ->
@@ -143,8 +194,9 @@ object BrazilDigitalTvStudyPdfExporter {
                         mono(
                             String.format(
                                 Locale.US,
-                                "%-14s %3d %10.6f %11.6f %7s %7s %7s %7s %6.1f %s",
+                                "%-14s %-3s %3d %9.5f %10.5f %6s %6s %6s %6s %5.1f %6s %s",
                                 stationId,
+                                if (assessment.direction.name.startsWith("REFERENCE")) "R>P" else "P>R",
                                 point.radialIndex,
                                 point.location.latitude,
                                 point.location.longitude,
@@ -153,6 +205,7 @@ object BrazilDigitalTvStudyPdfExporter {
                                 point.diffractionLossDb?.let { number(it, 1) } ?: "NoData",
                                 point.duDb?.let { number(it, 1) } ?: "NoData",
                                 point.requiredDuDb,
+                                point.marginDb?.let { number(it, 1) } ?: "NoData",
                                 point.status.name,
                             ),
                         ),
@@ -242,7 +295,7 @@ object BrazilDigitalTvStudyPdfExporter {
         }
         val infoObject = firstPageObject + pages.size * 2
         objects[infoObject] = windows(
-            "<< /Title (${pdfText(result.projectName)} - Digital TV regulatory study) " +
+            "<< /Title (${pdfText(result.projectName)} - Broadcast regulatory study) " +
                 "/Author (ATX Plan Android) /Creator (ATX Plan Android) " +
                 "/Subject (Bounded RF engineering evidence) >>",
         )

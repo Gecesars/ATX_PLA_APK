@@ -1,6 +1,7 @@
 package com.gecesars.atxplan.data.export
 
 import com.gecesars.atxplan.domain.contour.BrazilDigitalTvRegulatoryStudyResult
+import com.gecesars.atxplan.domain.contour.BroadcastService
 import com.gecesars.atxplan.domain.contour.RegulatoryDuAssessment
 import com.gecesars.atxplan.domain.contour.RegulatoryDuPointEvidence
 import java.io.ByteArrayOutputStream
@@ -56,6 +57,8 @@ object BrazilDigitalTvStudyXlsxExporter {
         radialSheet(result),
         duSummarySheet(result),
         duPointSheet(result),
+        regulatoryGateSheet(result),
+        scenarioSheet(result),
         coverageSheet(result),
         provenanceSheet(result),
     )
@@ -68,11 +71,11 @@ object BrazilDigitalTvStudyXlsxExporter {
         headers = listOf("Field", "Value", "Unit or status"),
         widths = listOf(31.0, 54.0, 28.0),
         rows = sequence {
-            yield(textRow("Report", "Brazil Digital TV Regulatory Study", "Engineering evidence"))
+            yield(textRow("Report", "Brazil Broadcast Regulatory Study", "Engineering evidence"))
             yield(textRow("Project", result.projectName, result.projectId))
             yield(textRow("Site", result.siteName, result.siteId))
             yield(textRow("Sector", result.sectorName, result.sectorId))
-            yield(mixedRow("Channel", number(result.channel.toDouble()), text("Digital TV")))
+            yield(mixedRow("Channel", number(result.channel.toDouble()), text(if (result.service == BroadcastService.FM) "FM" else "Digital TV")))
             yield(mixedRow("Frequency", number(result.frequencyMHz), text("MHz")))
             yield(mixedRow("Latitude", number(result.center.latitude), text("EPSG:4326")))
             yield(mixedRow("Longitude", number(result.center.longitude), text("EPSG:4326")))
@@ -84,11 +87,24 @@ object BrazilDigitalTvStudyXlsxExporter {
             yield(textRow("Protected statistical basis", result.protectedStatisticalBasis, result.contour.status.name))
             yield(textRow("Propagation model", result.p1546ModelId, "CPU-only"))
             yield(textRow("Diffraction model", result.diffractionModelId, "D/U paths"))
-            yield(textRow("D/U criteria", "Cochannel 19 dB; first adjacent -36 dB", "Protected boundary"))
+            yield(
+                textRow(
+                    "D/U criteria",
+                    if (result.service == BroadcastService.FM) {
+                        "Cochannel 30 dB; first adjacent +/-200 kHz 6 dB"
+                    } else {
+                        "Digital-to-digital cochannel +19 dB; first adjacent -36 dB"
+                    },
+                    "Bidirectional protected boundary",
+                ),
+            )
             yield(textRow("Coverage surface", "${result.coverageSurface.width} x ${result.coverageSurface.height}", result.coverageSurface.statisticalBasis))
             yield(textRow("Coverage pattern", if (result.coverageSurface.directionalPatternApplied) "Verified HRP and VRP" else "Omnidirectional fallback", "Operational visualization"))
             yield(mixedRow("Reference stations", number(result.referenceStationCount.toDouble()), text("Anatel Basic Plan")))
+            yield(mixedRow("Licensed baseline stations", number(result.licensedBaseline?.stations?.size?.toDouble() ?: 0.0), text("MCom/Mosaico; analog TV excluded")))
+            yield(mixedRow("Unlocated licensed records", number(result.licensedBaseline?.unlocatedSameChannelStationCount?.toDouble() ?: 0.0), text("Same service, cochannel or adjacent")))
             yield(textRow("Filing gate", if (result.filingReady) "PASSED" else "NOT FILING-READY", result.contour.status.name))
+            yield(textRow("Engineering gates", if (result.engineeringReady) "PASSED" else "OPEN", "External review remains separate"))
             yield(textRow("Input fingerprint", result.inputFingerprint, "SHA-256"))
             yield(textRow("Exported at", formatInstant(exportedAtEpochMillis), "UTC"))
             result.blockers.forEachIndexed { index, blocker ->
@@ -127,27 +143,33 @@ object BrazilDigitalTvStudyXlsxExporter {
         name = "D-U Summary",
         headers = listOf(
             "Reference ID",
+            "Direction",
+            "Method",
             "Municipality",
             "Channel",
             "Frequency (MHz)",
             "Relation",
             "Required D/U (dB)",
             "Worst D/U (dB)",
+            "Minimum margin (dB)",
             "Passing points",
             "Failing points",
             "NoData points",
             "Status",
         ),
-        widths = listOf(24.0, 28.0, 10.0, 17.0, 18.0, 20.0, 18.0, 16.0, 16.0, 16.0, 15.0),
+        widths = listOf(24.0, 34.0, 30.0, 28.0, 10.0, 17.0, 18.0, 20.0, 18.0, 20.0, 16.0, 16.0, 16.0, 15.0),
         rows = result.duAssessments.asSequence().map { assessment ->
             listOf(
                 text(assessment.station.basicPlanId ?: assessment.station.sourceRowId),
+                text(assessment.direction.displayName),
+                text(assessment.method.displayName),
                 text(assessment.station.municipalityName ?: "NoData"),
                 number(assessment.station.channel.toDouble()),
                 number(assessment.station.frequencyMHz),
                 text(assessment.channelRelation),
                 number(assessment.requiredDuDb),
                 numberOrNoData(assessment.worstDuDb),
+                numberOrNoData(assessment.minimumMarginDb),
                 number(assessment.passingPointCount.toDouble()),
                 number(assessment.failingPointCount.toDouble()),
                 number(assessment.noDataPointCount.toDouble()),
@@ -160,6 +182,8 @@ object BrazilDigitalTvStudyXlsxExporter {
         name = "D-U Points",
         headers = listOf(
             "Reference ID",
+            "Direction",
+            "Method",
             "Radial index",
             "Latitude",
             "Longitude",
@@ -168,9 +192,10 @@ object BrazilDigitalTvStudyXlsxExporter {
             "Diffraction loss (dB)",
             "D/U (dB)",
             "Required D/U (dB)",
+            "Margin (dB)",
             "Status",
         ),
-        widths = listOf(24.0, 14.0, 15.0, 15.0, 21.0, 23.0, 23.0, 14.0, 20.0, 14.0),
+        widths = listOf(24.0, 34.0, 30.0, 14.0, 15.0, 15.0, 21.0, 23.0, 23.0, 14.0, 20.0, 16.0, 14.0),
         rows = result.duAssessments.asSequence().flatMap { assessment ->
             assessment.points.asSequence().map { point -> duPointRow(assessment, point) }
         },
@@ -181,6 +206,8 @@ object BrazilDigitalTvStudyXlsxExporter {
         point: RegulatoryDuPointEvidence,
     ): List<Cell> = listOf(
         text(assessment.station.basicPlanId ?: assessment.station.sourceRowId),
+        text(assessment.direction.displayName),
+        text(assessment.method.displayName),
         number(point.radialIndex.toDouble()),
         number(point.location.latitude),
         number(point.location.longitude),
@@ -189,7 +216,55 @@ object BrazilDigitalTvStudyXlsxExporter {
         numberOrNoData(point.diffractionLossDb),
         numberOrNoData(point.duDb),
         number(point.requiredDuDb),
+        numberOrNoData(point.marginDb),
         text(point.status.name),
+    )
+
+    private fun regulatoryGateSheet(result: BrazilDigitalTvRegulatoryStudyResult) = Worksheet(
+        name = "Urban Gate",
+        headers = listOf("Field", "Value", "Unit or status"),
+        widths = listOf(36.0, 58.0, 28.0),
+        rows = sequence {
+            val gate = result.coverageGate
+            if (gate == null) {
+                yield(textRow("Urban gate", "NoData", "No municipality geometry attached"))
+            } else {
+                yield(textRow("Municipality", gate.municipality.name, "${gate.municipality.stateAbbreviation} / ${gate.municipality.ibgeCode}"))
+                yield(mixedRow("Requirement", number(gate.requirementPercent.toDouble()), text("percent of eligible urban area")))
+                yield(mixedRow("Eligible urban area", number(gate.eligibleUrbanAreaKm2), text("km2")))
+                yield(mixedRow("Covered urban area", number(gate.coveredUrbanAreaKm2), text("km2")))
+                yield(mixedRow("Coverage lower bound", numberOrNoData(gate.areaCoverageLowerPercent), text("percent")))
+                yield(mixedRow("Coverage upper bound", numberOrNoData(gate.areaCoverageUpperPercent), text("percent")))
+                yield(mixedRow("Population estimate", numberOrNoData(gate.populationCoveragePercent), text("percent; uniform within sector")))
+                yield(mixedRow("Raster spacing", number(gate.rasterSpacingM), text("m")))
+                yield(mixedRow("Intersected sectors", number(gate.sectorCount.toDouble()), text("count")))
+                yield(mixedRow("NoData cells", number(gate.noDataCellCount.toDouble()), text("count")))
+                yield(textRow("Status", gate.status.name, "regulatory gate"))
+                yield(textRow("Method", gate.method, "assumptions explicit"))
+            }
+        },
+    )
+
+    private fun scenarioSheet(result: BrazilDigitalTvRegulatoryStudyResult) = Worksheet(
+        name = "Existing-Proposed",
+        headers = listOf(
+            "Wanted station ID", "Wanted station", "Existing interferers",
+            "Existing worst margin (dB)", "Project margin (dB)",
+            "Proposed worst margin (dB)", "NoData assessments", "Status",
+        ),
+        widths = listOf(30.0, 38.0, 20.0, 27.0, 22.0, 27.0, 22.0, 30.0),
+        rows = result.scenarioComparisons.asSequence().map { scenario ->
+            listOf(
+                text(scenario.wantedStationId),
+                text(scenario.wantedStationLabel),
+                number(scenario.baselineInterfererCount.toDouble()),
+                numberOrNoData(scenario.baselineWorstMarginDb),
+                numberOrNoData(scenario.proposedProjectMarginDb),
+                numberOrNoData(scenario.proposedWorstMarginDb),
+                number(scenario.noDataAssessmentCount.toDouble()),
+                text(scenario.status.name),
+            )
+        },
     )
 
     private fun coverageSheet(result: BrazilDigitalTvRegulatoryStudyResult): Worksheet {
@@ -239,7 +314,20 @@ object BrazilDigitalTvStudyXlsxExporter {
                         text(artifact.sha256),
                         text(artifact.acquiredAt ?: "NoData"),
                         text(artifact.artifactUrl),
-                        text("${result.terrainProvenance.licenseTitle}; ${result.terrainProvenance.attribution}"),
+                        text("${result.terrainProvenance.integrityScope.name}; ${result.terrainProvenance.licenseTitle}; ${result.terrainProvenance.attribution}"),
+                    ),
+                )
+            }
+            result.terrainProvenance.rangeCacheEvidence.forEach { evidence ->
+                yield(
+                    listOf(
+                        text("ANADEM ${evidence.sourceId} range cache"),
+                        text("RANGE_CONTENT_EVIDENCE"),
+                        text("${evidence.cachedRangeCount} ranges; ${evidence.cachedByteCount} bytes"),
+                        text(evidence.rangeManifestSha256),
+                        text("NoData"),
+                        text("Source identity SHA-256 ${evidence.sourceIdentitySha256}"),
+                        text(result.terrainProvenance.integrityEvidenceDescription),
                     ),
                 )
             }
@@ -254,6 +342,32 @@ object BrazilDigitalTvStudyXlsxExporter {
                     text("Official Anatel source; project transmitter fields remain independent"),
                 ),
             )
+            result.licensedBaseline?.let { baseline ->
+                yield(
+                    listOf(
+                        text("MCom/Mosaico licensed broadcast snapshot"),
+                        text("LICENSED_EXISTING_BASELINE"),
+                        text("Private verified artifact"),
+                        text(baseline.sourceSha256),
+                        text(baseline.sourceLastModified ?: "NoData"),
+                        text(baseline.sourceUrl),
+                        text("Official open-data source; FM and digital GTVD/RTVD only; analog TV excluded"),
+                    ),
+                )
+            }
+            result.censusGeometry?.let { census ->
+                yield(
+                    listOf(
+                        text("IBGE 2022 census-sector geometry"),
+                        text("URBAN_CENSUS_GEOMETRY"),
+                        text("${census.sourceCrs}; ${census.sectors.size} sectors"),
+                        text(census.sourceSha256),
+                        text(census.sourceLastModified ?: "NoData"),
+                        text(census.sourceUrl),
+                        text(census.sourceRelease),
+                    ),
+                )
+            }
         },
     )
 
@@ -344,7 +458,7 @@ object BrazilDigitalTvStudyXlsxExporter {
         exportedAtEpochMillis: Long,
     ): String {
         val instant = formatInstant(exportedAtEpochMillis)
-        return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>${xml(result.projectName)} - Digital TV regulatory study</dc:title><dc:creator>ATX Plan Android</dc:creator><dc:description>Bounded engineering evidence workbook; Basic Plan records are read-only references.</dc:description><dcterms:created xsi:type="dcterms:W3CDTF">$instant</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">$instant</dcterms:modified></cp:coreProperties>"""
+        return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>${xml(result.projectName)} - Broadcast regulatory study</dc:title><dc:creator>ATX Plan Android</dc:creator><dc:description>Bounded engineering evidence workbook; Basic Plan records are read-only references.</dc:description><dcterms:created xsi:type="dcterms:W3CDTF">$instant</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">$instant</dcterms:modified></cp:coreProperties>"""
     }
 
     private fun applicationProperties(sheets: List<Worksheet>): String = buildString {

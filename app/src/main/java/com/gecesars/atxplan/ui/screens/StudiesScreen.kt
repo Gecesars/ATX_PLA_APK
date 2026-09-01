@@ -27,6 +27,7 @@ import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -53,8 +54,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.gecesars.atxplan.domain.application.RunProjectLinkStudyCommand
 import com.gecesars.atxplan.domain.contour.BrazilDigitalTvRegulatoryStudyResult
+import com.gecesars.atxplan.domain.contour.BroadcastService
+import com.gecesars.atxplan.domain.contour.RegulatoryMunicipalityContext
+import com.gecesars.atxplan.domain.dataset.IbgeMunicipalitySummary
 import com.gecesars.atxplan.domain.model.PlannerProject
 import com.gecesars.atxplan.domain.model.RadioSite
+import com.gecesars.atxplan.domain.model.RadioSystem
 import com.gecesars.atxplan.domain.model.Receiver
 import com.gecesars.atxplan.domain.model.Sector
 import com.gecesars.atxplan.domain.rf.LinkBudgetExecutionMode
@@ -67,6 +72,7 @@ import com.gecesars.atxplan.ui.components.StatusPill
 import com.gecesars.atxplan.ui.components.StatusTone
 import com.gecesars.atxplan.ui.theme.AtxAmber
 import com.gecesars.atxplan.ui.theme.AtxSignal
+import com.gecesars.atxplan.data.regulatory.RegulatoryArtifactProgress
 import java.util.Locale
 import java.util.UUID
 
@@ -85,7 +91,16 @@ fun StudiesScreen(
     brazilDigitalTvStudyError: String? = null,
     isRunningBrazilDigitalTvStudy: Boolean = false,
     brazilDigitalTvStudyProgress: Pair<Int, Int>? = null,
-    onRunBrazilDigitalTvStudy: (Double) -> Unit = {},
+    brazilDigitalTvStudyPreparation: RegulatoryArtifactProgress? = null,
+    municipalityQuery: String = "",
+    municipalityResults: List<IbgeMunicipalitySummary> = emptyList(),
+    selectedMunicipality: IbgeMunicipalitySummary? = null,
+    isMunicipalityCatalogReady: Boolean = false,
+    isSearchingMunicipalities: Boolean = false,
+    municipalityError: String? = null,
+    onMunicipalityQueryChange: (String) -> Unit = {},
+    onMunicipalitySelected: (String) -> Unit = {},
+    onRunBrazilDigitalTvStudy: (Double, RegulatoryMunicipalityContext) -> Unit = { _, _ -> },
     onExportBrazilDigitalTvReport: (Uri) -> Unit = {},
     onExportBrazilDigitalTvPdf: (Uri) -> Unit = {},
     onExportBrazilDigitalTvXlsx: (Uri) -> Unit = {},
@@ -176,6 +191,15 @@ fun StudiesScreen(
                 error = brazilDigitalTvStudyError,
                 isRunning = isRunningBrazilDigitalTvStudy,
                 progress = brazilDigitalTvStudyProgress,
+                preparation = brazilDigitalTvStudyPreparation,
+                municipalityQuery = municipalityQuery,
+                municipalityResults = municipalityResults,
+                selectedMunicipality = selectedMunicipality,
+                isMunicipalityCatalogReady = isMunicipalityCatalogReady,
+                isSearchingMunicipalities = isSearchingMunicipalities,
+                municipalityError = municipalityError,
+                onMunicipalityQueryChange = onMunicipalityQueryChange,
+                onMunicipalitySelected = onMunicipalitySelected,
                 onRun = onRunBrazilDigitalTvStudy,
                 onExportReport = onExportBrazilDigitalTvReport,
                 onExportPdf = onExportBrazilDigitalTvPdf,
@@ -318,7 +342,16 @@ private fun BrazilDigitalTvRegulatoryStudyCard(
     error: String?,
     isRunning: Boolean,
     progress: Pair<Int, Int>?,
-    onRun: (Double) -> Unit,
+    preparation: RegulatoryArtifactProgress?,
+    municipalityQuery: String,
+    municipalityResults: List<IbgeMunicipalitySummary>,
+    selectedMunicipality: IbgeMunicipalitySummary?,
+    isMunicipalityCatalogReady: Boolean,
+    isSearchingMunicipalities: Boolean,
+    municipalityError: String?,
+    onMunicipalityQueryChange: (String) -> Unit,
+    onMunicipalitySelected: (String) -> Unit,
+    onRun: (Double, RegulatoryMunicipalityContext) -> Unit,
     onExportReport: (Uri) -> Unit,
     onExportPdf: (Uri) -> Unit,
     onExportXlsx: (Uri) -> Unit,
@@ -326,6 +359,7 @@ private fun BrazilDigitalTvRegulatoryStudyCard(
 ) {
     var radiusText by rememberSaveable(project?.id) { mutableStateOf("30") }
     var localError by rememberSaveable(project?.id) { mutableStateOf<String?>(null) }
+    var officialSourcesReviewed by rememberSaveable(project?.id) { mutableStateOf(false) }
     val reportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("text/html"),
     ) { uri -> uri?.let(onExportReport) }
@@ -343,6 +377,13 @@ private fun BrazilDigitalTvRegulatoryStudyCard(
     val radius = radiusText.toDoubleOrNull()
     val validRadius = radius != null &&
         radius in 1.0..100.0
+    val projectSystems = project?.networks?.filter { it.active }?.map { it.system }.orEmpty()
+    val displayedService = result?.service ?: when {
+        projectSystems.count { it == RadioSystem.FM_BROADCAST } == 1 -> BroadcastService.FM
+        else -> BroadcastService.DIGITAL_TV
+    }
+    val serviceLabel = if (displayedService == BroadcastService.FM) "FM" else "Digital TV"
+    val statisticalLabel = if (displayedService == BroadcastService.FM) "E(50,50)" else "E(50,90)"
 
     Card(
         modifier = Modifier.fillMaxWidth().testTag("brazil_dtv_regulatory_study"),
@@ -353,9 +394,9 @@ private fun BrazilDigitalTvRegulatoryStudyCard(
             modifier = Modifier.fillMaxWidth().padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(7.dp),
         ) {
-            Text("Brazil Digital TV Regulatory Study", style = MaterialTheme.typography.titleMedium)
+            Text("Brazil Broadcast Regulatory Study", style = MaterialTheme.typography.titleMedium)
             Text(
-                "The active project transmitter is authoritative. Anatel Basic Plan channels are external references only and never populate project fields.",
+                "Current $serviceLabel viability. The project transmitter is authoritative; Anatel Basic Plan channels are read-only references.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -365,8 +406,58 @@ private fun BrazilDigitalTvRegulatoryStudyCard(
             ) {
                 StatusPill("P.1546-6 protected", StatusTone.INFO)
                 StatusPill("P.526-15 Deygout–Assis", StatusTone.INFO)
-                StatusPill("E(50,90)", StatusTone.INFO)
-                StatusPill("SP Basic Plan ±1 channel", StatusTone.INFO)
+                StatusPill(statisticalLabel, StatusTone.INFO)
+                StatusPill("Nationwide Basic Plan ±1", StatusTone.INFO)
+                StatusPill("Licensed MCom baseline", StatusTone.INFO)
+                StatusPill("ANADEM bare-earth DTM", StatusTone.INFO)
+                StatusPill("Bidirectional D/U", StatusTone.INFO)
+            }
+            OutlinedTextField(
+                value = municipalityQuery,
+                onValueChange = onMunicipalityQueryChange,
+                label = { Text("Project municipality") },
+                placeholder = { Text("Search by municipality or IBGE code") },
+                singleLine = true,
+                enabled = isMunicipalityCatalogReady && !isRunning,
+                supportingText = {
+                    Text(
+                        when {
+                            municipalityError != null -> municipalityError
+                            isSearchingMunicipalities -> "Searching the verified offline IBGE index..."
+                            else -> "This identifies the independent project's service municipality."
+                        },
+                    )
+                },
+                modifier = Modifier.fillMaxWidth().testTag("regulatory_municipality_query"),
+            )
+            CompactDropdown(
+                label = "municipality",
+                selectedLabel = selectedMunicipality?.let {
+                    "${it.name} / ${it.stateAbbreviation} · ${it.code}"
+                } ?: "Select an IBGE municipality",
+                entries = municipalityResults.map { municipality ->
+                    municipality.code to
+                        "${municipality.name} / ${municipality.stateAbbreviation} · ${municipality.code}"
+                },
+                enabled = isMunicipalityCatalogReady && municipalityResults.isNotEmpty() && !isRunning,
+                testTag = "regulatory_municipality_selector",
+                onSelect = onMunicipalitySelected,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(
+                    checked = officialSourcesReviewed,
+                    onCheckedChange = { officialSourcesReviewed = it },
+                    enabled = !isRunning,
+                    modifier = Modifier.testTag("regulatory_sources_reviewed"),
+                )
+                Text(
+                    "I reviewed the official-source notice and accept on-demand private downloads: the IBGE 2022 state GeoPackage, the current MCom licensed snapshot, and only the ANADEM DTM ranges used by this study.",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.weight(1f),
+                )
             }
             OutlinedTextField(
                 value = radiusText,
@@ -378,7 +469,7 @@ private fun BrazilDigitalTvRegulatoryStudyCard(
                 supportingText = if (radiusText.isNotBlank() && !validRadius) {
                     { Text("Enter a radius from 1 to 100 km.") }
                 } else {
-                    { Text("Protected-contour search boundary; 30 km for the current São Paulo study.") }
+                    { Text("Bound for project and external protected-contour searches.") }
                 },
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Decimal,
@@ -393,12 +484,22 @@ private fun BrazilDigitalTvRegulatoryStudyCard(
             if (isRunning) {
                 val completed = progress?.first ?: 0
                 val total = progress?.second?.coerceAtLeast(1) ?: 1
+                val progressFraction = preparation?.takeIf { it.totalBytes > 0L }?.let { item ->
+                    item.completedBytes.toFloat() / item.totalBytes.toFloat()
+                } ?: completed.toFloat() / total
                 LinearProgressIndicator(
-                    progress = { (completed.toFloat() / total).coerceIn(0f, 1f) },
+                    progress = { progressFraction.coerceIn(0f, 1f) },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Text(
-                    "Reading terrain and evaluating regulatory paths · $completed / $total",
+                    preparation?.let { item ->
+                        val bytes = if (item.totalBytes > 0L) {
+                            " · ${item.completedBytes / 1_048_576} / ${item.totalBytes / 1_048_576} MiB"
+                        } else {
+                            ""
+                        }
+                        "${item.phase.name.lowercase().replaceFirstChar(Char::uppercase)} ${item.label}$bytes"
+                    } ?: "Evaluating regulatory paths · $completed / $total",
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                 )
@@ -410,11 +511,30 @@ private fun BrazilDigitalTvRegulatoryStudyCard(
                     if (!validRadius) {
                         localError = "Enter a study radius from 1 to 100 km."
                     } else {
-                        localError = null
-                        onRun(checkNotNull(radius))
+                        val municipality = selectedMunicipality
+                        when {
+                            municipality == null -> {
+                                localError = "Select the independent project's municipality."
+                            }
+                            !officialSourcesReviewed -> {
+                                localError = "Review and accept the official-source download notice."
+                            }
+                            else -> {
+                                localError = null
+                                onRun(
+                                    checkNotNull(radius),
+                                    RegulatoryMunicipalityContext(
+                                        ibgeCode = municipality.code,
+                                        name = municipality.name,
+                                        stateAbbreviation = municipality.stateAbbreviation,
+                                    ),
+                                )
+                            }
+                        }
                     }
                 },
-                enabled = project != null && validRadius && !isRunning,
+                enabled = project != null && validRadius && selectedMunicipality != null &&
+                    officialSourcesReviewed && !isRunning,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 46.dp).testTag("run_brazil_dtv_study"),
                 shape = RoundedCornerShape(16.dp),
             ) {
@@ -428,16 +548,37 @@ private fun BrazilDigitalTvRegulatoryStudyCard(
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     StatusPill(
-                        if (study.filingReady) "Gates Passed" else "Not Filing-ready",
-                        if (study.filingReady) StatusTone.POSITIVE else StatusTone.WARNING,
+                        if (study.engineeringReady) "Engineering Gates Passed" else "Engineering Gates Open",
+                        if (study.engineeringReady) StatusTone.POSITIVE else StatusTone.WARNING,
                     )
+                    StatusPill("External Review Required", StatusTone.WARNING)
                     StatusPill("Channel ${study.channel}", StatusTone.INFO)
+                    StatusPill(if (study.service == BroadcastService.FM) "FM" else "Digital TV", StatusTone.INFO)
                     StatusPill("${study.radialEvidence.size} Radials", StatusTone.INFO)
                     StatusPill("${study.referenceStationCount} References", StatusTone.INFO)
+                    study.coverageGate?.let { gate ->
+                        StatusPill(
+                            "Urban ${gate.areaCoverageLowerPercent?.let { value ->
+                                String.format(Locale.US, "%.1f%%", value)
+                            } ?: "NoData"}",
+                            when (gate.status) {
+                                com.gecesars.atxplan.domain.contour.RegulatoryGateStatus.PASS ->
+                                    StatusTone.POSITIVE
+                                com.gecesars.atxplan.domain.contour.RegulatoryGateStatus.FAIL,
+                                com.gecesars.atxplan.domain.contour.RegulatoryGateStatus.NO_DATA,
+                                -> StatusTone.WARNING
+                            },
+                        )
+                    }
+                    study.licensedBaseline?.let { baseline ->
+                        StatusPill("${baseline.stations.size} Licensed", StatusTone.INFO)
+                    }
                 }
                 Text(
                     "Protected contour: ${study.contour.status.name} · " +
-                        "${study.duAssessments.count { it.failingPointCount > 0 }} D/U reference failure(s)",
+                        "${study.duAssessments.size} directional D/U checks · " +
+                        "${study.duAssessments.count { it.failingPointCount > 0 }} failure(s) · " +
+                        "${study.duAssessments.count { it.noDataPointCount > 0 }} NoData",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 study.blockers.forEach { blocker ->

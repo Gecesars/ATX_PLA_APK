@@ -171,6 +171,27 @@ data class IbgeMunicipalitySummary(
         get() = populationTotal.takeIf { it > 0L }?.let { urbanPopulation.toDouble() / it.toDouble() }
 }
 
+data class IbgeCensusSectorAttribute(
+    val sectorCode: String,
+    val municipalityCode: String,
+    val situationCode: Int,
+    val areaKm2: Double,
+    val residentPopulation: Long,
+) {
+    init {
+        require(sectorCode.length == 15 && sectorCode.all(Char::isDigit)) {
+            "An IBGE census-sector code must contain 15 digits."
+        }
+        require(municipalityCode.length == 7 && municipalityCode.all(Char::isDigit)) {
+            "An IBGE municipality code must contain seven digits."
+        }
+        require(situationCode in 0..2) { "An IBGE sector situation code is invalid." }
+        require(areaKm2.isFinite() && areaKm2 >= 0.0 && residentPopulation >= 0L) {
+            "IBGE sector area and population must be non-negative."
+        }
+    }
+}
+
 interface IbgeDatasetRepository {
     suspend fun prepare(
         onProgress: (IbgeDatasetPreparationProgress) -> Unit = {},

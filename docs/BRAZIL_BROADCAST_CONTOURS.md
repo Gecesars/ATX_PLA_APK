@@ -1,10 +1,10 @@
 # Brazil Broadcast Service Contours
 
-> Evidence baseline: August 31, 2026. Android provides bounded CPU-only reference overlays and a separate terrain-backed digital-TV D/U workflow. Every statistical contour overlay has `regulatory = false`; the strict D/U result independently fails closed when its filing gates are incomplete.
+> Evidence baseline: September 1, 2026. Android provides bounded CPU-only reference overlays and a separate terrain-backed bidirectional FM/digital-TV D/U workflow. Historical statistical overlays remain `regulatory = false`; the current-rule result independently fails closed when a required input or filing gate is incomplete.
 
 ## 1. Status and purpose
 
-The current slice makes the Brazilian FM and first-generation digital-TV contour rules visible on the existing offline Engineering Map without hiding missing engineering inputs. It provides:
+The current slice makes the Brazilian FM and digital-TV contour rules visible on the existing offline Engineering Map without hiding missing engineering inputs. It provides:
 
 - deterministic protected-contour **reference** geometry for eligible active FM and digital-TV sectors;
 - explicitly non-regulatory FM and digital-TV `E(50,10)` cochannel and first-adjacent envelopes reconstructed from revoked rules;
@@ -12,7 +12,7 @@ The current slice makes the Brazilian FM and first-generation digital-TV contour
 - compact provenance, threshold, status, model, ruleset, and warning text next to the map;
 - pure Kotlin/CPU computation with no GPU, native runtime, remote service, or network dependency.
 
-The word **legacy** is essential for each standalone `E(50,10)` envelope. Current Acts 8104/2022 and 9751/2022 use point-to-point ITU-R P.526 associated with Assis (1971), not a standalone E(50,10) interfering contour. The separate digital-TV study implements a bounded P.526-15 Deygout-Assis protected-boundary D/U check, but remains not filing-ready without all terrain, catalog, completeness, and review gates. Strict FM interference remains undelivered.
+The word **legacy** is essential for each standalone `E(50,10)` envelope. Current Acts 8104/2022 and 9751/2022 use point-to-point ITU-R P.526 associated with Assis (1971), not a standalone E(50,10) interfering contour. The separate current-rule study evaluates FM/FM and digital-TV/digital-TV pairs at both wanted protected contours. On-demand terrain, catalog, urban-coverage, licensed-baseline, and completeness gates are delivered; filing readiness remains fail-closed pending independent numerical validation and qualified professional, legal, and source-license review.
 
 ## 2. Current Brazilian rule profiles
 
@@ -20,13 +20,13 @@ The rule catalog was checked on August 31, 2026 and is pinned in code by Act or 
 
 The Ministry of Communications was checked as a separate authority boundary. Its current regulatory-fiscalization page states that channel-distribution plans and station technical oversight are Anatel responsibilities. The MCom consolidation therefore does not supply a different field-strength plotting formula for this implementation; the technical formulas remain pinned to the Anatel acts, while MCom rules govern their own administrative and service processes.
 
-The current identifiers are `ANATEL-ACT-8104-2022` for FM and `ANATEL-ACT-9751-2022` for first-generation digital TV. Historical envelopes use `ANATEL-RESOLUTION-67-1998-REVOKED` and `ANATEL-RESOLUTION-398-2005-REVOKED`. Unsupported FM `E(80,80)` uses `UNSUPPORTED-E80-80`.
+The current identifiers are `ANATEL-ACT-8104-2022` for FM and `ANATEL-ACT-9751-2022` for digital TV. Historical envelopes use `ANATEL-RESOLUTION-67-1998-REVOKED` and `ANATEL-RESOLUTION-398-2005-REVOKED`. Unsupported FM `E(80,80)` uses `UNSUPPORTED-E80-80`.
 
 | Purpose | Service and band | Field-strength threshold | Statistical basis | Android behavior |
 |---|---|---:|---|---|
 | Protected reference | FM | 66 dBµV/m | `E(50,50)` | Computed as a non-regulatory planning reference when the stored inputs fit the packaged model domain. |
-| Protected reference | First-generation digital TV, channels 7–13 | 43 dBµV/m | `E(50,90) = 2 × E(50,50) − E(50,10)` | Computed as a non-regulatory planning reference. A raw 90% time request is not made. |
-| Protected reference | First-generation digital TV, channels 14–51 | 51 dBµV/m | Same Anatel `E(50,90)` transform | Computed as a non-regulatory planning reference. |
+| Protected reference | Digital TV, channels 7–13 | 43 dBµV/m | `E(50,90) = 2 × E(50,50) − E(50,10)` | Computed as a non-regulatory planning reference. A raw 90% time request is not made. |
+| Protected reference | Digital TV, channels 14–51 | 51 dBµV/m | Same Anatel `E(50,90)` transform | Computed as a non-regulatory planning reference. |
 | Legacy interfering envelope | FM cochannel | 32 dBµV/m | `E(50,10)` | Protected 66 dBµV/m minus the revoked 34 dB D/U ratio; red dash-dot and non-regulatory. |
 | Legacy interfering envelope | FM first adjacent, ±200 kHz | 60 dBµV/m | `E(50,10)` | Protected 66 dBµV/m minus the revoked 6 dB D/U ratio; red dash-dot and non-regulatory. |
 | Legacy interfering envelope | Digital TV cochannel, channels 7–13 / 14–51 | 24 / 32 dBµV/m | `E(50,10)` | Protected 43 / 51 dBµV/m minus 19 dB; revoked method and non-regulatory. |
@@ -35,7 +35,7 @@ The current identifiers are `ANATEL-ACT-8104-2022` for FM and `ANATEL-ACT-9751-2
 
 The first percentage is the percentage of locations and the second is the percentage of time. Digital-TV `E(50,90)` is the transform required by Act 9751; it is not an out-of-domain `timePercent = 90` P.1546 call. E(50,10) is also a normative operand inside that protected-contour transform. That fact does not make the standalone historical envelopes current regulatory interference results.
 
-Digital-TV frequencies that do not resolve to first-generation channels 7–51 produce `NoData`. The current project schema has no television-generation field, so `TV_BROADCAST` is interpreted as first-generation digital TV only from its stored channel-band frequency and the limitation is reported as a warning.
+Digital-TV frequencies that do not resolve to channels 7–51 produce `NoData`. `TV_BROADCAST` is accepted only as digital TV when its stored channel and frequency form a consistent channel 7–51 pair; analog TV and retransmission records are excluded.
 
 Authoritative sources:
 
@@ -108,7 +108,11 @@ This remains a coordinate-grid overlay, not a basemap or general GIS renderer. T
 
 ## 6. Current regulatory interference contract and remaining work
 
-Current Anatel interference compliance is not an `E(50,10)` polygon. Acts 8104 and 9751 require point-to-point ITU-R P.526 associated with Assis and service/channel-relation D/U evaluation on the wanted protected contour. Android delivers this as a bounded digital-TV protected-boundary workflow with explicit evidence and filing gates. The equivalent strict FM workflow, an area/grid D/U workflow, and independently validated regulatory vectors remain open.
+Current Anatel interference compliance is not an `E(50,10)` polygon. Acts 8104 and 9751 require point-to-point ITU-R P.526 associated with Assis and service/channel-relation D/U evaluation on the wanted protected contour. Android now delivers a bounded current-rule engine for both FM/FM and digital-TV/digital-TV pairs. Every non-colocated candidate is evaluated in both directions: Basic Plan station into the project protected contour, then the project station into the class-aware Basic Plan protected contour. A missing direction is `NoData`, never a pass.
+
+Basic Plan discovery queries the complete nationwide service/channel partitions for the project channel and first adjacencies. The licensed baseline separately uses a verified current MCom snapshot and a 500 km exact-distance query around the independent site. There is no nearest-48 calculation cap: every calculation-ready bounded candidate is evaluated. Raw catalog antenna text is not treated as a normalized radial pattern. The engine applies the current Acts' ideal-reference fallback using no less than the class maximum or disclosed source ERP, a minimum 40 m transmit height on P.526 paths, and the class reference HNMT for the external protected contour. An unresolvable fallback, a discovery-only coordinate, or a same-channel licensed row with no usable coordinate blocks the engineering result.
+
+For adjacent digital-TV stations separated by at most 5 km, the engine applies the desired/interfering ERP ratio in both directions rather than a boundary field ratio. The selected official IBGE municipality resolves the same-municipality colocation check. Analog TV/RTV is excluded by product decision. Digital TV remains limited to channels 7–51. The spectrum formerly used by television channels 5 and 6 is accepted only through consistent extended-FM channel/frequency pairs 141–197 (76.1–87.3 MHz), never as television or an inferred cross-service case. Receiver-pattern exceptions and other-service compatibility remain outside this result scope and must not be inferred from it.
 
 For the same-technology relationships currently in scope, the pinned acts specify these minimum desired-to-undesired ratios:
 
@@ -116,10 +120,10 @@ For the same-technology relationships currently in scope, the pinned acts specif
 |---|---|---:|
 | FM | Cochannel | +30 dB |
 | FM | First adjacent, ±200 kHz | +6 dB |
-| First-generation digital TV | Cochannel | +19 dB |
-| First-generation digital TV | First adjacent, channel ±1 | −36 dB |
+| Digital TV | Cochannel | +19 dB |
+| Digital TV | First adjacent, channel ±1 | −36 dB |
 
-These are comparison margins at locations on the wanted protected contour, not thresholds for standalone interfering polygons. Other technology pairings, channel relations, and regulatory footnotes must be modeled explicitly before the workflow can claim completeness.
+These are comparison margins at locations on the wanted protected contour, not thresholds for standalone interfering polygons. Other technology pairings, channel relations, and regulatory footnotes must be modeled explicitly before the workflow can claim completeness beyond its declared same-service scope.
 
 Strict protected or interference results additionally require:
 
@@ -134,11 +138,11 @@ Strict protected or interference results additionally require:
 - immutable persistence of the complete input/engine/table fingerprint, a portable executable-study schema, and independent external verification beyond the delivered bounded visualization/evidence KMZ;
 - legal and professional review plus an inconclusive-result policy.
 
-All standalone contour overlays remain planning references with `regulatory = false`. The digital-TV D/U workflow reports pass/fail only for complete evaluated boundary points and reports `NoData` or not-filing-ready when a required gate is missing; no legacy E(50,10) curve can satisfy those gates.
+Standalone historical contour overlays remain planning references with `regulatory = false`. The FM/digital-TV D/U workflow reports pass/fail only for complete evaluated boundary points or the explicit colocated ERP comparison, and reports `NoData` or not-filing-ready when a required gate is missing; no legacy E(50,10) curve can satisfy those gates. The delivered 50% FM and 70% digital-TV gate rasterizes all official urban-sector area in the selected municipality and evaluates cells inside the protected contour with P.526-15 Deygout-Assis over on-demand ANADEM DTM ranges. The delivered licensed comparison separates unchanged existing conflicts from new or aggravated individual-signal D/U margins. Independent numerical parity and qualified professional/legal/source-license review remain external filing gates.
 
 ## 7. Automated evidence
 
-Focused JVM cases cover current D/U constants, revoked FM/TV E(50,10) threshold derivation, rule/band selection, table hashes and reference values, class-distance checks, the DTV transform, protected/legacy/unsupported states, 72-radial evidence, directional ERP, `NoData`, model boundaries, geodesy, deterministic fingerprints, and distinct KMZ styling/provenance.
+Focused JVM cases cover current FM and digital-TV D/U constants, bidirectional protected-boundary paths, the colocated digital-TV ERP method, revoked FM/TV E(50,10) threshold derivation, rule/band selection, table hashes and reference values, class-distance fallback, the DTV transform, protected/legacy/unsupported states, 72-radial evidence, directional ERP, `NoData`, model boundaries, geodesy, deterministic fingerprints, and distinct KMZ styling/provenance.
 
 The targeted 10-case `EngineeringMapScreenTest` suite and the full 99-case Android aggregate passed on the Android 16/API 36 `Medium_Phone_API_36.1` emulator with no failures or skips. The contour case exercises a 360 × 560 dp host at font scale 1.30 and verifies protected/legacy/screening labels, geometry-state counts, collapsed details for information density, expanded provenance, and `NoData`. These cases are not independent P.1546 regulatory parity, a general accessibility/device matrix, map performance evidence, or an end-to-end filing workflow.
 

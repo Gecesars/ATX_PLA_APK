@@ -371,6 +371,9 @@ class EngineeringMapScreenTest {
         composeRule.onNodeWithTag("edit_map_site_location").performClick()
         composeRule.onNodeWithTag("map_site_latitude_field").performTextReplacement("-23,5")
         composeRule.onNodeWithTag("map_site_longitude_field").performTextReplacement("-46,6")
+        composeRule.onNodeWithTag("map_site_latitude_field").assert(hasText("-23,5"))
+        composeRule.onNodeWithTag("map_site_longitude_field").assert(hasText("-46,6"))
+        composeRule.waitForIdle()
         composeRule.onNodeWithTag("save_map_site_location").performClick()
 
         composeRule.runOnIdle {
